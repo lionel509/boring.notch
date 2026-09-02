@@ -61,12 +61,43 @@ class AudioSpectrum: NSView {
         }
     }
     
-    private func stopAnimating() {
+    private func stopAnimating(reset: Bool = true) {
         animationTimer?.invalidate()
         animationTimer = nil
-        resetBars()
+        if reset { resetBars() }
     }
     
+    /// Drive the bars from real FFT output. No CABasicAnimation here: the
+    /// engine already smooths with an attack/decay envelope, and adding an
+    /// animation per bar 30 times a second is exactly the kind of runloop churn
+    /// this app has been bitten by before.
+    func applyLevels(_ levels: [Float]) {
+        guard !levels.isEmpty else { return }
+        stopAnimating(reset: false)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (i, barLayer) in barLayers.enumerated() {
+            let level = i < levels.count ? CGFloat(levels[i]) : 0
+            let scale = 0.35 + 0.65 * max(0, min(1, level))
+            barScales[i] = scale
+            barLayer.transform = CATransform3DMakeScale(1, scale, 1)
+        }
+        CATransaction.commit()
+    }
+
+    /// `live` means a tap is feeding `applyLevels`; the decorative random
+    /// animation is only started when it is not.
+    func update(isPlaying playing: Bool, live: Bool) {
+        isPlaying = playing
+        if live {
+            stopAnimating(reset: false)
+        } else if playing {
+            startAnimating()
+        } else {
+            stopAnimating()
+        }
+    }
+
     private func updateBars() {
         for (i, barLayer) in barLayers.enumerated() {
             let currentScale = barScales[i]
@@ -106,20 +137,54 @@ class AudioSpectrum: NSView {
 
 struct AudioSpectrumView: NSViewRepresentable {
     @Binding var isPlaying: Bool
-    
+    /// Bundle id of the app currently playing. The process tap needs it to find
+    /// its target; without one the view falls back to the decorative animation.
+    var bundleIdentifier: String?
+
+    final class Coordinator {
+        let source = SpectrumSource(bandCount: 4)
+        var startedFor: String??
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> AudioSpectrum {
         let spectrum = AudioSpectrum()
-        spectrum.setPlaying(isPlaying)
+        context.coordinator.source.onBands = { [weak spectrum] levels in
+            spectrum?.applyLevels(levels)
+        }
+        spectrum.update(isPlaying: isPlaying, live: false)
         return spectrum
     }
-    
+
     func updateNSView(_ nsView: AudioSpectrum, context: Context) {
-        nsView.setPlaying(isPlaying)
+        let coordinator = context.coordinator
+        if isPlaying {
+            // Restart the tap when the playing app changes -- a tap is bound to
+            // one process and does not follow the user to a different player.
+            if coordinator.startedFor != .some(bundleIdentifier) {
+                coordinator.source.stop()
+                coordinator.source.start(bundleIdentifier: bundleIdentifier)
+                coordinator.startedFor = .some(bundleIdentifier)
+            }
+        } else if coordinator.startedFor != nil {
+            coordinator.source.stop()
+            coordinator.startedFor = nil
+        }
+        nsView.update(isPlaying: isPlaying, live: coordinator.source.isLive)
+    }
+
+    /// Tearing the tap down with the view is not optional: a process tap holds
+    /// an aggregate audio device and an IOProc, and leaking those is worse than
+    /// leaking a timer.
+    static func dismantleNSView(_ nsView: AudioSpectrum, coordinator: Coordinator) {
+        coordinator.source.stop()
+        nsView.update(isPlaying: false, live: false)
     }
 }
 
 #Preview {
-    AudioSpectrumView(isPlaying: .constant(true))
+    AudioSpectrumView(isPlaying: .constant(true), bundleIdentifier: nil)
         .frame(width: 16, height: 20)
         .padding()
 }

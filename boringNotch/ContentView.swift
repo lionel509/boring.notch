@@ -459,7 +459,7 @@ struct ContentView: View {
                         .frame(width: 50, alignment: .center)
                         .matchedGeometryEffect(id: "spectrum", in: albumArtNamespace)
                         .mask {
-                            AudioSpectrumView(isPlaying: $musicManager.isPlaying)
+                            AudioSpectrumView(isPlaying: $musicManager.isPlaying, bundleIdentifier: musicManager.bundleIdentifier)
                                 .frame(width: 16, height: 12)
                         }
                 } else {
