@@ -8,6 +8,7 @@ import SwiftUI
 
 struct MinimalFaceFeatures: View {
     @State private var isBlinking = false
+    @State private var blinkTimer: Timer?
     @State var height:CGFloat = 20;
     @State var width:CGFloat = 30;
     
@@ -43,10 +44,14 @@ struct MinimalFaceFeatures: View {
         .onAppear {
             startBlinking()
         }
+        .onDisappear {
+            stopBlinking()
+        }
     }
     
     func startBlinking() {
-        Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
+        guard blinkTimer == nil else { return }
+        blinkTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
             withAnimation(.spring(duration: 0.2)) {
                 isBlinking = true
             }
@@ -56,6 +61,11 @@ struct MinimalFaceFeatures: View {
                 }
             }
         }
+    }
+
+    func stopBlinking() {
+        blinkTimer?.invalidate()
+        blinkTimer = nil
     }
 }
 
