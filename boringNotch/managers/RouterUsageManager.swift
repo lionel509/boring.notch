@@ -66,6 +66,26 @@ final class RouterUsageManager: ObservableObject {
     private var loadedDay = ""
     private var isReading = false
 
+    /// Expands a leading `~` against the *real* home directory.
+    ///
+    /// `expandingTildeInPath` and `NSHomeDirectory()` both resolve to the sandbox container
+    /// when the app is sandboxed, so `~/.local/share/…` silently became
+    /// `~/Library/Containers/theboringteam.boringnotch/Data/.local/share/…` — a path that
+    /// does not exist, then reported as though the sandbox had denied a real file. The
+    /// password database is not redirected, so it still knows where home actually is.
+    static func expandingRealTilde(_ path: String) -> String {
+        guard path == "~" || path.hasPrefix("~/") else { return path }
+
+        let home: String = {
+            if let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir {
+                return String(cString: directory)
+            }
+            return NSHomeDirectory()
+        }()
+
+        return home + String(path.dropFirst(1))
+    }
+
     private static let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -91,7 +111,7 @@ final class RouterUsageManager: ObservableObject {
         let bookmarkData = Defaults[.routerLogBookmark]
         let bookmark = bookmarkData.isEmpty ? nil : Bookmark(data: bookmarkData)
         let fallbackURL = URL(
-            fileURLWithPath: NSString(string: Defaults[.routerLogPath]).expandingTildeInPath)
+            fileURLWithPath: Self.expandingRealTilde(Defaults[.routerLogPath]))
 
         // A day rollover invalidates the running totals, so rescan from the top to pick up
         // whatever landed after midnight.
@@ -100,7 +120,7 @@ final class RouterUsageManager: ObservableObject {
 
         isReading = true
         Task.detached(priority: .utility) {
-            let scanned: (totals: [String: RouterUsageTotals], offset: UInt64)?
+            let scanned: Result<(totals: [String: RouterUsageTotals], offset: UInt64), Error>
             if let url = bookmark?.resolveURL() {
                 // Explicit start/stop rather than Bookmark.withAccess: inside an async
                 // context Swift resolves that overload to the async variant and then
@@ -114,8 +134,15 @@ final class RouterUsageManager: ObservableObject {
 
             await MainActor.run {
                 self.isReading = false
-                guard let scanned else {
+                guard case .success(let scanned) = scanned else {
                     self.isAvailable = false
+                    let reason: String = {
+                        if case .failure(let error) = scanned {
+                            return (error as NSError).localizedDescription
+                        }
+                        return "unknown"
+                    }()
+                    Defaults[.routerLogDiagnostic] = "failed at \(fallbackURL.path) — \(reason)"
                     // With no bookmark there is no way to tell "file missing" from
                     // "sandbox denied" — the sandbox refuses metadata reads too, so
                     // fileExists() lies here. Either way the fix is the same: pick the
@@ -126,6 +153,12 @@ final class RouterUsageManager: ObservableObject {
                 }
                 self.isAvailable = true
                 self.needsAuthorization = false
+                let combined = scanned.totals.values.reduce(into: (0, 0)) {
+                    $0.0 += $1.requests
+                    $0.1 += $1.billedTokens
+                }
+                Defaults[.routerLogDiagnostic] =
+                    "ok — \(combined.0) requests, \(combined.1) billed tokens today"
                 self.loadedDay = today
                 self.byteOffset = scanned.offset
                 self.totalsByUpstream = scanned.totals
@@ -138,7 +171,7 @@ final class RouterUsageManager: ObservableObject {
     @MainActor
     func requestAccess() {
         let configured = URL(
-            fileURLWithPath: NSString(string: Defaults[.routerLogPath]).expandingTildeInPath)
+            fileURLWithPath: Self.expandingRealTilde(Defaults[.routerLogPath]))
 
         let panel = NSOpenPanel()
         panel.title = "Choose the request log"
@@ -163,31 +196,42 @@ final class RouterUsageManager: ObservableObject {
         }
     }
 
-    /// Returns nil only when the log cannot be opened at all.
+    /// Surfaces the real error rather than collapsing every failure to nil — "operation
+    /// not permitted" and "no such file" call for completely different fixes, and guessing
+    /// between them sent this down a wrong path once already.
     private nonisolated static func scan(
         url: URL,
         from start: UInt64,
         day: String,
         into carried: [String: RouterUsageTotals]
-    ) -> (totals: [String: RouterUsageTotals], offset: UInt64)? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+    ) -> Result<(totals: [String: RouterUsageTotals], offset: UInt64), Error> {
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: url)
+        } catch {
+            return .failure(error)
+        }
         defer { try? handle.close() }
 
-        guard let end = try? handle.seekToEnd() else { return nil }
+        guard let end = try? handle.seekToEnd() else {
+            return .failure(CocoaError(.fileReadUnknown))
+        }
 
         // Rotated or truncated under us — start over rather than reading from a stale
         // offset into the middle of a line.
         var start = start
         if end < start { start = 0 }
-        guard end > start else { return (carried, end) }
+        guard end > start else { return .success((carried, end)) }
 
         guard (try? handle.seek(toOffset: start)) != nil,
               let data = try? handle.readToEnd(), !data.isEmpty
-        else { return (carried, start) }
+        else { return .success((carried, start)) }
 
         // Whole lines only. A partial trailing line means the proxy is mid-write, so leave
         // the offset short of it and pick it up complete on the next refresh.
-        guard let lastNewline = data.lastIndex(of: UInt8(ascii: "\n")) else { return (carried, start) }
+        guard let lastNewline = data.lastIndex(of: UInt8(ascii: "\n")) else {
+            return .success((carried, start))
+        }
         let consumed = start + UInt64(lastNewline) + 1
 
         var totals = carried
@@ -208,6 +252,6 @@ final class RouterUsageManager: ObservableObject {
             totals[upstream] = entry
         }
 
-        return (totals, consumed)
+        return .success((totals, consumed))
     }
 }

@@ -40,7 +40,8 @@ final class SystemStatsManager: ObservableObject {
     /// length for a stat-tile trend and it is all that fits in ~22 pt of width.
     @Published private(set) var cpuHistory: [Double] = []
     @Published private(set) var memoryHistory: [Double] = []
-    @Published private(set) var networkHistory: [Double] = []
+    @Published private(set) var networkDownHistory: [Double] = []
+    @Published private(set) var networkUpHistory: [Double] = []
 
     static let historyLength = 12
 
@@ -85,7 +86,8 @@ final class SystemStatsManager: ObservableObject {
         previousNetwork = nil
         cpuHistory = []
         memoryHistory = []
-        networkHistory = []
+        networkDownHistory = []
+        networkUpHistory = []
         networkPeak = 1
     }
 
@@ -105,9 +107,13 @@ final class SystemStatsManager: ObservableObject {
         push(cpuUsage, into: &cpuHistory)
         push(memoryFraction, into: &memoryHistory)
 
-        let throughput = networkDownBytesPerSec + networkUpBytesPerSec
-        networkPeak = max(throughput, networkPeak * 0.92, 1)
-        push(throughput / networkPeak, into: &networkHistory)
+        // Down and up share one ceiling. They are small multiples of the same measure, so
+        // giving each its own scale would draw a trickle of upload at the same height as a
+        // saturated download. Each cell prints its own figure, so nothing is lost by the
+        // quieter direction sitting low in its plot — that is the true shape.
+        networkPeak = max(networkDownBytesPerSec, networkUpBytesPerSec, networkPeak * 0.92, 1)
+        push(networkDownBytesPerSec / networkPeak, into: &networkDownHistory)
+        push(networkUpBytesPerSec / networkPeak, into: &networkUpHistory)
     }
 
     var memoryFraction: Double {

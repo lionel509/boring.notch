@@ -124,6 +124,10 @@ extension Defaults.Keys {
     /// path outside the container is unreadable no matter what it is set to; the user
     /// grants access once and this survives relaunch.
     static let routerLogBookmark = Key<Data>("routerLogBookmark", default: Data())
+    /// Outcome of the last log scan, in words. Persisted so the Settings pane can say
+    /// what happened without waiting for a rescan, and so a failure is inspectable after
+    /// the fact rather than only visible as an empty row.
+    static let routerLogDiagnostic = Key<String>("routerLogDiagnostic", default: "never read")
     static let hideCompletedReminders = Key<Bool>("hideCompletedReminders", default: true)
     static let sliderColor = Key<SliderColorEnum>(
         "sliderUseAlbumArtColor",

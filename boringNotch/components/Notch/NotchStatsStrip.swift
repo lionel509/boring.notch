@@ -73,7 +73,7 @@ private struct Sparkline: View {
                 with: .color(color),
                 style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round))
         }
-        .frame(width: 28, height: 14)
+        .frame(width: 24, height: 10)
         .accessibilityHidden(true)
     }
 }
@@ -105,7 +105,7 @@ struct NotchStatsStrip: View {
 
     var body: some View {
         ScrollView(.horizontal) {
-            HStack(alignment: .firstTextBaseline, spacing: 18) {
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
                 if showUsage { usageCells }
                 if showSystem { systemCells }
             }
@@ -186,12 +186,17 @@ struct NotchStatsStrip: View {
                   alarming: stats.memoryFraction >= 0.9)
         }
         if showNetwork {
-            gauge("DOWN", Self.rate(stats.networkDownBytesPerSec), widest: "999 KB/s", trend: stats.networkHistory)
-            gauge("UP", Self.rate(stats.networkUpBytesPerSec), widest: "999 KB/s")
+            gauge("DOWN", Self.rate(stats.networkDownBytesPerSec), widest: "999 KB/s",
+                  trend: stats.networkDownHistory)
+            gauge("UP", Self.rate(stats.networkUpBytesPerSec), widest: "999 KB/s",
+                  trend: stats.networkUpHistory)
         }
     }
 
-    private static let valueFont = Font.system(size: 12, weight: .semibold, design: .rounded)
+    // Sized to sit under the player, not to compete with it. At 12 pt semibold the row
+    // read as a second headline; the song title itself is only .headline. A footer should
+    // be the quietest thing in the notch while still being legible at a glance.
+    private static let valueFont = Font.system(size: 10.5, weight: .medium, design: .rounded)
         .monospacedDigit()
 
     /// - Parameter widest: the longest string this cell can ever display. The cell reserves
@@ -210,11 +215,11 @@ struct NotchStatsStrip: View {
 
         return VStack(alignment: .leading, spacing: 0) {
             Text(label)
-                .font(.system(size: 8, weight: .semibold))
-                .tracking(0.5)
+                .font(.system(size: 7, weight: .semibold))
+                .tracking(0.4)
                 .foregroundStyle(.tertiary)
 
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Text(widest)
                     .font(Self.valueFont)
                     .hidden()
@@ -223,14 +228,18 @@ struct NotchStatsStrip: View {
                             .font(Self.valueFont)
                             .foregroundStyle(
                                 useColor && alarming
-                                    ? AnyShapeStyle(accent) : AnyShapeStyle(.primary))
+                                    ? AnyShapeStyle(accent) : AnyShapeStyle(.secondary))
                             // Rolls the digits over rather than swapping them.
                             .contentTransition(.numericText())
                             .animation(.smooth(duration: 0.35), value: value)
                             .fixedSize()
                     }
 
-                if showSparklines, let trend, trend.count > 1 {
+                // Rendered as soon as the cell has any trace at all, even before there
+                // are two samples to join. Gating on trend.count > 1 meant the plot
+                // appeared a second after the notch opened and pushed every figure to its
+                // right along the row — the graph loading was itself the jolt.
+                if showSparklines, let trend {
                     Sparkline(values: trend, color: accent)
                         .animation(.smooth(duration: 0.35), value: trend)
                 }

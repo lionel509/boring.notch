@@ -281,6 +281,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
 
+        // Scan once at launch so the first time the notch opens the figures are already
+        // there, rather than appearing a beat later.
+        Task { @MainActor in RouterUsageManager.shared.refresh() }
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(screenConfigurationDidChange),

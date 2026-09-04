@@ -16,7 +16,7 @@ let shadowPadding: CGFloat = 20
 /// Height reserved for the optional stats strip. Two lines — a small uppercase label over
 /// the figure — because a single row where label and value carry the same weight reads as
 /// chrome rather than as something to be read.
-let statsStripHeight: CGFloat = 34
+let statsStripHeight: CGFloat = 28
 
 private let baseOpenNotchSize: CGSize = .init(width: 640, height: 190)
 
