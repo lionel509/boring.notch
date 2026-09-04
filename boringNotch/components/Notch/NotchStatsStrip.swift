@@ -73,7 +73,7 @@ private struct Sparkline: View {
                 with: .color(color),
                 style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round))
         }
-        .frame(width: 24, height: 10)
+        .frame(width: 22, height: 9)
         .accessibilityHidden(true)
     }
 }
@@ -105,23 +105,88 @@ struct NotchStatsStrip: View {
     /// frame makes it read as pasted on. It settles in just behind the expansion instead.
     @State private var settled = false
 
-    var body: some View {
-        VStack(spacing: 0) {
-            // A line each, so the two groups never have to be told apart by reading the
-            // labels — API usage above, what the machine is doing below.
-            if showUsage { row { usageCells } }
-            if showSystem { row { systemCells } }
+    private enum Page: Hashable { case usage, system }
+
+    @State private var pageIndex = 0
+    @State private var isHeld = false
+    @State private var flipTimer: Timer?
+
+    @Default(.statsStripFlipInterval) private var flipInterval
+
+    private var pages: [Page] {
+        var pages: [Page] = []
+        if showUsage { pages.append(.usage) }
+        if showSystem { pages.append(.system) }
+        return pages
+    }
+
+    private var currentPage: Page? {
+        guard !pages.isEmpty else { return nil }
+        return pages[min(pageIndex, pages.count - 1) % pages.count]
+    }
+
+    private func advance() {
+        guard pages.count > 1 else { return }
+        withAnimation(.smooth(duration: 0.42)) {
+            pageIndex = (pageIndex + 1) % pages.count
         }
+    }
+
+    /// Same discipline as every other timer here: stored, guarded, invalidated on the way
+    /// out. A closed notch flips nothing.
+    private func startFlipping() {
+        stopFlipping()
+        guard pages.count > 1, flipInterval > 0 else { return }
+
+        let timer = Timer(timeInterval: flipInterval, repeats: true) { _ in
+            Task { @MainActor in
+                guard !isHeld else { return }
+                advance()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        flipTimer = timer
+    }
+
+    private func stopFlipping() {
+        flipTimer?.invalidate()
+        flipTimer = nil
+    }
+
+    var body: some View {
+        ZStack {
+            switch currentPage {
+            case .usage: row { usageCells }
+            case .system: row { systemCells }
+            case .none: Color.clear
+            }
+        }
+        // Keyed on the page so SwiftUI treats a flip as a swap rather than a redraw.
+        .id(currentPage)
+        .transition(
+            .asymmetric(
+                insertion: .move(edge: .bottom).combined(with: .opacity),
+                removal: .move(edge: .top).combined(with: .opacity)))
         .frame(height: statsStripHeight)
+        .clipped()
+        .contentShape(Rectangle())
+        // Hovering holds the current page — nothing is more annoying than a number
+        // flipping away while it is being read. Clicking advances by hand.
+        .onHover { hovering in
+            isHeld = hovering
+        }
+        .onTapGesture { advance() }
         .opacity(settled ? 1 : 0)
         .offset(y: settled ? 0 : 7)
         .onAppear {
             stats.start()
             usage.refresh()
+            startFlipping()
             withAnimation(.smooth(duration: 0.3).delay(0.14)) { settled = true }
         }
         .onDisappear {
             settled = false
+            stopFlipping()
             // Sampling exists only while this row does. A closed notch costs nothing.
             stats.stop()
         }
@@ -211,6 +276,7 @@ struct NotchStatsStrip: View {
                   tint: battery.isCharging
                       ? .effectiveAccent
                       : StatsPalette.severity(1 - Double(battery.levelBattery) / 100),
+                  trend: stats.batteryHistory,
                   alarming: !battery.isCharging && battery.levelBattery <= 10)
         }
         if showCPU {
@@ -238,7 +304,7 @@ struct NotchStatsStrip: View {
     // Sized to sit under the player, not to compete with it. At 12 pt semibold the row
     // read as a second headline; the song title itself is only .headline. A footer should
     // be the quietest thing in the notch while still being legible at a glance.
-    private static let valueFont = Font.system(size: 10.5, weight: .medium, design: .rounded)
+    private static let valueFont = Font.system(size: 10, weight: .medium, design: .rounded)
         .monospacedDigit()
 
     /// - Parameter widest: the longest string this cell can ever display. The cell reserves
@@ -257,7 +323,7 @@ struct NotchStatsStrip: View {
 
         return VStack(alignment: .leading, spacing: 0) {
             Text(label)
-                .font(.system(size: 7, weight: .semibold))
+                .font(.system(size: 6.5, weight: .semibold))
                 .tracking(0.4)
                 .foregroundStyle(.tertiary)
 

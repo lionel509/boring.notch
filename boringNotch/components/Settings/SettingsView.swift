@@ -1812,6 +1812,7 @@ struct StatsSettings: View {
     @Default(.statsStripShowUsage) var showUsage
     @Default(.statsStripShowSystem) var showSystem
     @Default(.routerLogPath) var routerLogPath
+    @Default(.statsStripFlipInterval) var flipInterval
 
     var body: some View {
         Form {
@@ -1884,6 +1885,12 @@ struct StatsSettings: View {
             .disabled(!showStatsStrip)
 
             Section {
+                Picker("Flip every", selection: $flipInterval) {
+                    Text("3 seconds").tag(3.0)
+                    Text("6 seconds").tag(6.0)
+                    Text("10 seconds").tag(10.0)
+                    Text("Don't flip").tag(0.0)
+                }
                 Defaults.Toggle(key: .statsStripSparklines) {
                     Text("Sparklines")
                 }
@@ -1893,7 +1900,7 @@ struct StatsSettings: View {
             } header: {
                 Text("Appearance")
             } footer: {
-                Text("Severity follows the same 50 / 75 / 90% thresholds as the Claude Code statusline: green, amber, orange, red. The number itself always stays in plain text — the icon and trace carry the state, so turning colour off loses nothing you can't read.")
+                Text("One row that flips between pages like a departure board, rather than a line per group — hover to hold a page, click to advance it by hand. Severity follows the same 50 / 75 / 90% thresholds as the Claude Code statusline: green, amber, orange, red. The number itself always stays in plain text — the icon and trace carry the state, so turning colour off loses nothing you can't read.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

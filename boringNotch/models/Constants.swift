@@ -114,6 +114,9 @@ extension Defaults.Keys {
     static let statsStripShowUsage = Key<Bool>("statsStripShowUsage", default: true)
     static let statsStripShowSystem = Key<Bool>("statsStripShowSystem", default: true)
     static let statsStripShowBattery = Key<Bool>("statsStripShowBattery", default: true)
+    static let batteryHistory = Key<[Double]>("batteryHistory", default: [])
+    /// Seconds a page holds before the board flips. 0 pins it to whatever is showing.
+    static let statsStripFlipInterval = Key<Double>("statsStripFlipInterval", default: 6)
     static let statsStripShowCPU = Key<Bool>("statsStripShowCPU", default: true)
     static let statsStripShowMemory = Key<Bool>("statsStripShowMemory", default: true)
     static let statsStripShowNetwork = Key<Bool>("statsStripShowNetwork", default: true)

@@ -7,6 +7,7 @@
 
 import Combine
 import Darwin
+import Defaults
 import Foundation
 
 /// Samples aggregate system load, cheaply, and only while something is watching.
@@ -42,6 +43,13 @@ final class SystemStatsManager: ObservableObject {
     @Published private(set) var memoryHistory: [Double] = []
     @Published private(set) var networkDownHistory: [Double] = []
     @Published private(set) var networkUpHistory: [Double] = []
+
+    /// Battery moves far too slowly for a 12-second window to say anything, so it keeps a
+    /// coarse trace instead — a point a minute, persisted, so it survives the notch closing
+    /// and the app restarting and actually shows a charge or a drain.
+    @Published private(set) var batteryHistory: [Double] = Defaults[.batteryHistory]
+    private var lastBatteryPoint: Date = .distantPast
+    static let batteryHistoryLength = 24
 
     static let historyLength = 12
 
@@ -82,13 +90,13 @@ final class SystemStatsManager: ObservableObject {
         timer = nil
         // Drop the baselines too: a stale one would make the first sample after
         // reopening report the average since the notch was last closed.
+        // The tick and byte baselines must go — a stale one would make the first sample
+        // after reopening report the average since the notch was last closed.
         previousCPUTicks = nil
         previousNetwork = nil
-        cpuHistory = []
-        memoryHistory = []
-        networkDownHistory = []
-        networkUpHistory = []
-        networkPeak = 1
+        // The traces deliberately stay. Clearing them meant every reopen drew its plots in
+        // from nothing, which is a jolt every single time the notch is used. What is on
+        // screen is still twelve real samples; they just span the gap.
     }
 
     private func sample() {
@@ -114,6 +122,23 @@ final class SystemStatsManager: ObservableObject {
         networkPeak = max(networkDownBytesPerSec, networkUpBytesPerSec, networkPeak * 0.92, 1)
         push(networkDownBytesPerSec / networkPeak, into: &networkDownHistory)
         push(networkUpBytesPerSec / networkPeak, into: &networkUpHistory)
+
+        recordBattery()
+    }
+
+    private func recordBattery() {
+        let now = Date()
+        guard now.timeIntervalSince(lastBatteryPoint) >= 60 else { return }
+        lastBatteryPoint = now
+
+        let level = min(max(Double(BatteryStatusViewModel.shared.levelBattery) / 100, 0), 1)
+        var history = batteryHistory
+        history.append(level)
+        if history.count > Self.batteryHistoryLength {
+            history.removeFirst(history.count - Self.batteryHistoryLength)
+        }
+        batteryHistory = history
+        Defaults[.batteryHistory] = history
     }
 
     var memoryFraction: Double {
