@@ -17,6 +17,10 @@ let shadowPadding: CGFloat = 20
 /// label and value carry the same weight reads as chrome rather than as something to read.
 let statsStripRowHeight: CGFloat = 24
 
+/// Breathing room above the row. Without it the album art's player badge — which hangs off
+/// the artwork's bottom-trailing corner — sits directly on the first cell.
+let statsStripTopGap: CGFloat = 3
+
 /// The strip is a single row that flips between pages — API usage, then system load — the
 /// way a split-flap departure board cycles. Stacking a line per group cost twice the notch
 /// height to show numbers that are only glanced at, one group at a time.
@@ -24,7 +28,7 @@ var statsStripHeight: CGFloat {
     guard Defaults[.showStatsStrip],
           Defaults[.statsStripShowUsage] || Defaults[.statsStripShowSystem]
     else { return 0 }
-    return statsStripRowHeight
+    return statsStripRowHeight + statsStripTopGap
 }
 
 private let baseOpenNotchSize: CGSize = .init(width: 640, height: 190)
@@ -52,7 +56,7 @@ var openNotchSize: CGSize {
 /// nothing visually — it is the same trick `shadowPadding` already relies on.
 let windowSize: CGSize = .init(
     width: baseOpenNotchSize.width,
-    height: baseOpenNotchSize.height + statsStripRowHeight + shadowPadding)
+    height: baseOpenNotchSize.height + statsStripRowHeight + statsStripTopGap + shadowPadding)
 let cornerRadiusInsets: (opened: (top: CGFloat, bottom: CGFloat), closed: (top: CGFloat, bottom: CGFloat)) = (opened: (top: 19, bottom: 24), closed: (top: 6, bottom: 14))
 
 enum MusicPlayerImageSizes {

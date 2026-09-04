@@ -169,8 +169,10 @@ struct NotchStatsStrip: View {
             .asymmetric(
                 insertion: .move(edge: .bottom).combined(with: .opacity),
                 removal: .move(edge: .top).combined(with: .opacity)))
-        .frame(height: statsStripHeight)
+        .frame(height: statsStripRowHeight)
         .clipped()
+        // Clears the player badge hanging off the album art's corner.
+        .padding(.top, statsStripTopGap)
         .contentShape(Rectangle())
         // Hovering holds the current page — nothing is more annoying than a number
         // flipping away while it is being read. Clicking advances by hand.
