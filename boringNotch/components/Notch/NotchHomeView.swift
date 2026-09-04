@@ -282,6 +282,8 @@ struct MusicControlsView: View {
                     : musicManager.elapsedTime
                 slotReadout(Self.remaining(musicManager.songDuration - elapsed))
             }
+        case .rotating:
+            RotatingMusicSlot()
         case .weather:
             slotReadout(WeatherManager.shared.conditions.map {
                 "\(Int($0.temperatureC.rounded()))°"
@@ -621,5 +623,79 @@ struct CustomSlider: View {
             )
             .animation(.spring(response: 0.35, dampingFraction: 0.7), value: dragging)
         }
+    }
+}
+
+// MARK: - Rotating slot
+
+/// A readout that cycles the way the stats board does, for people who would rather have
+/// information in the slot row than a control they never press.
+///
+/// Hovering advances it immediately rather than pausing — the board holds on hover because
+/// its figures are being read, but here the whole point is to reach the one you want, and
+/// waiting out a timer to see it is worse than nudging it along.
+struct RotatingMusicSlot: View {
+    @ObservedObject private var musicManager = MusicManager.shared
+    @ObservedObject private var weather = WeatherManager.shared
+
+    private enum Readout: CaseIterable { case album, remaining, weather }
+
+    @State private var index = 0
+    @State private var timer: Timer?
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: 84)
+            .contentShape(Rectangle())
+            .id(index)
+            .transition(
+                .asymmetric(
+                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                    removal: .move(edge: .top).combined(with: .opacity)))
+            .clipped()
+            .onHover { hovering in
+                if hovering { advance() }
+            }
+            .onAppear(perform: start)
+            .onDisappear(perform: stop)
+    }
+
+    private var text: String {
+        switch Readout.allCases[index % Readout.allCases.count] {
+        case .album:
+            return musicManager.album.isEmpty ? "—" : musicManager.album
+        case .remaining:
+            let left = max(0, musicManager.songDuration - musicManager.elapsedTime)
+            return String(format: "-%d:%02d", Int(left) / 60, Int(left) % 60)
+        case .weather:
+            guard let conditions = weather.conditions else { return "—" }
+            return "\(Int(conditions.temperatureC.rounded()))° \(conditions.condition.label.capitalized)"
+        }
+    }
+
+    private func advance() {
+        withAnimation(.snappy(duration: 0.22, extraBounce: 0)) {
+            index = (index + 1) % Readout.allCases.count
+        }
+    }
+
+    /// Stored, guarded, invalidated on the way out — the same discipline every other timer
+    /// in this app follows since the leaked blink timers.
+    private func start() {
+        stop()
+        let timer = Timer(timeInterval: 5, repeats: true) { _ in
+            Task { @MainActor in advance() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func stop() {
+        timer?.invalidate()
+        timer = nil
     }
 }

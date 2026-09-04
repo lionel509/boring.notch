@@ -163,10 +163,10 @@ struct NotchStatsStrip: View {
     var body: some View {
         ZStack {
             switch currentPage {
-            case .usage: row { usageCells }
-            case .providers: row { providerCells }
-            case .limits: row { limitCells }
-            case .system: row { systemCells }
+            case .usage: row { caption("TOKENS USED"); usageCells }
+            case .providers: row { caption("BY PROVIDER · 7 DAYS"); providerCells }
+            case .limits: row { caption("PLAN LIMITS"); limitCells }
+            case .system: row { caption("SYSTEM"); systemCells }
             case .none: Color.clear
             }
         }
@@ -219,6 +219,19 @@ struct NotchStatsStrip: View {
             .scrollIndicators(.hidden)
             .mask(fade(width: width))
         }
+    }
+
+    /// Names what the row is counting. Without it a page reading ANTHROPIC 5.8M /
+    /// OPENROUTER 293K says who but never what or over how long, which is exactly the
+    /// question it left people asking.
+    @ViewBuilder
+    private func caption(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 7, weight: .bold))
+            .tracking(0.7)
+            .foregroundStyle(.tertiary.opacity(0.7))
+            .fixedSize()
+        Divider().frame(height: 10)
     }
 
     /// Softens the ends so an overflowing row reads as continuing rather than as cut off.

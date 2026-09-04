@@ -22,6 +22,7 @@ enum MusicControlButton: String, CaseIterable, Identifiable, Codable, Defaults.S
     case album
     case remaining
     case weather
+    case rotating
     case none
 
     var id: String { rawValue }
@@ -49,7 +50,8 @@ enum MusicControlButton: String, CaseIterable, Identifiable, Codable, Defaults.S
         .goForward,
         .album,
         .remaining,
-        .weather
+        .weather,
+        .rotating
     ]
 
     var label: String {
@@ -78,6 +80,8 @@ enum MusicControlButton: String, CaseIterable, Identifiable, Codable, Defaults.S
             return "Time remaining"
         case .weather:
             return "Weather"
+        case .rotating:
+            return "Rotating readout"
         case .none:
             return "Empty slot"
         }
@@ -109,6 +113,8 @@ enum MusicControlButton: String, CaseIterable, Identifiable, Codable, Defaults.S
             return "hourglass"
         case .weather:
             return "cloud.sun"
+        case .rotating:
+            return "arrow.trianglehead.2.clockwise"
         case .none:
             return ""
         }
