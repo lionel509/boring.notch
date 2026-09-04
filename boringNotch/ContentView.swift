@@ -115,7 +115,8 @@ struct ContentView: View {
                                 condition: weather.conditions?.condition ?? .clear,
                                 isDay: weather.conditions?.isDay ?? weather.isDaytimeByClock,
                                 intensity: weatherIntensity,
-                                useDesktopBlur: weatherUseDesktopBlur)
+                                useDesktopBlur: weatherUseDesktopBlur,
+                                sunProgress: weather.sunProgress)
                         } else {
                             Color.black
                         }

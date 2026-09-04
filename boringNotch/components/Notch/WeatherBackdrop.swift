@@ -45,6 +45,8 @@ struct WeatherBackdrop: View {
     let intensity: Double
     /// Show the real desktop through frosted glass rather than a painted sky.
     let useDesktopBlur: Bool
+    /// 0 at sunrise, 1 at sunset. Drives where the sun sits and how warm it is.
+    let sunProgress: Double
 
     /// How often the scene redraws.
     ///
@@ -53,11 +55,12 @@ struct WeatherBackdrop: View {
     /// showed up as the calendar's date wheel feeling sticky while scrolling. Only the
     /// conditions with fast-moving particles actually need 30.
     private var frameInterval: Double {
-        if !isDay { return 1.0 / 30.0 }             // twinkle and shooting stars
+        if !isDay { return 1.0 / 20.0 }          // twinkle and the occasional streak
         switch condition {
-        case .rain, .storm, .snow: return 1.0 / 30.0
-        case .cloudy, .fog: return 1.0 / 12.0       // clouds drift
-        case .clear: return 1.0 / 8.0               // only the sun, and it breathes slowly
+        case .rain, .storm, .snow: return 1.0 / 30.0   // falling, genuinely needs frames
+        case .cloudy: return 1.0 / 12.0                // drifting
+        case .fog, .clear: return 4.0                  // nothing moves but the sun, and it
+                                                       // crosses the sky over hours
         }
     }
 
@@ -68,7 +71,12 @@ struct WeatherBackdrop: View {
                 // glass beats a painted imitation, and it means the notch picks up whatever
                 // is behind it rather than inventing a backdrop.
                 DesktopBlur()
-                sky.opacity(0.55)
+                // A wash, not a coat. At 55% the sky stacked on top of the album art's own
+                // lighting effect — which already tints the whole notch from the artwork —
+                // and two tinting systems fighting over the same pixels came out muddy
+                // brown rather than like glass. The blur is the effect; the weather only
+                // colours it.
+                sky.opacity(0.18)
             } else {
                 sky
             }
@@ -83,7 +91,7 @@ struct WeatherBackdrop: View {
             // An early pass stacked 82% material on a 42% black scrim, which on a sunny
             // afternoon made the notch indistinguishable from plain black — frosting is
             // meant to soften the backdrop, not delete it.
-            Color.black.opacity(useDesktopBlur ? 0.30 : 0.18)
+            Color.black.opacity(useDesktopBlur ? 0.22 : 0.18)
         }
         .allowsHitTesting(false)
     }
@@ -105,7 +113,13 @@ struct WeatherBackdrop: View {
             }
         }
         switch condition {
-        case .clear: return [Color(red: 0.24, green: 0.52, blue: 0.86), Color(red: 0.06, green: 0.16, blue: 0.38)]
+        case .clear:
+            // Blend the daytime blue toward dusk as the sun nears the horizon.
+            let dusk = 1 - sin(min(max(sunProgress, 0), 1) * .pi)
+            return [
+                Color(red: 0.24 + 0.42 * dusk, green: 0.52 - 0.16 * dusk, blue: 0.86 - 0.50 * dusk),
+                Color(red: 0.06 + 0.16 * dusk, green: 0.16 - 0.04 * dusk, blue: 0.38 - 0.14 * dusk),
+            ]
         case .cloudy: return [Color(red: 0.36, green: 0.42, blue: 0.51), Color(red: 0.10, green: 0.12, blue: 0.17)]
         case .fog: return [Color(red: 0.44, green: 0.46, blue: 0.49), Color(red: 0.13, green: 0.14, blue: 0.16)]
         case .rain: return [Color(red: 0.26, green: 0.34, blue: 0.46), Color(red: 0.06, green: 0.09, blue: 0.15)]
@@ -132,13 +146,28 @@ struct WeatherBackdrop: View {
         }
     }
 
-    /// A soft bloom rather than a disc. Bright enough to notice at a glance, nowhere near
-    /// bright enough to look at — the whole point is that it sits under the music.
+    /// A soft bloom rather than a disc, tracking the real sun across the sky rather than
+    /// parking in one corner. Bright enough to notice at a glance, nowhere near bright
+    /// enough to look at — the point is that it sits under the music.
     private func drawSun(_ context: inout GraphicsContext, _ size: CGSize, _ time: Double) {
-        let centre = CGPoint(x: size.width * 0.78, y: size.height * 0.30)
-        // A slow breath, a few percent either way. Anything more reads as a flicker.
-        let pulse = 1 + 0.05 * sin(time * 0.6)
-        let radius = size.height * 1.05 * pulse
+        // Left to right across the day, and an arc that is high at noon and on the horizon
+        // at either end.
+        let arc = sin(min(max(sunProgress, 0), 1) * .pi)
+        let centre = CGPoint(
+            x: size.width * (0.12 + 0.76 * sunProgress),
+            y: size.height * (1.02 - 0.86 * arc))
+        let radius = size.height * (0.75 + 0.45 * arc)
+
+        // Low sun goes warm. Golden hour is most of why anyone looks at a sunset.
+        let warmth = 1 - arc
+        let core = Color(
+            red: 1.0,
+            green: 0.95 - 0.22 * warmth,
+            blue: 0.78 - 0.52 * warmth)
+        let halo = Color(
+            red: 1.0,
+            green: 0.82 - 0.28 * warmth,
+            blue: 0.48 - 0.36 * warmth)
 
         context.fill(
             Path(ellipseIn: CGRect(
@@ -146,8 +175,8 @@ struct WeatherBackdrop: View {
                 width: radius * 2, height: radius * 2)),
             with: .radialGradient(
                 Gradient(colors: [
-                    Color(red: 1.0, green: 0.95, blue: 0.78).opacity(0.85 * intensity),
-                    Color(red: 1.0, green: 0.82, blue: 0.48).opacity(0.28 * intensity),
+                    core.opacity(0.85 * intensity),
+                    halo.opacity(0.30 * intensity),
                     .clear,
                 ]),
                 center: centre, startRadius: 0, endRadius: radius))

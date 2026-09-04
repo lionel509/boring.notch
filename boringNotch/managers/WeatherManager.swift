@@ -60,6 +60,8 @@ final class WeatherManager: ObservableObject {
         var high: Double?
         var low: Double?
         var isDay: Bool
+        var sunrise: Date?
+        var sunset: Date?
         var fetchedAt: Date
     }
 
@@ -81,6 +83,23 @@ final class WeatherManager: ObservableObject {
     var isDaytimeByClock: Bool {
         let hour = Calendar.current.component(.hour, from: Date())
         return (7..<19).contains(hour)
+    }
+
+    /// How far through the daylight hours we are, 0 at sunrise and 1 at sunset. Falls back
+    /// to a plain 6:30–19:30 assumption when there is no place set, which is close enough to
+    /// put the sun in roughly the right part of the sky.
+    var sunProgress: Double {
+        let now = Date()
+        let calendar = Calendar.current
+
+        let rise = conditions?.sunrise
+            ?? calendar.date(bySettingHour: 6, minute: 30, second: 0, of: now)
+        let set = conditions?.sunset
+            ?? calendar.date(bySettingHour: 19, minute: 30, second: 0, of: now)
+
+        guard let rise, let set, set > rise else { return 0.5 }
+        let span = set.timeIntervalSince(rise)
+        return min(max(now.timeIntervalSince(rise) / span, 0), 1)
     }
 
     func refresh() {
@@ -149,7 +168,7 @@ final class WeatherManager: ObservableObject {
             URLQueryItem(name: "latitude", value: String(coordinate.latitude)),
             URLQueryItem(name: "longitude", value: String(coordinate.longitude)),
             URLQueryItem(name: "current", value: "temperature_2m,weather_code,is_day"),
-            URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min"),
+            URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min,sunrise,sunset"),
             URLQueryItem(name: "forecast_days", value: "1"),
             URLQueryItem(name: "timezone", value: "auto"),
         ]
@@ -167,6 +186,13 @@ final class WeatherManager: ObservableObject {
         func firstValue(_ key: String) -> Double? {
             (daily?[key] as? [Double])?.first
         }
+        // Open-Meteo returns these as local wall-clock without an offset when timezone=auto.
+        let localTimes = DateFormatter()
+        localTimes.locale = Locale(identifier: "en_US_POSIX")
+        localTimes.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        func firstTime(_ key: String) -> Date? {
+            ((daily?[key] as? [String])?.first).flatMap(localTimes.date(from:))
+        }
 
         return Conditions(
             condition: SkyCondition(wmoCode: code),
@@ -174,6 +200,8 @@ final class WeatherManager: ObservableObject {
             high: firstValue("temperature_2m_max"),
             low: firstValue("temperature_2m_min"),
             isDay: (current["is_day"] as? Int) != 0,
+            sunrise: firstTime("sunrise"),
+            sunset: firstTime("sunset"),
             fetchedAt: Date())
     }
 }
