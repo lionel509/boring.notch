@@ -118,9 +118,12 @@ extension Defaults.Keys {
 
     // Weather backdrop.
     static let showWeatherBackdrop = Key<Bool>("showWeatherBackdrop", default: false)
-    static let weatherBackdropIntensity = Key<Double>("weatherBackdropIntensity", default: 0.5)
+    static let weatherBackdropIntensity = Key<Double>("weatherBackdropIntensity", default: 0.8)
     /// A place name the user types. Geocoded once and cached below. Not an IP lookup — that
     /// would hand a third party an address on every refresh.
+    /// Blur the desktop behind the notch and tint it with the weather, rather than
+    /// painting a sky. Real glass over the actual wallpaper.
+    static let weatherUseDesktopBlur = Key<Bool>("weatherUseDesktopBlur", default: true)
     static let weatherPlace = Key<String>("weatherPlace", default: "")
     static let weatherResolvedPlace = Key<String>("weatherResolvedPlace", default: "")
     static let weatherLatitude = Key<Double>("weatherLatitude", default: 0)

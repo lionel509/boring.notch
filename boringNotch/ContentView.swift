@@ -41,6 +41,7 @@ struct ContentView: View {
     @Default(.showStatsStrip) var showStatsStrip
     @Default(.showWeatherBackdrop) var showWeatherBackdrop
     @Default(.weatherBackdropIntensity) var weatherIntensity
+    @Default(.weatherUseDesktopBlur) var weatherUseDesktopBlur
 
     // Shared interactive spring for movement/resizing to avoid conflicting animations
     private let animationSpring = Animation.interactiveSpring(response: 0.38, dampingFraction: 0.8, blendDuration: 0)
@@ -113,7 +114,8 @@ struct ContentView: View {
                             WeatherBackdrop(
                                 condition: weather.conditions?.condition ?? .clear,
                                 isDay: weather.conditions?.isDay ?? weather.isDaytimeByClock,
-                                intensity: weatherIntensity)
+                                intensity: weatherIntensity,
+                                useDesktopBlur: weatherUseDesktopBlur)
                         } else {
                             Color.black
                         }

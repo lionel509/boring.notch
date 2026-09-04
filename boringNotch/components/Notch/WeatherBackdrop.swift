@@ -5,8 +5,24 @@
 //  The sky behind the notch's content.
 //
 
+import AppKit
 import Defaults
 import SwiftUI
+
+/// Real behind-window blur — the desktop showing through, not a simulation of it.
+/// The notch window is already `isOpaque = false` with a clear background, so this
+/// samples whatever is actually behind it: wallpaper, or the window under it.
+private struct DesktopBlur: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+}
 
 /// A live sky drawn behind everything in the open notch, then buried under frosted glass.
 ///
@@ -27,21 +43,48 @@ struct WeatherBackdrop: View {
     let isDay: Bool
     /// 0...1. Scales every element's opacity together, so "less distracting" is one knob.
     let intensity: Double
+    /// Show the real desktop through frosted glass rather than a painted sky.
+    let useDesktopBlur: Bool
+
+    /// How often the scene redraws.
+    ///
+    /// The first version ran everything at a flat 30 fps, which is a full-notch canvas
+    /// repaint 30 times a second to animate a sun that breathes once every ten — and it
+    /// showed up as the calendar's date wheel feeling sticky while scrolling. Only the
+    /// conditions with fast-moving particles actually need 30.
+    private var frameInterval: Double {
+        if !isDay { return 1.0 / 30.0 }             // twinkle and shooting stars
+        switch condition {
+        case .rain, .storm, .snow: return 1.0 / 30.0
+        case .cloudy, .fog: return 1.0 / 12.0       // clouds drift
+        case .clear: return 1.0 / 8.0               // only the sun, and it breathes slowly
+        }
+    }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-
-            Canvas { context, size in
-                draw(in: &context, size: size, time: time)
+        ZStack {
+            if useDesktopBlur {
+                // The wallpaper itself, blurred, with the sky laid over it as a tint. Real
+                // glass beats a painted imitation, and it means the notch picks up whatever
+                // is behind it rather than inventing a backdrop.
+                DesktopBlur()
+                sky.opacity(0.55)
+            } else {
+                sky
             }
-            .drawingGroup()
+
+            TimelineView(.animation(minimumInterval: frameInterval, paused: false)) { timeline in
+                Canvas { context, size in
+                    draw(in: &context, size: size, time: timeline.date.timeIntervalSinceReferenceDate)
+                }
+            }
+
+            // Enough scrim to keep white text readable over a bright wallpaper, and no more.
+            // An early pass stacked 82% material on a 42% black scrim, which on a sunny
+            // afternoon made the notch indistinguishable from plain black — frosting is
+            // meant to soften the backdrop, not delete it.
+            Color.black.opacity(useDesktopBlur ? 0.30 : 0.18)
         }
-        .background(sky)
-        // The glass. Content sits above this, so the sky reads as light rather than as a
-        // picture, and text keeps its contrast.
-        .overlay(.ultraThinMaterial.opacity(0.82))
-        .overlay(Color.black.opacity(0.42))
         .allowsHitTesting(false)
     }
 
@@ -62,12 +105,12 @@ struct WeatherBackdrop: View {
             }
         }
         switch condition {
-        case .clear: return [Color(red: 0.16, green: 0.36, blue: 0.62), Color(red: 0.03, green: 0.08, blue: 0.18)]
-        case .cloudy: return [Color(red: 0.22, green: 0.25, blue: 0.30), Color(red: 0.05, green: 0.06, blue: 0.09)]
-        case .fog: return [Color(red: 0.26, green: 0.27, blue: 0.29), Color(red: 0.08, green: 0.08, blue: 0.09)]
-        case .rain: return [Color(red: 0.16, green: 0.20, blue: 0.27), Color(red: 0.03, green: 0.05, blue: 0.08)]
-        case .snow: return [Color(red: 0.28, green: 0.31, blue: 0.36), Color(red: 0.07, green: 0.08, blue: 0.11)]
-        case .storm: return [Color(red: 0.10, green: 0.11, blue: 0.16), .black]
+        case .clear: return [Color(red: 0.24, green: 0.52, blue: 0.86), Color(red: 0.06, green: 0.16, blue: 0.38)]
+        case .cloudy: return [Color(red: 0.36, green: 0.42, blue: 0.51), Color(red: 0.10, green: 0.12, blue: 0.17)]
+        case .fog: return [Color(red: 0.44, green: 0.46, blue: 0.49), Color(red: 0.13, green: 0.14, blue: 0.16)]
+        case .rain: return [Color(red: 0.26, green: 0.34, blue: 0.46), Color(red: 0.06, green: 0.09, blue: 0.15)]
+        case .snow: return [Color(red: 0.44, green: 0.49, blue: 0.57), Color(red: 0.12, green: 0.14, blue: 0.19)]
+        case .storm: return [Color(red: 0.17, green: 0.19, blue: 0.27), Color(red: 0.03, green: 0.03, blue: 0.06)]
         }
     }
 
@@ -95,7 +138,7 @@ struct WeatherBackdrop: View {
         let centre = CGPoint(x: size.width * 0.78, y: size.height * 0.30)
         // A slow breath, a few percent either way. Anything more reads as a flicker.
         let pulse = 1 + 0.05 * sin(time * 0.6)
-        let radius = size.height * 0.85 * pulse
+        let radius = size.height * 1.05 * pulse
 
         context.fill(
             Path(ellipseIn: CGRect(
@@ -103,8 +146,8 @@ struct WeatherBackdrop: View {
                 width: radius * 2, height: radius * 2)),
             with: .radialGradient(
                 Gradient(colors: [
-                    Color(red: 1.0, green: 0.92, blue: 0.70).opacity(0.55 * intensity),
-                    Color(red: 1.0, green: 0.80, blue: 0.45).opacity(0.16 * intensity),
+                    Color(red: 1.0, green: 0.95, blue: 0.78).opacity(0.85 * intensity),
+                    Color(red: 1.0, green: 0.82, blue: 0.48).opacity(0.28 * intensity),
                     .clear,
                 ]),
                 center: centre, startRadius: 0, endRadius: radius))
