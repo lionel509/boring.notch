@@ -1868,6 +1868,7 @@ struct StatsSettings: View {
                     Text("System resources")
                 }
                 Group {
+                    Defaults.Toggle(key: .statsStripShowBattery) { Text("Battery") }
                     Defaults.Toggle(key: .statsStripShowCPU) { Text("CPU") }
                     Defaults.Toggle(key: .statsStripShowMemory) { Text("Memory") }
                     Defaults.Toggle(key: .statsStripShowNetwork) { Text("Network") }
@@ -1876,7 +1877,7 @@ struct StatsSettings: View {
             } header: {
                 Text("System resources")
             } footer: {
-                Text("Sampled from the kernel's aggregate counters, which cost about 7 microseconds a second — roughly 42,000× less than shelling out to top, because they never build a process list.")
+                Text("Sampled from the kernel's aggregate counters, which cost about 7 microseconds a second — roughly 42,000× less than shelling out to top, because they never build a process list. With Battery on here it moves out of the notch's header, so it is not shown twice.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

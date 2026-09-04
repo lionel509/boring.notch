@@ -113,6 +113,7 @@ extension Defaults.Keys {
     static let showStatsStrip = Key<Bool>("showStatsStrip", default: false)
     static let statsStripShowUsage = Key<Bool>("statsStripShowUsage", default: true)
     static let statsStripShowSystem = Key<Bool>("statsStripShowSystem", default: true)
+    static let statsStripShowBattery = Key<Bool>("statsStripShowBattery", default: true)
     static let statsStripShowCPU = Key<Bool>("statsStripShowCPU", default: true)
     static let statsStripShowMemory = Key<Bool>("statsStripShowMemory", default: true)
     static let statsStripShowNetwork = Key<Bool>("statsStripShowNetwork", default: true)

@@ -13,10 +13,21 @@ let downloadSneakSize: CGSize = .init(width: 65, height: 1)
 let batterySneakSize: CGSize = .init(width: 160, height: 1)
 
 let shadowPadding: CGFloat = 20
-/// Height reserved for the optional stats strip. Two lines — a small uppercase label over
-/// the figure — because a single row where label and value carry the same weight reads as
-/// chrome rather than as something to be read.
-let statsStripHeight: CGFloat = 28
+/// Height of one stats row — a small uppercase label over the figure, because a row where
+/// label and value carry the same weight reads as chrome rather than as something to read.
+let statsStripRowHeight: CGFloat = 26
+
+/// API usage and system load get a line each, so the two never have to be told apart by
+/// reading the labels. A group that is switched off costs no height at all.
+var statsStripRowCount: Int {
+    guard Defaults[.showStatsStrip] else { return 0 }
+    var rows = 0
+    if Defaults[.statsStripShowUsage] { rows += 1 }
+    if Defaults[.statsStripShowSystem] { rows += 1 }
+    return rows
+}
+
+var statsStripHeight: CGFloat { CGFloat(statsStripRowCount) * statsStripRowHeight }
 
 private let baseOpenNotchSize: CGSize = .init(width: 640, height: 190)
 
@@ -34,7 +45,7 @@ private let baseOpenNotchSize: CGSize = .init(width: 640, height: 190)
 var openNotchSize: CGSize {
     .init(
         width: baseOpenNotchSize.width,
-        height: baseOpenNotchSize.height + (Defaults[.showStatsStrip] ? statsStripHeight : 0)
+        height: baseOpenNotchSize.height + statsStripHeight
     )
 }
 
@@ -43,7 +54,7 @@ var openNotchSize: CGSize {
 /// nothing visually — it is the same trick `shadowPadding` already relies on.
 let windowSize: CGSize = .init(
     width: baseOpenNotchSize.width,
-    height: baseOpenNotchSize.height + statsStripHeight + shadowPadding)
+    height: baseOpenNotchSize.height + 2 * statsStripRowHeight + shadowPadding)
 let cornerRadiusInsets: (opened: (top: CGFloat, bottom: CGFloat), closed: (top: CGFloat, bottom: CGFloat)) = (opened: (top: 19, bottom: 24), closed: (top: 6, bottom: 14))
 
 enum MusicPlayerImageSizes {

@@ -90,9 +90,11 @@ private struct Sparkline: View {
 struct NotchStatsStrip: View {
     @ObservedObject private var stats = SystemStatsManager.shared
     @ObservedObject private var usage = RouterUsageManager.shared
+    @ObservedObject private var battery = BatteryStatusViewModel.shared
 
     @Default(.statsStripShowUsage) private var showUsage
     @Default(.statsStripShowSystem) private var showSystem
+    @Default(.statsStripShowBattery) private var showBattery
     @Default(.statsStripShowCPU) private var showCPU
     @Default(.statsStripShowMemory) private var showMemory
     @Default(.statsStripShowNetwork) private var showNetwork
@@ -104,38 +106,13 @@ struct NotchStatsStrip: View {
     @State private var settled = false
 
     var body: some View {
-        ScrollView(.horizontal) {
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                if showUsage { usageCells }
-                if showSystem { systemCells }
-            }
-            // 5 pt to sit flush under the album art, which carries .padding(.all, 5)
-            // inside MusicPlayerView.
-            .padding(.horizontal, 5)
+        VStack(spacing: 0) {
+            // A line each, so the two groups never have to be told apart by reading the
+            // labels — API usage above, what the machine is doing below.
+            if showUsage { row { usageCells } }
+            if showSystem { row { systemCells } }
         }
-        .scrollIndicators(.hidden)
         .frame(height: statsStripHeight)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Fade the trailing edge so an overflowing row reads as continuing rather than as
-        // cut off. Measured in points, not fractions: the first version used 3% of the
-        // width per side, which at 640 pt is a 19 pt wash sitting directly on top of the
-        // leading cell and dimming it permanently. The leading edge gets 3 pt — enough to
-        // soften the very edge, short enough that the first cell (5 pt in) is untouched.
-        .mask(
-            GeometryReader { proxy in
-                let width = max(proxy.size.width, 1)
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .black, location: 3 / width),
-                        .init(color: .black, location: 1 - 18 / width),
-                        .init(color: .clear, location: 1),
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            }
-        )
         .opacity(settled ? 1 : 0)
         .offset(y: settled ? 0 : 7)
         .onAppear {
@@ -150,6 +127,40 @@ struct NotchStatsStrip: View {
         }
     }
 
+    private func row<Content: View>(@ViewBuilder _ content: @escaping () -> Content) -> some View {
+        GeometryReader { proxy in
+            let width = max(proxy.size.width, 1)
+            ScrollView(.horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 14) {
+                    content()
+                }
+                .padding(.horizontal, 8)
+                // Centred while the row fits, and scrolling from the left once it does
+                // not. Left-aligning read as accidental under a player whose own content
+                // spans the full width.
+                .frame(minWidth: width, alignment: .center)
+            }
+            .scrollIndicators(.hidden)
+            .mask(fade(width: width))
+        }
+    }
+
+    /// Softens the ends so an overflowing row reads as continuing rather than as cut off.
+    /// Measured in points, not fractions: the first version faded 3% of the width per side,
+    /// which at 640 pt is a 19 pt wash sitting on top of the leading cell and dimming it
+    /// permanently.
+    private func fade(width: CGFloat) -> LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .black, location: 3 / width),
+                .init(color: .black, location: 1 - 18 / width),
+                .init(color: .clear, location: 1),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing)
+    }
+
     // MARK: Cells
 
     @ViewBuilder
@@ -160,7 +171,20 @@ struct NotchStatsStrip: View {
             // orders of magnitude on a normal day — 87.7M against 779k — so folding them
             // into one figure would read as enormous usage every single day and mean
             // nothing. Cached gets its own cell, where the ratio is the point.
-            gauge("TOKENS", Self.compact(totals.billedTokens), widest: "999.9M")
+            let active = usage.totalsByUpstream
+                .filter { $0.value.requests > 0 }
+                .sorted { $0.value.billedTokens > $1.value.billedTokens }
+
+            if active.count > 1 {
+                // More than one provider saw traffic today, so name them rather than
+                // burying the split inside a single figure.
+                ForEach(active, id: \.key) { entry in
+                    gauge(entry.key.uppercased(), Self.compact(entry.value.billedTokens),
+                          widest: "999.9M")
+                }
+            } else {
+                gauge("TOKENS", Self.compact(totals.billedTokens), widest: "999.9M")
+            }
             if totals.cachedTokens > 0 {
                 gauge("CACHED", Self.compact(totals.cachedTokens), widest: "999.9M")
             }
@@ -178,6 +202,17 @@ struct NotchStatsStrip: View {
 
     @ViewBuilder
     private var systemCells: some View {
+        if showBattery {
+            // Severity runs the other way here: a battery is worrying when it is low, so
+            // the fraction is inverted before it hits the same ramp.
+            gauge(battery.isCharging ? "CHARGING" : "BATTERY",
+                  "\(Int((battery.levelBattery).rounded()))%",
+                  widest: "100%",
+                  tint: battery.isCharging
+                      ? .effectiveAccent
+                      : StatsPalette.severity(1 - Double(battery.levelBattery) / 100),
+                  alarming: !battery.isCharging && battery.levelBattery <= 10)
+        }
         if showCPU {
             gauge("CPU", "\(Int((stats.cpuUsage * 100).rounded()))%",
                   widest: "100%",

@@ -11,6 +11,14 @@ import SwiftUI
 struct BoringHeader: View {
     @EnvironmentObject var vm: BoringViewModel
     @ObservedObject var batteryModel = BatteryStatusViewModel.shared
+
+    @Default(.showStatsStrip) private var showStatsStrip
+    @Default(.statsStripShowSystem) private var statsStripShowSystem
+    @Default(.statsStripShowBattery) private var statsStripShowBattery
+
+    private var batteryIsInStatsStrip: Bool {
+        showStatsStrip && statsStripShowSystem && statsStripShowBattery
+    }
     @ObservedObject var coordinator = BoringViewCoordinator.shared
     @StateObject var tvm = ShelfStateViewModel.shared
     var body: some View {
@@ -77,7 +85,9 @@ struct BoringHeader: View {
                             }
                             .buttonStyle(PlainButtonStyle())
                         }
-                        if Defaults[.showBatteryIndicator] {
+                        // Suppressed while the stats strip is carrying it — one battery
+                        // readout in the notch, not two.
+                        if Defaults[.showBatteryIndicator], !batteryIsInStatsStrip {
                             BoringBatteryView(
                                 batteryWidth: 30,
                                 isCharging: batteryModel.isCharging,
