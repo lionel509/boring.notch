@@ -13,8 +13,35 @@ let downloadSneakSize: CGSize = .init(width: 65, height: 1)
 let batterySneakSize: CGSize = .init(width: 160, height: 1)
 
 let shadowPadding: CGFloat = 20
-let openNotchSize: CGSize = .init(width: 640, height: 190)
-let windowSize: CGSize = .init(width: openNotchSize.width, height: openNotchSize.height + shadowPadding)
+/// Height reserved for the optional stats strip.
+let statsStripHeight: CGFloat = 24
+
+private let baseOpenNotchSize: CGSize = .init(width: 640, height: 190)
+
+/// The expanded notch.
+///
+/// 190 pt is upstream's number and stays exactly that with the stats strip off, so the
+/// default build is unchanged. With the strip on the notch grows by the strip's height
+/// rather than taking that space out of the player.
+///
+/// The first cut of the strip did stack it inside 190 pt, on the theory that the header
+/// (~32) plus `NotchHomeView` (~120) left ~26 pt spare. That arithmetic came off the
+/// layout constants, not off the rendered view, and it was wrong — the expanded notch has
+/// no slack. Stacking a row inside it pushed the tab buttons up into the physical bezel
+/// and collapsed the music column until the transport buttons overlapped the progress bar.
+var openNotchSize: CGSize {
+    .init(
+        width: baseOpenNotchSize.width,
+        height: baseOpenNotchSize.height + (Defaults[.showStatsStrip] ? statsStripHeight : 0)
+    )
+}
+
+/// Always sized for the strip, so toggling the setting never needs a relaunch to avoid
+/// clipping. The window is transparent outside the notch shape, so the extra height costs
+/// nothing visually — it is the same trick `shadowPadding` already relies on.
+let windowSize: CGSize = .init(
+    width: baseOpenNotchSize.width,
+    height: baseOpenNotchSize.height + statsStripHeight + shadowPadding)
 let cornerRadiusInsets: (opened: (top: CGFloat, bottom: CGFloat), closed: (top: CGFloat, bottom: CGFloat)) = (opened: (top: 19, bottom: 24), closed: (top: 6, bottom: 14))
 
 enum MusicPlayerImageSizes {

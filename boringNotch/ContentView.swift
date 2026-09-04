@@ -361,12 +361,15 @@ struct ContentView: View {
                 .zIndex(1)
                 .allowsHitTesting(vm.notchState == .open)
                 .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
-
-                if showStatsStrip {
-                    NotchStatsStrip()
-                        .zIndex(1)
-                        .allowsHitTesting(vm.notchState == .open)
-                        .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
+                // safeAreaInset with spacing 0 reserves exactly statsStripHeight. A plain
+                // VStack sibling would also add the stack's default spacing, so the row
+                // would eat more than the notch grew by and squeeze the player again.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if showStatsStrip {
+                        NotchStatsStrip()
+                            .allowsHitTesting(vm.notchState == .open)
+                            .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
+                    }
                 }
             }
         }

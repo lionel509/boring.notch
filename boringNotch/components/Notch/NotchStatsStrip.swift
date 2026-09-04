@@ -11,11 +11,11 @@ import SwiftUI
 /// One row pinned under the notch's content: what the APIs have cost today on the left,
 /// what the machine is doing on the right.
 ///
-/// Sized to fit inside the existing `openNotchSize` (640 × 190) rather than growing it.
-/// The header takes ~32 pt and `NotchHomeView` ~120 pt, leaving roughly 26 pt — which is
-/// why this is one 24 pt row and not two. Both groups therefore share a single horizontal
-/// scroll axis, so overflow scrolls sideways instead of wrapping, and the notch never
-/// changes size no matter how many chips end up in it.
+/// One `statsStripHeight` row, attached as a bottom safe-area inset so it reserves exactly
+/// that much and no more. The notch grows by the same amount when the strip is enabled —
+/// see `openNotchSize`, which records why fitting it inside the existing 190 pt did not
+/// work. Both groups share a single horizontal scroll axis, so overflow scrolls sideways
+/// rather than wrapping, and the notch's height never depends on how many chips there are.
 struct NotchStatsStrip: View {
     @ObservedObject private var stats = SystemStatsManager.shared
     @ObservedObject private var usage = RouterUsageManager.shared
@@ -24,16 +24,6 @@ struct NotchStatsStrip: View {
     @Default(.statsStripShowSystem) private var showSystem
 
     var body: some View {
-        VStack(spacing: 3) {
-            Rectangle()
-                .fill(.white.opacity(0.07))
-                .frame(height: 1)
-                .padding(.horizontal, 5)
-            row
-        }
-    }
-
-    private var row: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 10) {
                 if showUsage {
@@ -52,7 +42,7 @@ struct NotchStatsStrip: View {
             .padding(.horizontal, 5)
         }
         .scrollIndicators(.hidden)
-        .frame(height: 24)
+        .frame(height: statsStripHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         // Fade the ends so a scrolled row reads as continuing rather than as clipped.
         .mask(
@@ -142,7 +132,7 @@ struct NotchStatsStrip: View {
         switch bytesPerSecond {
         case 1_048_576...: return String(format: "%.1fM", bytesPerSecond / 1_048_576)
         case 1_024...: return String(format: "%.0fK", bytesPerSecond / 1_024)
-        default: return "—"
+        default: return "0"
         }
     }
 }
