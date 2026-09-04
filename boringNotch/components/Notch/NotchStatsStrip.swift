@@ -116,18 +116,25 @@ struct NotchStatsStrip: View {
         .scrollIndicators(.hidden)
         .frame(height: statsStripHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Fade the ends so a scrolled row reads as continuing rather than as clipped.
+        // Fade the trailing edge so an overflowing row reads as continuing rather than as
+        // cut off. Measured in points, not fractions: the first version used 3% of the
+        // width per side, which at 640 pt is a 19 pt wash sitting directly on top of the
+        // leading cell and dimming it permanently. The leading edge gets 3 pt — enough to
+        // soften the very edge, short enough that the first cell (5 pt in) is untouched.
         .mask(
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0),
-                    .init(color: .black, location: 0.03),
-                    .init(color: .black, location: 0.97),
-                    .init(color: .clear, location: 1),
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
+            GeometryReader { proxy in
+                let width = max(proxy.size.width, 1)
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .black, location: 3 / width),
+                        .init(color: .black, location: 1 - 18 / width),
+                        .init(color: .clear, location: 1),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
         )
         .opacity(settled ? 1 : 0)
         .offset(y: settled ? 0 : 7)
