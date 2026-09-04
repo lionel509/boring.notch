@@ -1813,6 +1813,10 @@ struct StatsSettings: View {
     @Default(.statsStripShowSystem) var showSystem
     @Default(.routerLogPath) var routerLogPath
     @Default(.statsStripFlipInterval) var flipInterval
+    @Default(.showWeatherBackdrop) var showWeatherBackdrop
+    @Default(.weatherBackdropIntensity) var weatherIntensity
+    @Default(.weatherPlace) var weatherPlace
+    @ObservedObject private var weatherManager = WeatherManager.shared
 
     var body: some View {
         Form {
@@ -1883,6 +1887,33 @@ struct StatsSettings: View {
                     .foregroundStyle(.secondary)
             }
             .disabled(!showStatsStrip)
+
+            Section {
+                Defaults.Toggle(key: .showWeatherBackdrop) {
+                    Text("Weather backdrop")
+                }
+                HStack {
+                    TextField("Place", text: $weatherPlace)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Look up") { WeatherManager.shared.refresh() }
+                }
+                .disabled(!showWeatherBackdrop)
+                VStack(alignment: .leading) {
+                    Text("Intensity")
+                    Slider(value: $weatherIntensity, in: 0.15...1)
+                }
+                .disabled(!showWeatherBackdrop)
+                LabeledContent("Status") {
+                    Text(weatherManager.statusMessage).foregroundStyle(.secondary)
+                }
+                .font(.footnote)
+            } header: {
+                Text("Weather")
+            } footer: {
+                Text("A live sky behind the notch's content, under frosted glass so it reads as light rather than as a picture and the album art still comes first. Sun glows by day, stars and the occasional shooting star by night, with rain or snow when there is any. Conditions come from Open-Meteo, which needs no account or key — this app is GPL-3.0, so a key pasted into it would be a key published. The place name is geocoded once and cached; nothing else about your location leaves the machine, and with no place set it falls back to a time-of-day sky with no network at all. It draws only while the notch is open.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
 
             Section {
                 Picker("Flip every", selection: $flipInterval) {

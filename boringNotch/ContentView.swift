@@ -17,6 +17,7 @@ import SwiftUIIntrospect
 struct ContentView: View {
     @EnvironmentObject var vm: BoringViewModel
     @ObservedObject var webcamManager = WebcamManager.shared
+    @ObservedObject var weather = WeatherManager.shared
 
     @ObservedObject var coordinator = BoringViewCoordinator.shared
     @ObservedObject var musicManager = MusicManager.shared
@@ -38,6 +39,8 @@ struct ContentView: View {
     @Default(.showNotHumanFace) var showNotHumanFace
 
     @Default(.showStatsStrip) var showStatsStrip
+    @Default(.showWeatherBackdrop) var showWeatherBackdrop
+    @Default(.weatherBackdropIntensity) var weatherIntensity
 
     // Shared interactive spring for movement/resizing to avoid conflicting animations
     private let animationSpring = Animation.interactiveSpring(response: 0.38, dampingFraction: 0.8, blendDuration: 0)
@@ -102,7 +105,19 @@ struct ContentView: View {
                         : cornerRadiusInsets.closed.bottom
                     )
                     .padding([.horizontal, .bottom], vm.notchState == .open ? 12 : 0)
-                    .background(.black)
+                    .background {
+                        // Only while open. Closed, the notch is 32pt of chrome and anything
+                        // moving in it is a distraction — and nothing should animate behind
+                        // a shape nobody is looking at.
+                        if showWeatherBackdrop, vm.notchState == .open {
+                            WeatherBackdrop(
+                                condition: weather.conditions?.condition ?? .clear,
+                                isDay: weather.conditions?.isDay ?? weather.isDaytimeByClock,
+                                intensity: weatherIntensity)
+                        } else {
+                            Color.black
+                        }
+                    }
                     .clipShape(currentNotchShape)
                     .overlay(alignment: .top) {
                         Rectangle()

@@ -192,6 +192,9 @@ class BoringViewModel: NSObject, ObservableObject {
     func open() {
         self.notchSize = openNotchSize
         self.notchState = .open
+
+        // Cached for fifteen minutes inside, so this is a no-op on most opens.
+        WeatherManager.shared.refresh()
         
         // Force music information update when notch is opened
         MusicManager.shared.forceUpdate()

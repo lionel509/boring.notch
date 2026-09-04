@@ -1,0 +1,179 @@
+//
+//  WeatherManager.swift
+//  boringNotch
+//
+//  Current conditions for the notch's backdrop.
+//
+
+import Combine
+import Defaults
+import Foundation
+
+/// What the sky is doing, reduced to the handful of states the backdrop can actually draw.
+enum SkyCondition: String, Equatable {
+    case clear, cloudy, fog, rain, snow, storm
+
+    /// WMO weather codes, which is what Open-Meteo speaks.
+    init(wmoCode code: Int) {
+        switch code {
+        case 0, 1: self = .clear
+        case 2, 3: self = .cloudy
+        case 45, 48: self = .fog
+        case 51...57, 61...67, 80...82: self = .rain
+        case 71...77, 85, 86: self = .snow
+        case 95...99: self = .storm
+        default: self = .cloudy
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .clear: "CLEAR"
+        case .cloudy: "CLOUDY"
+        case .fog: "FOG"
+        case .rain: "RAIN"
+        case .snow: "SNOW"
+        case .storm: "STORM"
+        }
+    }
+}
+
+/// Fetches current conditions from Open-Meteo.
+///
+/// Open-Meteo rather than WeatherKit for the reason that governs everything else here: this
+/// app is GPL-3.0, so any build handed to anyone ships its source, and **a key pasted into
+/// it is a key published**. Open-Meteo needs no key, no account and no auth header.
+/// WeatherKit would also need a paid developer account and an entitlement an ad-hoc build
+/// cannot carry.
+///
+/// Location comes from a place name the user types, geocoded once and cached — not from an
+/// IP lookup, which would hand a third party an address on every refresh. With no place set
+/// the backdrop still works: it falls back to a time-of-day sky, which needs no network at
+/// all and no permission.
+@MainActor
+final class WeatherManager: ObservableObject {
+    static let shared = WeatherManager()
+
+    struct Conditions: Equatable {
+        var condition: SkyCondition
+        var temperatureC: Double
+        var high: Double?
+        var low: Double?
+        var isDay: Bool
+        var fetchedAt: Date
+    }
+
+    @Published private(set) var conditions: Conditions?
+    @Published private(set) var statusMessage = "No place set"
+
+    /// Weather changes on the hour, not the frame. One fetch per quarter hour is generous,
+    /// and none happen at all while the notch is closed because nothing calls refresh().
+    private static let cacheLifetime: TimeInterval = 900
+    private var isFetching = false
+
+    private init() {}
+
+    /// True when there is no real data, so the backdrop should draw a plain time-of-day sky.
+    var isUsingClockFallback: Bool { conditions == nil }
+
+    /// Day or night without any network: good enough to pick a palette, and the only thing
+    /// available before a place is set.
+    var isDaytimeByClock: Bool {
+        let hour = Calendar.current.component(.hour, from: Date())
+        return (7..<19).contains(hour)
+    }
+
+    func refresh() {
+        guard !isFetching else { return }
+        if let conditions, Date().timeIntervalSince(conditions.fetchedAt) < Self.cacheLifetime {
+            return
+        }
+
+        let place = Defaults[.weatherPlace].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !place.isEmpty else {
+            statusMessage = "No place set — showing a time-of-day sky"
+            return
+        }
+
+        isFetching = true
+        Task {
+            defer { isFetching = false }
+            do {
+                let coordinate = try await coordinate(for: place)
+                let fetched = try await currentConditions(at: coordinate)
+                conditions = fetched
+                statusMessage = "\(place) · \(fetched.condition.label.capitalized) "
+                    + "\(Int(fetched.temperatureC.rounded()))°C"
+            } catch {
+                statusMessage = "Lookup failed — \((error as NSError).localizedDescription)"
+            }
+        }
+    }
+
+    // MARK: - Network
+
+    /// Geocoded once per place name and cached, so a fixed location costs one lookup ever
+    /// rather than one per refresh.
+    private func coordinate(for place: String) async throws -> (latitude: Double, longitude: Double) {
+        if Defaults[.weatherResolvedPlace] == place {
+            return (Defaults[.weatherLatitude], Defaults[.weatherLongitude])
+        }
+
+        var components = URLComponents(string: "https://geocoding-api.open-meteo.com/v1/search")!
+        components.queryItems = [
+            URLQueryItem(name: "name", value: place),
+            URLQueryItem(name: "count", value: "1"),
+        ]
+
+        let (data, _) = try await URLSession.shared.data(from: components.url!)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = object["results"] as? [[String: Any]],
+              let first = results.first,
+              let latitude = first["latitude"] as? Double,
+              let longitude = first["longitude"] as? Double
+        else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        Defaults[.weatherResolvedPlace] = place
+        Defaults[.weatherLatitude] = latitude
+        Defaults[.weatherLongitude] = longitude
+        return (latitude, longitude)
+    }
+
+    private func currentConditions(
+        at coordinate: (latitude: Double, longitude: Double)
+    ) async throws -> Conditions {
+        var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
+        components.queryItems = [
+            URLQueryItem(name: "latitude", value: String(coordinate.latitude)),
+            URLQueryItem(name: "longitude", value: String(coordinate.longitude)),
+            URLQueryItem(name: "current", value: "temperature_2m,weather_code,is_day"),
+            URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min"),
+            URLQueryItem(name: "forecast_days", value: "1"),
+            URLQueryItem(name: "timezone", value: "auto"),
+        ]
+
+        let (data, _) = try await URLSession.shared.data(from: components.url!)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let current = object["current"] as? [String: Any],
+              let temperature = current["temperature_2m"] as? Double,
+              let code = current["weather_code"] as? Int
+        else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+
+        let daily = object["daily"] as? [String: Any]
+        func firstValue(_ key: String) -> Double? {
+            (daily?[key] as? [Double])?.first
+        }
+
+        return Conditions(
+            condition: SkyCondition(wmoCode: code),
+            temperatureC: temperature,
+            high: firstValue("temperature_2m_max"),
+            low: firstValue("temperature_2m_min"),
+            isDay: (current["is_day"] as? Int) != 0,
+            fetchedAt: Date())
+    }
+}

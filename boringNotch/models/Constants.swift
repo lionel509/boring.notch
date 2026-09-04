@@ -115,6 +115,16 @@ extension Defaults.Keys {
     static let statsStripShowSystem = Key<Bool>("statsStripShowSystem", default: true)
     static let statsStripShowBattery = Key<Bool>("statsStripShowBattery", default: true)
     static let batteryHistory = Key<[Double]>("batteryHistory", default: [])
+
+    // Weather backdrop.
+    static let showWeatherBackdrop = Key<Bool>("showWeatherBackdrop", default: false)
+    static let weatherBackdropIntensity = Key<Double>("weatherBackdropIntensity", default: 0.5)
+    /// A place name the user types. Geocoded once and cached below. Not an IP lookup — that
+    /// would hand a third party an address on every refresh.
+    static let weatherPlace = Key<String>("weatherPlace", default: "")
+    static let weatherResolvedPlace = Key<String>("weatherResolvedPlace", default: "")
+    static let weatherLatitude = Key<Double>("weatherLatitude", default: 0)
+    static let weatherLongitude = Key<Double>("weatherLongitude", default: 0)
     /// Seconds a page holds before the board flips. 0 pins it to whatever is showing.
     /// Four, not six: with only two pages a six-second hold means a twelve-second round
     /// trip, which reads as broken rather than as slow.
