@@ -113,6 +113,11 @@ extension Defaults.Keys {
     static let showStatsStrip = Key<Bool>("showStatsStrip", default: false)
     static let statsStripShowUsage = Key<Bool>("statsStripShowUsage", default: true)
     static let statsStripShowSystem = Key<Bool>("statsStripShowSystem", default: true)
+    static let statsStripShowCPU = Key<Bool>("statsStripShowCPU", default: true)
+    static let statsStripShowMemory = Key<Bool>("statsStripShowMemory", default: true)
+    static let statsStripShowNetwork = Key<Bool>("statsStripShowNetwork", default: true)
+    static let statsStripSparklines = Key<Bool>("statsStripSparklines", default: true)
+    static let statsStripColor = Key<Bool>("statsStripColor", default: true)
     static let routerLogPath = Key<String>(
         "routerLogPath", default: "~/.local/share/claude-router/requests.log")
     /// Security-scoped bookmark for the request log. The app is sandboxed, so a plain

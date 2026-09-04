@@ -51,6 +51,9 @@ struct SettingsView: View {
                 NavigationLink(value: "Shelf") {
                     Label("Shelf", systemImage: "books.vertical")
                 }
+                NavigationLink(value: "Stats") {
+                    Label("Stats strip", systemImage: "chart.bar.xaxis")
+                }
                 NavigationLink(value: "Shortcuts") {
                     Label("Shortcuts", systemImage: "keyboard")
                 }
@@ -85,6 +88,8 @@ struct SettingsView: View {
                     Charge()
                 case "Shelf":
                     Shelf()
+                case "Stats":
+                    StatsSettings()
                 case "Shortcuts":
                     Shortcuts()
                 case "Extensions":
@@ -1164,9 +1169,6 @@ struct Appearance: View {
     @Default(.useMusicVisualizer) var useMusicVisualizer
     @Default(.customVisualizers) var customVisualizers
     @Default(.selectedVisualizer) var selectedVisualizer
-    @Default(.showStatsStrip) var showStatsStrip
-    @Default(.statsStripShowUsage) var statsStripShowUsage
-    @Default(.routerLogPath) var routerLogPath
 
     let icons: [String] = ["logo2"]
     @State private var selectedIcon: String = "logo2"
@@ -1185,35 +1187,6 @@ struct Appearance: View {
 
             } header: {
                 Text("General")
-            }
-
-            Section {
-                Defaults.Toggle(key: .showStatsStrip) {
-                    Text("Show stats strip")
-                }
-                Defaults.Toggle(key: .statsStripShowUsage) {
-                    Text("API usage")
-                }
-                .disabled(!showStatsStrip)
-                Defaults.Toggle(key: .statsStripShowSystem) {
-                    Text("System resources")
-                }
-                .disabled(!showStatsStrip)
-
-                HStack {
-                    TextField("Request log", text: $routerLogPath)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Choose…") {
-                        RouterUsageManager.shared.requestAccess()
-                    }
-                }
-                .disabled(!showStatsStrip || !statsStripShowUsage)
-            } header: {
-                Text("Stats strip")
-            } footer: {
-                Text("A row under the notch's content showing today's API usage and live system load. Usage is read from the local proxy's request log, so it covers whatever routes through it — not browser sessions or apps that call a provider directly. Sampling only runs while the notch is open.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -1828,4 +1801,105 @@ func warningBadge(_ text: String, _ description: String) -> some View {
 
 #Preview {
     HUD()
+}
+
+// MARK: - Stats strip
+
+struct StatsSettings: View {
+    @ObservedObject private var usage = RouterUsageManager.shared
+
+    @Default(.showStatsStrip) var showStatsStrip
+    @Default(.statsStripShowUsage) var showUsage
+    @Default(.statsStripShowSystem) var showSystem
+    @Default(.routerLogPath) var routerLogPath
+
+    var body: some View {
+        Form {
+            Section {
+                Defaults.Toggle(key: .showStatsStrip) {
+                    Text("Show stats strip")
+                }
+            } footer: {
+                Text("A row under the notch's content showing today's API usage and live system load. The notch grows by the height of the row, so nothing above it is squeezed. Sampling only runs while the notch is open — closed, it costs nothing.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Defaults.Toggle(key: .statsStripShowUsage) {
+                    Text("API usage")
+                }
+
+                HStack {
+                    TextField("Request log", text: $routerLogPath)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11, design: .monospaced))
+                    Button("Choose…") {
+                        RouterUsageManager.shared.requestAccess()
+                    }
+                }
+                .disabled(!showUsage)
+
+                LabeledContent("Status") {
+                    if usage.isAvailable {
+                        let totals = usage.combined
+                        Text("\(totals.requests) requests today · \(totals.billedTokens) billed tokens")
+                            .foregroundStyle(.secondary)
+                    } else if usage.needsAuthorization {
+                        Label("Not readable yet — choose the log above", systemImage: "lock.fill")
+                            .foregroundStyle(.orange)
+                    } else {
+                        Label("Log not found at that path", systemImage: "questionmark.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.footnote)
+            } header: {
+                Text("API usage")
+            } footer: {
+                Text("Read from the local proxy's request log rather than any provider's API, so no keys live in this app. It covers whatever routes through the proxy — not browser sessions, and not apps that call a provider directly. This app is sandboxed, so the log has to be granted once with Choose….")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(!showStatsStrip)
+
+            Section {
+                Defaults.Toggle(key: .statsStripShowSystem) {
+                    Text("System resources")
+                }
+                Group {
+                    Defaults.Toggle(key: .statsStripShowCPU) { Text("CPU") }
+                    Defaults.Toggle(key: .statsStripShowMemory) { Text("Memory") }
+                    Defaults.Toggle(key: .statsStripShowNetwork) { Text("Network") }
+                }
+                .disabled(!showSystem)
+            } header: {
+                Text("System resources")
+            } footer: {
+                Text("Sampled from the kernel's aggregate counters, which cost about 7 microseconds a second — roughly 42,000× less than shelling out to top, because they never build a process list.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(!showStatsStrip)
+
+            Section {
+                Defaults.Toggle(key: .statsStripSparklines) {
+                    Text("Sparklines")
+                }
+                Defaults.Toggle(key: .statsStripColor) {
+                    Text("Colour by severity")
+                }
+            } header: {
+                Text("Appearance")
+            } footer: {
+                Text("Severity follows the same 50 / 75 / 90% thresholds as the Claude Code statusline: green, amber, orange, red. The number itself always stays in plain text — the icon and trace carry the state, so turning colour off loses nothing you can't read.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(!showStatsStrip)
+        }
+        .formStyle(.grouped)
+        .tint(.effectiveAccent)
+        .onAppear { usage.refresh() }
+    }
 }

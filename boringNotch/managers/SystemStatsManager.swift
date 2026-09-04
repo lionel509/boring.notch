@@ -35,6 +35,20 @@ final class SystemStatsManager: ObservableObject {
 
     let memoryTotalBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
 
+    /// Recent history for the sparklines, oldest first, each value already normalised to
+    /// 0...1 so the view never has to know the units. Twelve points is the reference
+    /// length for a stat-tile trend and it is all that fits in ~22 pt of width.
+    @Published private(set) var cpuHistory: [Double] = []
+    @Published private(set) var memoryHistory: [Double] = []
+    @Published private(set) var networkHistory: [Double] = []
+
+    static let historyLength = 12
+
+    /// Throughput has no ceiling, so the network sparkline scales against the largest
+    /// rate seen recently rather than an invented maximum. Decays so one burst does not
+    /// flatten the trace for the rest of the session.
+    private var networkPeak: Double = 1
+
     private var timer: Timer?
     private var watchers = 0
     private var previousCPUTicks: (busy: UInt64, total: UInt64)?
@@ -69,12 +83,36 @@ final class SystemStatsManager: ObservableObject {
         // reopening report the average since the notch was last closed.
         previousCPUTicks = nil
         previousNetwork = nil
+        cpuHistory = []
+        memoryHistory = []
+        networkHistory = []
+        networkPeak = 1
     }
 
     private func sample() {
         sampleCPU()
         sampleMemory()
         sampleNetwork()
+        recordHistory()
+    }
+
+    private func recordHistory() {
+        func push(_ value: Double, into history: inout [Double]) {
+            history.append(min(max(value, 0), 1))
+            if history.count > Self.historyLength { history.removeFirst(history.count - Self.historyLength) }
+        }
+
+        push(cpuUsage, into: &cpuHistory)
+        push(memoryFraction, into: &memoryHistory)
+
+        let throughput = networkDownBytesPerSec + networkUpBytesPerSec
+        networkPeak = max(throughput, networkPeak * 0.92, 1)
+        push(throughput / networkPeak, into: &networkHistory)
+    }
+
+    var memoryFraction: Double {
+        guard memoryTotalBytes > 0 else { return 0 }
+        return Double(memoryUsedBytes) / Double(memoryTotalBytes)
     }
 
     // MARK: - CPU
