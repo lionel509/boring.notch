@@ -153,19 +153,19 @@ struct NotchStatsStrip: View {
             // orders of magnitude on a normal day — 87.7M against 779k — so folding them
             // into one figure would read as enormous usage every single day and mean
             // nothing. Cached gets its own cell, where the ratio is the point.
-            gauge("TOKENS", Self.compact(totals.billedTokens))
+            gauge("TOKENS", Self.compact(totals.billedTokens), widest: "999.9M")
             if totals.cachedTokens > 0 {
-                gauge("CACHED", Self.compact(totals.cachedTokens))
+                gauge("CACHED", Self.compact(totals.cachedTokens), widest: "999.9M")
             }
             if totals.cost > 0 {
-                gauge("COST", String(format: "$%.2f", totals.cost))
+                gauge("COST", String(format: "$%.2f", totals.cost), widest: "$99.99")
             }
-            gauge("REQUESTS", "\(totals.requests)")
+            gauge("REQUESTS", "\(totals.requests)", widest: "9999")
         } else if usage.needsAuthorization {
             // The sandbox, not a missing file. Settings has the button that fixes it.
-            gauge("API USAGE", "Grant access", tint: StatsPalette.serious)
+            gauge("API USAGE", "Grant access", widest: "Grant access", tint: StatsPalette.serious)
         } else {
-            gauge("API USAGE", "No log")
+            gauge("API USAGE", "No log", widest: "Grant access")
         }
     }
 
@@ -173,25 +173,35 @@ struct NotchStatsStrip: View {
     private var systemCells: some View {
         if showCPU {
             gauge("CPU", "\(Int((stats.cpuUsage * 100).rounded()))%",
+                  widest: "100%",
                   tint: StatsPalette.severity(stats.cpuUsage),
                   trend: stats.cpuHistory,
                   alarming: stats.cpuUsage >= 0.9)
         }
         if showMemory {
             gauge("MEMORY", Self.gigabytes(stats.memoryUsedBytes),
+                  widest: "99.9 GB",
                   tint: StatsPalette.severity(stats.memoryFraction),
                   trend: stats.memoryHistory,
                   alarming: stats.memoryFraction >= 0.9)
         }
         if showNetwork {
-            gauge("DOWN", Self.rate(stats.networkDownBytesPerSec), trend: stats.networkHistory)
-            gauge("UP", Self.rate(stats.networkUpBytesPerSec))
+            gauge("DOWN", Self.rate(stats.networkDownBytesPerSec), widest: "999 KB/s", trend: stats.networkHistory)
+            gauge("UP", Self.rate(stats.networkUpBytesPerSec), widest: "999 KB/s")
         }
     }
 
+    private static let valueFont = Font.system(size: 12, weight: .semibold, design: .rounded)
+        .monospacedDigit()
+
+    /// - Parameter widest: the longest string this cell can ever display. The cell reserves
+    ///   that width up front, so a figure going from `9 KB/s` to `912 KB/s` does not shove
+    ///   every cell to its right along the row. Monospaced digits alone are not enough —
+    ///   they fix the width of a digit, not the number of digits or the length of a unit.
     private func gauge(
         _ label: String,
         _ value: String,
+        widest: String,
         tint: Color? = nil,
         trend: [Double]? = nil,
         alarming: Bool = false
@@ -205,14 +215,20 @@ struct NotchStatsStrip: View {
                 .foregroundStyle(.tertiary)
 
             HStack(spacing: 5) {
-                Text(value)
-                    // Monospaced digits are not cosmetic: without them the figure changes
-                    // width every second and the whole row twitches. numericText rolls the
-                    // digits over rather than swapping them.
-                    .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(useColor && alarming ? AnyShapeStyle(accent) : AnyShapeStyle(.primary))
-                    .contentTransition(.numericText())
-                    .animation(.smooth(duration: 0.35), value: value)
+                Text(widest)
+                    .font(Self.valueFont)
+                    .hidden()
+                    .overlay(alignment: .leading) {
+                        Text(value)
+                            .font(Self.valueFont)
+                            .foregroundStyle(
+                                useColor && alarming
+                                    ? AnyShapeStyle(accent) : AnyShapeStyle(.primary))
+                            // Rolls the digits over rather than swapping them.
+                            .contentTransition(.numericText())
+                            .animation(.smooth(duration: 0.35), value: value)
+                            .fixedSize()
+                    }
 
                 if showSparklines, let trend, trend.count > 1 {
                     Sparkline(values: trend, color: accent)
