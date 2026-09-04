@@ -414,50 +414,108 @@ class MusicManager: ObservableObject {
     private func fetchLyricsFromWeb(title: String, artist: String) async {
         let cleanTitle = normalizedQuery(title)
         let cleanArtist = normalizedQuery(artist)
-        guard let encodedTitle = cleanTitle.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let encodedArtist = cleanArtist.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
-            self.currentLyrics = ""
-            self.isFetchingLyrics = false
-            return
-        }
 
-        // LRCLIB simple search (no auth): https://lrclib.net/api/search?track_name=...&artist_name=...
-        let urlString = "https://lrclib.net/api/search?track_name=\(encodedTitle)&artist_name=\(encodedArtist)"
-        guard let url = URL(string: urlString) else {
-            self.currentLyrics = ""
-            self.isFetchingLyrics = false
-            return
-        }
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                self.currentLyrics = ""
+        // Two passes over LRCLIB. The structured lookup is precise, but its index is keyed
+        // on exact track/artist strings, so for plenty of songs every hit it returns is
+        // plain-only. The free-text pass also reaches differently-titled uploads — BLACKPINK
+        // "GO" has its timed lyrics filed under "BLACKPINK - 'GO' (Official Audio)" — and
+        // those are frequently the only ones carrying real LRC. Stop at the first pass that
+        // yields timed lines; keep the best plain result as a fallback.
+        let passes: [[URLQueryItem]] = [
+            [URLQueryItem(name: "track_name", value: cleanTitle),
+             URLQueryItem(name: "artist_name", value: cleanArtist)],
+            [URLQueryItem(name: "q", value: "\(cleanArtist) \(cleanTitle)")],
+        ]
+
+        var fallbackPlain: String?
+
+        for query in passes {
+            guard var components = URLComponents(string: "https://lrclib.net/api/search") else { continue }
+            components.queryItems = query
+            guard let url = components.url,
+                  let best = await bestLyricsCandidate(at: url, matching: self.songDuration)
+            else { continue }
+
+            if !best.synced.isEmpty {
+                self.syncedLyrics = best.synced
+                self.currentLyrics = best.plain
                 self.isFetchingLyrics = false
                 return
             }
-            if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-               let first = jsonArray.first {
-                // Prefer plain lyrics (syncedLyrics may also be present)
-                let plain = (first["plainLyrics"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let synced = (first["syncedLyrics"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let resolved = plain.isEmpty ? synced : plain
-                self.currentLyrics = resolved
-                self.isFetchingLyrics = false
-                if !synced.isEmpty {
-                    self.syncedLyrics = self.parseLRC(synced)
-                } else {
-                    self.syncedLyrics = []
-                }
-            } else {
-                self.currentLyrics = ""
-                self.isFetchingLyrics = false
-                self.syncedLyrics = []
-            }
-        } catch {
-            self.currentLyrics = ""
-            self.isFetchingLyrics = false
-            self.syncedLyrics = []
+            if fallbackPlain == nil, !best.plain.isEmpty { fallbackPlain = best.plain }
         }
+
+        self.syncedLyrics = []
+        self.currentLyrics = fallbackPlain ?? ""
+        self.isFetchingLyrics = false
+    }
+
+    /// Fetch one LRCLIB result page and return the best entry on it.
+    ///
+    /// LRCLIB is user-submitted and the first hit is regularly poisoned: a `syncedLyrics`
+    /// field that is present but is not LRC at all — BLACKPINK "GO" returns the literal
+    /// string `"00:00:01"`. A non-empty field therefore proves nothing, and trusting it is
+    /// what made the notch scroll an entire flattened song through a one-line marquee.
+    /// Only `parseLRC` returning timed lines counts. Score every entry, prefer a genuinely
+    /// timed one, and break ties on the closest runtime to what is actually playing.
+    private func bestLyricsCandidate(
+        at url: URL,
+        matching duration: TimeInterval
+    ) async -> (synced: [(time: Double, text: String)], plain: String)? {
+        guard let (data, response) = try? await URLSession.shared.data(from: url),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+              !entries.isEmpty
+        else { return nil }
+
+        var scored: [(synced: [(time: Double, text: String)], plain: String, delta: Double)] = []
+
+        for entry in entries {
+            let plain = (entry["plainLyrics"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let syncedRaw = (entry["syncedLyrics"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let parsed = syncedRaw.isEmpty ? [] : parseLRC(syncedRaw)
+            guard !parsed.isEmpty || !plain.isEmpty else { continue }
+
+            let entryDuration = (entry["duration"] as? Double) ?? .infinity
+            let delta = (duration > 0 && entryDuration.isFinite) ? abs(entryDuration - duration) : 0
+            scored.append((parsed, plain, delta))
+        }
+
+        guard let best = scored.min(by: { lhs, rhs in
+            if lhs.synced.isEmpty != rhs.synced.isEmpty { return !lhs.synced.isEmpty }
+            return lhs.delta < rhs.delta
+        }) else { return nil }
+
+        return (best.synced, best.plain)
+    }
+
+    // MARK: - Plain lyrics helpers
+
+    /// `currentLyrics` split into displayable lines, cached because the lyric view ticks
+    /// at 4 Hz and would otherwise re-split the whole song on every frame.
+    private var plainLyricLinesCache: (source: String, lines: [String]) = ("", [])
+    var plainLyricLines: [String] {
+        if plainLyricLinesCache.source == currentLyrics { return plainLyricLinesCache.lines }
+        let lines = currentLyrics
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        plainLyricLinesCache = (currentLyrics, lines)
+        return lines
+    }
+
+    /// No LRC for this track: estimate the current line from playback progress.
+    /// Approximate by construction — it assumes evenly spaced lines, so intros and
+    /// instrumental breaks push it off. Still far better than scrolling the entire
+    /// song through a one-line marquee, which is what the old fallback did.
+    func estimatedLyricLine(at elapsed: Double) -> String {
+        let lines = plainLyricLines
+        guard !lines.isEmpty else { return "" }
+        guard songDuration > 0 else { return lines[0] }
+        let fraction = min(max(elapsed / songDuration, 0), 0.999)
+        return lines[Int(fraction * Double(lines.count))]
     }
 
     // MARK: - Synced lyrics helpers

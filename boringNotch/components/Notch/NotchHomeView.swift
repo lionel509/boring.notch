@@ -166,8 +166,8 @@ struct MusicControlsView: View {
                         if !musicManager.syncedLyrics.isEmpty {
                             return musicManager.lyricLine(at: currentElapsed)
                         }
-                        let trimmed = musicManager.currentLyrics.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return trimmed.isEmpty ? "No lyrics found" : trimmed.replacingOccurrences(of: "\n", with: " ")
+                        let estimated = musicManager.estimatedLyricLine(at: currentElapsed)
+                        return estimated.isEmpty ? "No lyrics found" : estimated
                     }()
                     let isPersian = line.unicodeScalars.contains { scalar in
                         let v = scalar.value
