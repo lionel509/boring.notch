@@ -1886,9 +1886,9 @@ struct StatsSettings: View {
 
             Section {
                 Picker("Flip every", selection: $flipInterval) {
-                    Text("3 seconds").tag(3.0)
-                    Text("6 seconds").tag(6.0)
-                    Text("10 seconds").tag(10.0)
+                    Text("2 seconds").tag(2.0)
+                    Text("4 seconds").tag(4.0)
+                    Text("8 seconds").tag(8.0)
                     Text("Don't flip").tag(0.0)
                 }
                 Defaults.Toggle(key: .statsStripSparklines) {

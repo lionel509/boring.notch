@@ -127,7 +127,9 @@ struct NotchStatsStrip: View {
 
     private func advance() {
         guard pages.count > 1 else { return }
-        withAnimation(.smooth(duration: 0.42)) {
+        // Snappy and short. A split-flap board goes clack; a 0.42s eased slide reads as
+        // the row being dragged rather than flipped.
+        withAnimation(.snappy(duration: 0.22, extraBounce: 0)) {
             pageIndex = (pageIndex + 1) % pages.count
         }
     }
