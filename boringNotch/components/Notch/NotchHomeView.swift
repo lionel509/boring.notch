@@ -224,6 +224,23 @@ struct MusicControlsView: View {
         }
     }
 
+    /// A slot that reads rather than clicks. Sized and coloured like the buttons beside it
+    /// so the row still scans as one thing.
+    private func slotReadout(_ text: String) -> some View {
+        Text(text.isEmpty ? "—" : text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: 84)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private static func remaining(_ seconds: Double) -> String {
+        let value = max(0, seconds)
+        return String(format: "-%d:%02d", Int(value) / 60, Int(value) % 60)
+    }
+
     private var slotToolbar: some View {
         let slots = activeSlots
         return HStack(spacing: 6) {
@@ -254,6 +271,22 @@ struct MusicControlsView: View {
     @ViewBuilder
     private func slotView(for slot: MusicControlButton) -> some View {
         switch slot {
+        case .album:
+            slotReadout(musicManager.album)
+        case .remaining:
+            TimelineView(.animation(minimumInterval: 1, paused: !musicManager.isPlaying)) { timeline in
+                let elapsed = musicManager.isPlaying
+                    ? min(musicManager.elapsedTime
+                        + timeline.date.timeIntervalSince(musicManager.timestampDate)
+                        * musicManager.playbackRate, musicManager.songDuration)
+                    : musicManager.elapsedTime
+                slotReadout(Self.remaining(musicManager.songDuration - elapsed))
+            }
+        case .weather:
+            slotReadout(WeatherManager.shared.conditions.map {
+                "\(Int($0.temperatureC.rounded()))°"
+            } ?? "—")
+
         case .shuffle:
             HoverButton(icon: "shuffle", iconColor: musicManager.isShuffled ? .red : .primary, scale: .medium) {
                 MusicManager.shared.toggleShuffle()

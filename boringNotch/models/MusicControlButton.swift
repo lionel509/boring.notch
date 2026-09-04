@@ -17,6 +17,11 @@ enum MusicControlButton: String, CaseIterable, Identifiable, Codable, Defaults.S
     case favorite
     case goBackward
     case goForward
+    // Readouts rather than controls. The slot row is prime space and a volume button that
+    // never gets pressed is a waste of it.
+    case album
+    case remaining
+    case weather
     case none
 
     var id: String { rawValue }
@@ -41,7 +46,10 @@ enum MusicControlButton: String, CaseIterable, Identifiable, Codable, Defaults.S
         .favorite,
         .volume,
         .goBackward,
-        .goForward
+        .goForward,
+        .album,
+        .remaining,
+        .weather
     ]
 
     var label: String {
@@ -64,6 +72,12 @@ enum MusicControlButton: String, CaseIterable, Identifiable, Codable, Defaults.S
             return "Backward 15s"
         case .goForward:
             return "Forward 15s"
+        case .album:
+            return "Album name"
+        case .remaining:
+            return "Time remaining"
+        case .weather:
+            return "Weather"
         case .none:
             return "Empty slot"
         }
@@ -89,6 +103,12 @@ enum MusicControlButton: String, CaseIterable, Identifiable, Codable, Defaults.S
             return "gobackward.15"
         case .goForward:
             return "goforward.15"
+        case .album:
+            return "opticaldisc"
+        case .remaining:
+            return "hourglass"
+        case .weather:
+            return "cloud.sun"
         case .none:
             return ""
         }
