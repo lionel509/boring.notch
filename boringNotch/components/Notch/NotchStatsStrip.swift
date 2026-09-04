@@ -105,7 +105,7 @@ struct NotchStatsStrip: View {
     /// frame makes it read as pasted on. It settles in just behind the expansion instead.
     @State private var settled = false
 
-    private enum Page: Hashable { case usage, system }
+    private enum Page: Hashable { case usage, providers, limits, system }
 
     @State private var pageIndex = 0
     @State private var isHeld = false
@@ -115,7 +115,12 @@ struct NotchStatsStrip: View {
 
     private var pages: [Page] {
         var pages: [Page] = []
-        if showUsage { pages.append(.usage) }
+        if showUsage {
+            pages.append(.usage)
+            // Only worth a page when there is actually a split to show.
+            if usage.byUpstream(for: .week).count > 1 { pages.append(.providers) }
+            if usage.limits != nil { pages.append(.limits) }
+        }
         if showSystem { pages.append(.system) }
         return pages
     }
@@ -159,6 +164,8 @@ struct NotchStatsStrip: View {
         ZStack {
             switch currentPage {
             case .usage: row { usageCells }
+            case .providers: row { providerCells }
+            case .limits: row { limitCells }
             case .system: row { systemCells }
             case .none: Color.clear
             }
@@ -235,37 +242,50 @@ struct NotchStatsStrip: View {
     @ViewBuilder
     private var usageCells: some View {
         if usage.isAvailable {
-            let totals = usage.combined
-            // Billed tokens lead, not the total. Cache reads outweigh real work by two
-            // orders of magnitude on a normal day — 87.7M against 779k — so folding them
-            // into one figure would read as enormous usage every single day and mean
-            // nothing. Cached gets its own cell, where the ratio is the point.
-            let active = usage.totalsByUpstream
-                .filter { $0.value.requests > 0 }
-                .sorted { $0.value.billedTokens > $1.value.billedTokens }
-
-            if active.count > 1 {
-                // More than one provider saw traffic today, so name them rather than
-                // burying the split inside a single figure.
-                ForEach(active, id: \.key) { entry in
-                    gauge(entry.key.uppercased(), Self.compact(entry.value.billedTokens),
-                          widest: "999.9M")
-                }
-            } else {
-                gauge("TOKENS", Self.compact(totals.billedTokens), widest: "999.9M")
+            // Billed tokens, not the total. Cache reads outweigh real work by two orders of
+            // magnitude on a normal day, so folding them in would read as enormous usage
+            // every single day and mean nothing; cache gets its own cell.
+            ForEach(UsageWindow.allCases, id: \.self) { window in
+                gauge(window.label, Self.compact(usage.totals(for: window).billedTokens),
+                      widest: "999.9M")
             }
-            if totals.cachedTokens > 0 {
-                gauge("CACHED", Self.compact(totals.cachedTokens), widest: "999.9M")
+            gauge("CACHED", Self.compact(usage.totals(for: .all).cachedTokens), widest: "999.9M")
+            let spend = usage.totals(for: .all).cost
+            if spend > 0 {
+                gauge("SPENT", String(format: "$%.2f", spend), widest: "$99.99")
             }
-            if totals.cost > 0 {
-                gauge("COST", String(format: "$%.2f", totals.cost), widest: "$99.99")
-            }
-            gauge("REQUESTS", "\(totals.requests)", widest: "9999")
         } else if usage.needsAuthorization {
             // The sandbox, not a missing file. Settings has the button that fixes it.
             gauge("API USAGE", "Grant access", widest: "Grant access", tint: StatsPalette.serious)
         } else {
             gauge("API USAGE", "No log", widest: "Grant access")
+        }
+    }
+
+    /// Named providers, so a week that spans several is not buried in one figure.
+    @ViewBuilder
+    private var providerCells: some View {
+        let active = usage.byUpstream(for: .week)
+            .sorted { $0.value.billedTokens > $1.value.billedTokens }
+        ForEach(active, id: \.key) { entry in
+            gauge(entry.key.uppercased(), Self.compact(entry.value.billedTokens), widest: "999.9M")
+        }
+    }
+
+    /// The subscription's own meters. These are quota, not money, which is why they cannot
+    /// come from the request log — the proxy sees tokens, not the plan. The statusline
+    /// publishes them beside the log from the JSON Claude Code hands it.
+    @ViewBuilder
+    private var limitCells: some View {
+        if let limits = usage.limits {
+            gauge("5 HOUR", "\(Int(limits.fiveHourPercent.rounded()))%", widest: "100%",
+                  tint: StatsPalette.severity(limits.fiveHourPercent / 100),
+                  alarming: limits.fiveHourPercent >= 90)
+            gauge("RESETS IN", Self.countdown(to: limits.fiveHourResetsAt), widest: "23h 59m")
+            gauge("7 DAY", "\(Int(limits.sevenDayPercent.rounded()))%", widest: "100%",
+                  tint: StatsPalette.severity(limits.sevenDayPercent / 100),
+                  alarming: limits.sevenDayPercent >= 90)
+            gauge("RESETS IN", Self.countdown(to: limits.sevenDayResetsAt), widest: "23h 59m")
         }
     }
 
@@ -368,6 +388,18 @@ struct NotchStatsStrip: View {
         case 1_000...: String(format: "%.0fK", Double(count) / 1_000)
         default: "\(count)"
         }
+    }
+
+    private static func countdown(to date: Date?) -> String {
+        guard let date else { return "—" }
+        let seconds = max(0, date.timeIntervalSinceNow)
+        if seconds >= 86_400 {
+            return "\(Int(seconds / 86_400))d \(Int((seconds.truncatingRemainder(dividingBy: 86_400)) / 3_600))h"
+        }
+        if seconds >= 3_600 {
+            return "\(Int(seconds / 3_600))h \(Int((seconds.truncatingRemainder(dividingBy: 3_600)) / 60))m"
+        }
+        return "\(Int(seconds / 60))m"
     }
 
     private static func gigabytes(_ bytes: UInt64) -> String {

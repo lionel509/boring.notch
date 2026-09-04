@@ -2,7 +2,8 @@
 //  RouterUsageManager.swift
 //  boringNotch
 //
-//  Today's API usage, read from the local Switchboard request log.
+//  API usage and subscription limits, read from local files the proxy and the statusline
+//  already write.
 //
 
 import AppKit
@@ -19,13 +20,51 @@ struct RouterUsageTotals: Equatable {
 
     /// Tokens that were actually generated or newly read, excluding cache hits.
     var billedTokens: Int { inputTokens + outputTokens }
-    var allTokens: Int { inputTokens + outputTokens + cachedTokens }
+
+    static func += (lhs: inout RouterUsageTotals, rhs: RouterUsageTotals) {
+        lhs.requests += rhs.requests
+        lhs.inputTokens += rhs.inputTokens
+        lhs.outputTokens += rhs.outputTokens
+        lhs.cachedTokens += rhs.cachedTokens
+        lhs.cost += rhs.cost
+    }
 }
 
-/// Reads API usage out of Switchboard's request log rather than polling any vendor.
+enum UsageWindow: String, CaseIterable {
+    case today, week, month, all
+
+    var label: String {
+        switch self {
+        case .today: "TODAY"
+        case .week: "WEEK"
+        case .month: "MONTH"
+        case .all: "ALL TIME"
+        }
+    }
+
+    /// Days back from today, inclusive. Nil means everything on record.
+    var days: Int? {
+        switch self {
+        case .today: 1
+        case .week: 7
+        case .month: 30
+        case .all: nil
+        }
+    }
+}
+
+/// What the subscription's own meters say, as opposed to what was spent.
+struct SubscriptionLimits: Equatable {
+    var fiveHourPercent: Double
+    var fiveHourResetsAt: Date?
+    var sevenDayPercent: Double
+    var sevenDayResetsAt: Date?
+    var updatedAt: Date?
+}
+
+/// Reads API usage out of the proxy's request log rather than polling any vendor.
 ///
-/// Switchboard is the local multi-provider proxy that Claude Code and friends route
-/// through, and it already appends one JSON object per request:
+/// The proxy appends one JSON object per request:
 ///
 ///     {"ts": "2026-09-04T13:41:57", "upstream": "openrouter", "model_used": "z-ai/glm-5.3",
 ///      "in": 14, "out": 20, "cache_read": 0, "cost": 0.0001076}
@@ -34,37 +73,55 @@ struct RouterUsageTotals: Equatable {
 /// the app — which counts double, because this app is GPL-3.0 and any build handed to
 /// anyone ships its source, so a key pasted in is a key published. No network call, no auth
 /// to expire, no per-vendor rate limit. And every provider is covered at once: adding one
-/// to Switchboard adds it here for free.
+/// to the proxy adds it here for free.
 ///
 /// The tradeoff is coverage, and it is worth being honest about. This is exactly "what went
-/// through the proxy". Traffic that bypasses it — claude.ai in a browser, an app calling a
+/// through the proxy". Traffic that bypasses it — a browser session, an app calling a
 /// vendor directly — is invisible here, which is why the strip labels the figure rather
 /// than presenting it as a total bill. Subscription rows also carry no `cost`, because plan
-/// quota is not dollars; those show as tokens only.
+/// quota is not dollars; those show as tokens only, and the quota itself comes from
+/// `rate-limits.json` instead.
 @MainActor
 final class RouterUsageManager: ObservableObject {
     static let shared = RouterUsageManager()
 
-    @Published private(set) var totalsByUpstream: [String: RouterUsageTotals] = [:]
-    /// False when the log cannot be read. `needsAuthorization` separates the two reasons:
-    /// the sandbox has not been granted access yet (fixable by the user, so say so), or
-    /// the file genuinely is not there.
+    /// Day (yyyy-MM-dd) → upstream → totals. Bucketing by day up front means every window
+    /// is a fold over the same scan, and a midnight rollover needs no special handling.
+    @Published private(set) var totalsByDay: [String: [String: RouterUsageTotals]] = [:]
+    @Published private(set) var limits: SubscriptionLimits?
     @Published private(set) var isAvailable = false
     @Published private(set) var needsAuthorization = false
 
-    var combined: RouterUsageTotals {
-        totalsByUpstream.values.reduce(into: RouterUsageTotals()) { sum, totals in
-            sum.requests += totals.requests
-            sum.inputTokens += totals.inputTokens
-            sum.outputTokens += totals.outputTokens
-            sum.cachedTokens += totals.cachedTokens
-            sum.cost += totals.cost
+    private var byteOffset: UInt64 = 0
+    private var isReading = false
+
+    // MARK: - Windows
+
+    func totals(for window: UsageWindow) -> RouterUsageTotals {
+        byUpstream(for: window).values.reduce(into: RouterUsageTotals()) { $0 += $1 }
+    }
+
+    func byUpstream(for window: UsageWindow) -> [String: RouterUsageTotals] {
+        var result: [String: RouterUsageTotals] = [:]
+        for day in days(in: window) {
+            for (upstream, totals) in totalsByDay[day] ?? [:] {
+                result[upstream, default: RouterUsageTotals()] += totals
+            }
+        }
+        return result
+    }
+
+    private func days(in window: UsageWindow) -> [String] {
+        guard let count = window.days else { return Array(totalsByDay.keys) }
+        let calendar = Calendar.current
+        let today = Date()
+        return (0..<count).compactMap { offset in
+            calendar.date(byAdding: .day, value: -offset, to: today)
+                .map(Self.dayFormatter.string(from:))
         }
     }
 
-    private var byteOffset: UInt64 = 0
-    private var loadedDay = ""
-    private var isReading = false
+    // MARK: - Paths
 
     /// Expands a leading `~` against the *real* home directory.
     ///
@@ -95,116 +152,92 @@ final class RouterUsageManager: ObservableObject {
 
     private init() {}
 
-    /// Called when the strip appears. Parses only the bytes appended since last time, so
-    /// the repeat cost is a few hundred microseconds even though the log grows all day.
+    // MARK: - Reading
+
+    /// Parses only the bytes appended since last time, so the repeat cost stays in the
+    /// hundreds of microseconds however large the log grows.
     func refresh() {
         guard !isReading else { return }
 
-        let today = Self.dayFormatter.string(from: Date())
-        let isNewDay = today != loadedDay
-
-        // This app ships with com.apple.security.app-sandbox, so a path outside the
-        // container cannot be opened however correct it is — which is why a perfectly
-        // present log first read as "no router log". Access comes from a security-scoped
-        // bookmark the user grants once, the same machinery the Shelf uses for dropped
-        // files. The raw path is still tried as a fallback so an unsandboxed build works.
         let bookmarkData = Defaults[.routerLogBookmark]
         let bookmark = bookmarkData.isEmpty ? nil : Bookmark(data: bookmarkData)
-        let fallbackURL = URL(
-            fileURLWithPath: Self.expandingRealTilde(Defaults[.routerLogPath]))
-
-        // A day rollover invalidates the running totals, so rescan from the top to pick up
-        // whatever landed after midnight.
-        let startOffset = isNewDay ? 0 : byteOffset
-        let carried = isNewDay ? [:] : totalsByUpstream
+        let fallback = URL(fileURLWithPath: Self.expandingRealTilde(Defaults[.routerLogPath]))
+        let startOffset = byteOffset
+        let carried = totalsByDay
 
         isReading = true
         Task.detached(priority: .utility) {
-            let scanned: Result<(totals: [String: RouterUsageTotals], offset: UInt64), Error>
-            if let url = bookmark?.resolveURL() {
-                // Explicit start/stop rather than Bookmark.withAccess: inside an async
-                // context Swift resolves that overload to the async variant and then
-                // demands an `await` for a body that is entirely synchronous.
-                let didStart = url.startAccessingSecurityScopedResource()
-                scanned = Self.scan(url: url, from: startOffset, day: today, into: carried)
-                if didStart { url.stopAccessingSecurityScopedResource() }
-            } else {
-                scanned = Self.scan(url: fallbackURL, from: startOffset, day: today, into: carried)
-            }
+            // The grant may be for the log itself or for the folder holding it. A folder
+            // is preferred, because rate-limits.json lives beside the log and one grant
+            // then covers both; a file grant still works, it just cannot see the limits.
+            let granted = bookmark?.resolveURL()
+            let didStart = granted?.startAccessingSecurityScopedResource() ?? false
+            defer { if didStart, let granted { granted.stopAccessingSecurityScopedResource() } }
+
+            let logURL = Self.logURL(granted: granted, fallback: fallback)
+            let scanned = Self.scan(url: logURL, from: startOffset, into: carried)
+            let limits = Self.readLimits(beside: logURL)
 
             await MainActor.run {
                 self.isReading = false
-                guard case .success(let scanned) = scanned else {
+                self.limits = limits
+
+                switch scanned {
+                case .success(let result):
+                    self.isAvailable = true
+                    self.needsAuthorization = false
+                    self.byteOffset = result.offset
+                    self.totalsByDay = result.totals
+                    let today = self.totals(for: .today)
+                    Defaults[.routerLogDiagnostic] =
+                        "ok — \(today.requests) requests, \(today.billedTokens) billed tokens today"
+                            + (limits == nil ? " (no rate-limits.json — grant the folder, not the file)" : "")
+                case .failure(let error):
                     self.isAvailable = false
-                    let reason: String = {
-                        if case .failure(let error) = scanned {
-                            return (error as NSError).localizedDescription
-                        }
-                        return "unknown"
-                    }()
-                    Defaults[.routerLogDiagnostic] = "failed at \(fallbackURL.path) — \(reason)"
-                    // With no bookmark there is no way to tell "file missing" from
-                    // "sandbox denied" — the sandbox refuses metadata reads too, so
-                    // fileExists() lies here. Either way the fix is the same: pick the
-                    // file. Only once a bookmark exists and still fails is it genuinely
-                    // gone or moved.
+                    // With no bookmark there is no telling "file missing" from "sandbox
+                    // denied" — the sandbox refuses metadata reads too, so fileExists()
+                    // lies. Either way the fix is the same: pick the folder.
                     self.needsAuthorization = bookmarkData.isEmpty
-                    return
+                    Defaults[.routerLogDiagnostic] =
+                        "failed at \(logURL.path) — \((error as NSError).localizedDescription)"
                 }
-                self.isAvailable = true
-                self.needsAuthorization = false
-                let combined = scanned.totals.values.reduce(into: (0, 0)) {
-                    $0.0 += $1.requests
-                    $0.1 += $1.billedTokens
-                }
-                Defaults[.routerLogDiagnostic] =
-                    "ok — \(combined.0) requests, \(combined.1) billed tokens today"
-                self.loadedDay = today
-                self.byteOffset = scanned.offset
-                self.totalsByUpstream = scanned.totals
             }
         }
     }
 
-    /// One-time grant. Opens on the configured log's folder with hidden files shown,
-    /// because the default location is under `~/.local` and an open panel hides that.
-    @MainActor
-    func requestAccess() {
-        let configured = URL(
-            fileURLWithPath: Self.expandingRealTilde(Defaults[.routerLogPath]))
-
-        let panel = NSOpenPanel()
-        panel.title = "Choose the request log"
-        panel.message = "Pick the proxy's requests.log so the notch can read today's API usage."
-        panel.prompt = "Grant Access"
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.showsHiddenFiles = true
-        panel.directoryURL = configured.deletingLastPathComponent()
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        if let bookmark = try? Bookmark(url: url) {
-            Defaults[.routerLogBookmark] = bookmark.data
-            Defaults[.routerLogPath] = url.path
-            // The grant invalidates whatever was counted before it.
-            byteOffset = 0
-            loadedDay = ""
-            totalsByUpstream = [:]
-            refresh()
-        }
+    private nonisolated static func logURL(granted: URL?, fallback: URL) -> URL {
+        guard let granted else { return fallback }
+        let isDirectory = (try? granted.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory
+        return isDirectory == true ? granted.appendingPathComponent("requests.log") : granted
     }
 
-    /// Surfaces the real error rather than collapsing every failure to nil — "operation
-    /// not permitted" and "no such file" call for completely different fixes, and guessing
+    private nonisolated static func readLimits(beside log: URL) -> SubscriptionLimits? {
+        let url = log.deletingLastPathComponent().appendingPathComponent("rate-limits.json")
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+
+        let iso = ISO8601DateFormatter()
+        func date(_ key: String) -> Date? {
+            (object[key] as? String).flatMap(iso.date(from:))
+        }
+
+        return SubscriptionLimits(
+            fiveHourPercent: (object["five_hour_pct"] as? Double) ?? 0,
+            fiveHourResetsAt: date("five_hour_resets_at"),
+            sevenDayPercent: (object["seven_day_pct"] as? Double) ?? 0,
+            sevenDayResetsAt: date("seven_day_resets_at"),
+            updatedAt: date("ts"))
+    }
+
+    /// Surfaces the real error rather than collapsing every failure to nil — "operation not
+    /// permitted" and "no such file" call for completely different fixes, and guessing
     /// between them sent this down a wrong path once already.
     private nonisolated static func scan(
         url: URL,
         from start: UInt64,
-        day: String,
-        into carried: [String: RouterUsageTotals]
-    ) -> Result<(totals: [String: RouterUsageTotals], offset: UInt64), Error> {
+        into carried: [String: [String: RouterUsageTotals]]
+    ) -> Result<(totals: [String: [String: RouterUsageTotals]], offset: UInt64), Error> {
         let handle: FileHandle
         do {
             handle = try FileHandle(forReadingFrom: url)
@@ -238,20 +271,58 @@ final class RouterUsageManager: ObservableObject {
         for line in data[..<lastNewline].split(separator: UInt8(ascii: "\n")) {
             guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
                   let timestamp = object["ts"] as? String,
-                  timestamp.hasPrefix(day)
+                  timestamp.count >= 10
             else { continue }
 
+            let day = String(timestamp.prefix(10))
             let upstream = (object["upstream"] as? String) ?? "unknown"
-            var entry = totals[upstream] ?? RouterUsageTotals()
+
+            var entry = totals[day]?[upstream] ?? RouterUsageTotals()
             entry.requests += 1
             entry.inputTokens += (object["in"] as? Int) ?? 0
             entry.outputTokens += (object["out"] as? Int) ?? 0
             entry.cachedTokens += ((object["cache_read"] as? Int) ?? 0)
                 + ((object["cache_write"] as? Int) ?? 0)
             entry.cost += (object["cost"] as? Double) ?? 0
-            totals[upstream] = entry
+            totals[day, default: [:]][upstream] = entry
         }
 
         return .success((totals, consumed))
+    }
+
+    // MARK: - Granting
+
+    /// One-time grant. Asks for the *folder* rather than the log file: `rate-limits.json`
+    /// sits beside it, and a folder grant covers both. Opens on the configured location
+    /// with hidden files shown, because the default lives under `~/.local`.
+    @MainActor
+    func requestAccess() {
+        let configured = URL(fileURLWithPath: Self.expandingRealTilde(Defaults[.routerLogPath]))
+
+        let panel = NSOpenPanel()
+        panel.title = "Choose the proxy folder"
+        panel.message = "Pick the folder holding requests.log. Choosing the folder rather "
+            + "than the file also picks up rate-limits.json beside it, which carries the "
+            + "5-hour and 7-day subscription meters."
+        panel.prompt = "Grant Access"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.showsHiddenFiles = true
+        panel.directoryURL = configured.deletingLastPathComponent()
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        if let bookmark = try? Bookmark(url: url) {
+            Defaults[.routerLogBookmark] = bookmark.data
+            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory
+            Defaults[.routerLogPath] = isDirectory == true
+                ? url.appendingPathComponent("requests.log").path
+                : url.path
+            // The grant invalidates whatever was counted before it.
+            byteOffset = 0
+            totalsByDay = [:]
+            refresh()
+        }
     }
 }

@@ -1843,7 +1843,7 @@ struct StatsSettings: View {
 
                 LabeledContent("Status") {
                     if usage.isAvailable {
-                        let totals = usage.combined
+                        let totals = usage.totals(for: .today)
                         Text("\(totals.requests) requests today · \(totals.billedTokens) billed tokens")
                             .foregroundStyle(.secondary)
                     } else if usage.needsAuthorization {
