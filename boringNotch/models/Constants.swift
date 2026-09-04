@@ -107,6 +107,18 @@ extension Defaults.Keys {
     static let showNotHumanFace = Key<Bool>("showNotHumanFace", default: false)
     static let tileShowLabels = Key<Bool>("tileShowLabels", default: false)
     static let showCalendar = Key<Bool>("showCalendar", default: false)
+
+    // Bottom stats strip. Off by default: it reads a log path that only exists on a
+    // machine running the Switchboard proxy, and an empty row is worse than no row.
+    static let showStatsStrip = Key<Bool>("showStatsStrip", default: false)
+    static let statsStripShowUsage = Key<Bool>("statsStripShowUsage", default: true)
+    static let statsStripShowSystem = Key<Bool>("statsStripShowSystem", default: true)
+    static let routerLogPath = Key<String>(
+        "routerLogPath", default: "~/.local/share/claude-router/requests.log")
+    /// Security-scoped bookmark for the request log. The app is sandboxed, so a plain
+    /// path outside the container is unreadable no matter what it is set to; the user
+    /// grants access once and this survives relaunch.
+    static let routerLogBookmark = Key<Data>("routerLogBookmark", default: Data())
     static let hideCompletedReminders = Key<Bool>("hideCompletedReminders", default: true)
     static let sliderColor = Key<SliderColorEnum>(
         "sliderUseAlbumArtColor",

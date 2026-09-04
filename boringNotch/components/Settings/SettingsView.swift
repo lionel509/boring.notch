@@ -1164,6 +1164,9 @@ struct Appearance: View {
     @Default(.useMusicVisualizer) var useMusicVisualizer
     @Default(.customVisualizers) var customVisualizers
     @Default(.selectedVisualizer) var selectedVisualizer
+    @Default(.showStatsStrip) var showStatsStrip
+    @Default(.statsStripShowUsage) var statsStripShowUsage
+    @Default(.routerLogPath) var routerLogPath
 
     let icons: [String] = ["logo2"]
     @State private var selectedIcon: String = "logo2"
@@ -1182,6 +1185,35 @@ struct Appearance: View {
 
             } header: {
                 Text("General")
+            }
+
+            Section {
+                Defaults.Toggle(key: .showStatsStrip) {
+                    Text("Show stats strip")
+                }
+                Defaults.Toggle(key: .statsStripShowUsage) {
+                    Text("API usage")
+                }
+                .disabled(!showStatsStrip)
+                Defaults.Toggle(key: .statsStripShowSystem) {
+                    Text("System resources")
+                }
+                .disabled(!showStatsStrip)
+
+                HStack {
+                    TextField("Request log", text: $routerLogPath)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Choose…") {
+                        RouterUsageManager.shared.requestAccess()
+                    }
+                }
+                .disabled(!showStatsStrip || !statsStripShowUsage)
+            } header: {
+                Text("Stats strip")
+            } footer: {
+                Text("A row under the notch's content showing today's API usage and live system load. Usage is read from the local proxy's request log, so it covers whatever routes through it — not browser sessions or apps that call a provider directly. Sampling only runs while the notch is open.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
