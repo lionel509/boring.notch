@@ -197,20 +197,22 @@ struct CalendarView: View {
                         .foregroundColor(Color(white: 0.65))
                 }
 
-                ZStack(alignment: .top) {
-                    WheelPicker(selectedDate: $selectedDate, config: Config())
-                    HStack(alignment: .top) {
+                WheelPicker(selectedDate: $selectedDate, config: Config())
+                    // Masked rather than overlaid with black. The old version painted two
+                    // opaque black gradients on top of the wheel, which was invisible only
+                    // because the notch behind it was also black — over any other backdrop
+                    // they read as two dark bars flanking the dates. A mask fades the
+                    // content itself, so whatever is behind shows through.
+                    .mask(
                         LinearGradient(
-                            colors: [Color.black, .clear], startPoint: .leading, endPoint: .trailing
-                        )
-                        .frame(width: 20)
-                        Spacer()
-                        LinearGradient(
-                            colors: [.clear, Color.black], startPoint: .leading, endPoint: .trailing
-                        )
-                        .frame(width: 20)
-                    }
-                }
+                            stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black, location: 0.09),
+                                .init(color: .black, location: 0.91),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing))
             }
 
             let filteredEvents = EventListView.filteredEvents(

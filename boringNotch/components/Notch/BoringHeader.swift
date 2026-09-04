@@ -55,7 +55,7 @@ struct BoringHeader: View {
                                 vm.toggleCameraPreview()
                             }) {
                                 Capsule()
-                                    .fill(.black)
+                                    .fill(.black.opacity(0.4))
                                     .frame(width: 30, height: 30)
                                     .overlay {
                                         Image(systemName: "web.camera")
@@ -74,7 +74,7 @@ struct BoringHeader: View {
                                 
                             }) {
                                 Capsule()
-                                    .fill(.black)
+                                    .fill(.black.opacity(0.4))
                                     .frame(width: 30, height: 30)
                                     .overlay {
                                         Image(systemName: "gear")
