@@ -13,8 +13,10 @@ let downloadSneakSize: CGSize = .init(width: 65, height: 1)
 let batterySneakSize: CGSize = .init(width: 160, height: 1)
 
 let shadowPadding: CGFloat = 20
-/// Height reserved for the optional stats strip.
-let statsStripHeight: CGFloat = 24
+/// Height reserved for the optional stats strip. Two lines — a small uppercase label over
+/// the figure — because a single row where label and value carry the same weight reads as
+/// chrome rather than as something to be read.
+let statsStripHeight: CGFloat = 34
 
 private let baseOpenNotchSize: CGSize = .init(width: 640, height: 190)
 
