@@ -90,6 +90,7 @@ private struct Sparkline: View {
 struct NotchStatsStrip: View {
     @ObservedObject private var stats = SystemStatsManager.shared
     @ObservedObject private var usage = RouterUsageManager.shared
+    @ObservedObject private var wispr = WisprUsageManager.shared
     @ObservedObject private var battery = BatteryStatusViewModel.shared
 
     @Default(.statsStripShowUsage) private var showUsage
@@ -117,8 +118,11 @@ struct NotchStatsStrip: View {
         var pages: [Page] = []
         if showUsage {
             pages.append(.usage)
-            // Only worth a page when there is actually a split to show.
-            if usage.byUpstream(for: .week).count > 1 { pages.append(.providers) }
+            // Only worth a page when there is actually a split to show. Dictation
+            // counts towards that: one upstream plus Wispr Flow is still two columns.
+            if usage.byUpstream(for: .week).count > 1 || wispr.words(for: .week) > 0 {
+                pages.append(.providers)
+            }
             if usage.limits != nil { pages.append(.limits) }
         }
         if showSystem { pages.append(.system) }
@@ -192,6 +196,7 @@ struct NotchStatsStrip: View {
         .onAppear {
             stats.start()
             usage.refresh()
+            wispr.refresh()
             startFlipping()
             withAnimation(.smooth(duration: 0.3).delay(0.14)) { settled = true }
         }
@@ -282,6 +287,14 @@ struct NotchStatsStrip: View {
             .sorted { $0.value.billedTokens > $1.value.billedTokens }
         ForEach(active, id: \.key) { entry in
             gauge(entry.key.uppercased(), Self.compact(entry.value.billedTokens), widest: "999.9M")
+        }
+
+        // Words, not tokens, and marked as such. Dictation is the other half of a day's
+        // usage and belongs on this page, but a bare number beside three token counts
+        // would read as a fourth token count -- so the unit travels with the figure.
+        let dictated = wispr.words(for: .week)
+        if dictated > 0 {
+            gauge("WISPR FLOW", "\(Self.compact(dictated)) w", widest: "999.9M w")
         }
     }
 

@@ -129,7 +129,14 @@ extension Defaults.Keys {
     static let lyricsShowContext = Key<Bool>("lyricsShowContext", default: true)
 
     /// Light the notch while an app is recording from the microphone.
-    static let showDictationActivity = Key<Bool>("showDictationActivity", default: true)
+    /// Name the app holding the microphone in the closed notch.
+    ///
+    /// Off by default. macOS already says a microphone is open in two places at once —
+    /// the orange mic in the menu bar and the dot in Control Center — and a third
+    /// statement of it an inch away carries no information. Off also means the CoreAudio
+    /// process listeners are never registered, so the feature costs nothing at all until
+    /// it is asked for.
+    static let showDictationActivity = Key<Bool>("showDictationActivity", default: false)
 
     static let dictationDiagnostic = Key<String>("dictationDiagnostic", default: "not started")
 
@@ -171,6 +178,23 @@ extension Defaults.Keys {
     /// what happened without waiting for a rescan, and so a failure is inspectable after
     /// the fact rather than only visible as an empty row.
     static let routerLogDiagnostic = Key<String>("routerLogDiagnostic", default: "never read")
+
+    static let wisprDatabasePath = Key<String>(
+        "wisprDatabasePath",
+        default: "~/Library/Application Support/Wispr Flow/flow.sqlite")
+    /// Security-scoped bookmark for the Wispr Flow folder. Same reason as the request
+    /// log, plus one of its own: SQLite needs the `-wal` sidecar beside the database to
+    /// see anything dictated since the last checkpoint.
+    static let wisprDatabaseBookmark = Key<Data>("wisprDatabaseBookmark", default: Data())
+    /// Words dictated per local day, accumulated by this app.
+    ///
+    /// Persisted rather than derived, and that is forced: Wispr Flow prunes its local
+    /// history once it has uploaded, so the database holds hours, not weeks. A window
+    /// longer than that can only exist if something keeps the tally, and this is it.
+    static let wisprWordsByDay = Key<[String: Int]>("wisprWordsByDay", default: [:])
+    /// Highest transcript timestamp already counted, so a row is never banked twice.
+    static let wisprLastSeen = Key<String>("wisprLastSeen", default: "")
+    static let wisprDiagnostic = Key<String>("wisprDiagnostic", default: "never read")
     static let hideCompletedReminders = Key<Bool>("hideCompletedReminders", default: true)
     static let sliderColor = Key<SliderColorEnum>(
         "sliderUseAlbumArtColor",

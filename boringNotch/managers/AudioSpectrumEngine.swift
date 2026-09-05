@@ -41,6 +41,27 @@ final class AudioSpectrumEngine: ObservableObject {
     private let attack: Float = 0.9
     private let decay: Float = 0.3
 
+    /// How far below the running reference a band has to sit before it reads as nothing.
+    /// A window, not an absolute floor -- see `reference`.
+    private let dynamicRange: Float = 45
+
+    /// True silence, in absolute terms. Below this the normaliser is switched off
+    /// entirely: with nothing playing, a reference that keeps decaying would eventually
+    /// amplify the noise floor into a full-height display of nothing.
+    private let silenceFloorDb: Float = -68
+
+    /// The loudest thing heard recently, in linear magnitude, and what every band is
+    /// measured against.
+    ///
+    /// Without it the display is a volume meter. A process tap carries the audio at the
+    /// level the app is playing it, so turning the music down turned the bars down --
+    /// which says nothing about the music, only about the slider. Peak-hold with a slow
+    /// release is the standard answer: it rises instantly to a transient and falls about
+    /// 1.7 dB per second, so a quiet track fills the bars just as a loud one does while
+    /// the dynamics *within* the track still show.
+    private var reference: Float = 0
+    private let referenceRelease: Float = 0.995
+
     /// Musically useful range. Below this is rumble, above it is mostly air.
     private let minHz: Float = 50
     private let maxHz: Float = 16_000
@@ -139,6 +160,7 @@ final class AudioSpectrumEngine: ObservableObject {
 
         let zeroed = [Float](repeating: 0, count: bandCount)
         smoothed = zeroed
+        reference = 0
         if Thread.isMainThread {
             bands = zeroed
         } else {
@@ -365,13 +387,30 @@ final class AudioSpectrumEngine: ObservableObject {
         let scale = 2.0 / Float(fftSize)
         vDSP.multiply(scale, magnitudes, result: &magnitudes)
 
-        var next = [Float](repeating: 0, count: bandCount)
+        var peaks = [Float](repeating: 0, count: bandCount)
+        var framePeak: Float = 0
         for (index, range) in bandRanges.enumerated() where range.lower <= range.upper {
             let slice = magnitudes[range.lower ... range.upper]
             let peak = slice.max() ?? 0
-            // ~ -60 dB floor mapped to 0, 0 dB to 1.
-            let db = 20 * log10f(max(peak, 1e-7))
-            next[index] = min(max((db + 60) / 60, 0), 1)
+            peaks[index] = peak
+            framePeak = max(framePeak, peak)
+        }
+
+        // Peak-hold: instant attack, slow release.
+        reference = framePeak > reference ? framePeak : reference * referenceRelease
+
+        let framePeakDb = 20 * log10f(max(framePeak, 1e-7))
+        let referenceDb = 20 * log10f(max(reference, 1e-7))
+
+        var next = [Float](repeating: 0, count: bandCount)
+        if framePeakDb > silenceFloorDb {
+            for index in 0 ..< bandCount {
+                let db = 20 * log10f(max(peaks[index], 1e-7))
+                // Measured against what is playing rather than against full scale, so
+                // the display answers "what does this sound like" and not "how far up
+                // is the volume".
+                next[index] = min(max((db - referenceDb + dynamicRange) / dynamicRange, 0), 1)
+            }
         }
 
         for i in 0 ..< bandCount {

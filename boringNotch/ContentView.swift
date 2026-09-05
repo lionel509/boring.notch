@@ -362,14 +362,18 @@ struct ContentView: View {
                       } else if coordinator.sneakPeek.show && Defaults[.inlineHUD] && (coordinator.sneakPeek.type != .music) && (coordinator.sneakPeek.type != .battery) && vm.notchState == .closed {
                           InlineHUD(type: $coordinator.sneakPeek.type, value: $coordinator.sneakPeek.value, icon: $coordinator.sneakPeek.icon, hoverAnimation: $isHovering, gestureProgress: $gestureProgress)
                               .transition(.opacity)
-                      } else if vm.notchState == .closed && dictationManager.isRecording && Defaults[.showDictationActivity] && !vm.hideOnClosed {
-                          // Above music on purpose: recording is transient and the track is
-                          // not going anywhere.
-                          DictationLiveActivity()
-                              .transition(.opacity)
                       } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music) && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle) && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed {
                           MusicLiveActivity()
                               .frame(alignment: .center)
+                      } else if vm.notchState == .closed && dictationManager.isRecording && Defaults[.showDictationActivity] && !vm.hideOnClosed {
+                          // Below music, not above it. This was written as though recording
+                          // were a moment -- but an app holds the input stream for as long
+                          // as it wants the microphone, and Discord holds it for the length
+                          // of a voice call. Ranked above music it took the notch over for
+                          // hours at a time to repeat something the menu bar was already
+                          // saying.
+                          DictationLiveActivity()
+                              .transition(.opacity)
                       } else if !coordinator.expandingView.show && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed  {
                           BoringFaceAnimation()
                        } else if vm.notchState == .open {
@@ -478,13 +482,14 @@ struct ContentView: View {
     @ViewBuilder
     /// Shown while an app holds the microphone: which app, and that it is live.
     ///
-    /// macOS already puts an orange dot in the menu bar, but the dot does not say who. This
-    /// does, in the place your eye is already going.
+    /// The name and nothing else. macOS already says a microphone is open, twice -- the
+    /// orange mic in the menu bar and the dot in Control Center -- and a third glyph an
+    /// inch away from both was the one part of this that carried no information. Who is
+    /// listening is the part the system does not put in front of you, so that is all
+    /// this draws.
     func DictationLiveActivity() -> some View {
         HStack {
-            Image(systemName: "mic.fill")
-                .foregroundStyle(.red)
-                .font(.system(size: max(9, vm.effectiveClosedNotchHeight - 18)))
+            Color.clear
                 .frame(
                     width: max(0, vm.effectiveClosedNotchHeight - 12),
                     height: max(0, vm.effectiveClosedNotchHeight - 12))
@@ -580,7 +585,7 @@ struct ContentView: View {
                         .matchedGeometryEffect(id: "spectrum", in: albumArtNamespace)
                         .mask {
                             AudioSpectrumView(isPlaying: $musicManager.isPlaying, bundleIdentifier: musicManager.bundleIdentifier)
-                                .frame(width: 18, height: 12)
+                                .frame(width: 20, height: 12)
                         }
                 } else {
                     LottieAnimationContainer()

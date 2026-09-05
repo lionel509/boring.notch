@@ -891,8 +891,10 @@ struct RotatingMusicSlot: View {
             let left = max(0, musicManager.songDuration - musicManager.elapsedTime)
             return String(format: "-%d:%02d", Int(left) / 60, Int(left) % 60)
         case .weather:
-            guard let conditions = weather.conditions else { return "—" }
-            return "\(Int(conditions.temperatureC.rounded()))° \(conditions.condition.label.capitalized)"
+            guard let conditions = weather.conditions,
+                  let temperature = weather.temperatureText
+            else { return "—" }
+            return "\(temperature) \(conditions.condition.label.capitalized)"
         }
     }
 

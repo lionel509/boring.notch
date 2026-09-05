@@ -9,12 +9,13 @@ import Cocoa
 import SwiftUI
 
 class AudioSpectrum: NSView {
-    /// Nine thin bars rather than four fat ones. The strip is boxed in by the closed
-    /// notch -- about 20 pt of room -- so the detail has to come out of the bar width,
-    /// not out of the footprint: 1.2 pt is still two crisp pixels on a retina panel.
-    static let barCount = 9
-    private static let barWidth: CGFloat = 1.2
-    private static let spacing: CGFloat = 0.9
+    /// Seven, in the ~20 pt the closed notch allows. Four was too few to show anything
+    /// but "loud"; nine at 1.2 pt with a 0.9 pt gap closed up into a picket fence, where
+    /// the gaps were narrower than the bars and the whole thing read as one block. The
+    /// gap has to stay comparable to the bar for a bar to be legible as a bar.
+    static let barCount = 7
+    private static let barWidth: CGFloat = 1.7
+    private static let spacing: CGFloat = 1.3
 
     private var barLayers: [CAShapeLayer] = []
     private var barScales: [CGFloat] = []

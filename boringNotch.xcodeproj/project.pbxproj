@@ -113,6 +113,7 @@
 		BEEF0002000000000000A002 /* AudioSpectrumEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0001000000000000A001 /* AudioSpectrumEngine.swift */; };
 		BEEF000C000000000000A00C /* WeatherBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF000B000000000000A00B /* WeatherBackdrop.swift */; };
 		BEEF0010000000000000A010 /* SpectrumTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF000F000000000000A00F /* SpectrumTrack.swift */; };
+		BEEF0012000000000000A012 /* WisprUsageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0011000000000000A011 /* WisprUsageManager.swift */; };
 		BEEF000A000000000000A00A /* WeatherManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0009000000000000A009 /* WeatherManager.swift */; };
 		BEEF0008000000000000A008 /* NotchStatsStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0007000000000000A007 /* NotchStatsStrip.swift */; };
 		BEEF0006000000000000A006 /* RouterUsageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0005000000000000A005 /* RouterUsageManager.swift */; };
@@ -291,6 +292,7 @@
 		BEEF0001000000000000A001 /* AudioSpectrumEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSpectrumEngine.swift; sourceTree = "<group>"; };
 		BEEF000B000000000000A00B /* WeatherBackdrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherBackdrop.swift; sourceTree = "<group>"; };
 		BEEF000F000000000000A00F /* SpectrumTrack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpectrumTrack.swift; sourceTree = "<group>"; };
+		BEEF0011000000000000A011 /* WisprUsageManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WisprUsageManager.swift; sourceTree = "<group>"; };
 		BEEF0009000000000000A009 /* WeatherManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherManager.swift; sourceTree = "<group>"; };
 		BEEF0007000000000000A007 /* NotchStatsStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchStatsStrip.swift; sourceTree = "<group>"; };
 		BEEF0005000000000000A005 /* RouterUsageManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouterUsageManager.swift; sourceTree = "<group>"; };
@@ -528,6 +530,7 @@
 			children = (
 				BEEF0009000000000000A009 /* WeatherManager.swift */,
 				BEEF0005000000000000A005 /* RouterUsageManager.swift */,
+				BEEF0011000000000000A011 /* WisprUsageManager.swift */,
 				BEEF000D000000000000A00D /* DictationManager.swift */,
 				BEEF0003000000000000A003 /* SystemStatsManager.swift */,
 				11D58EA12E760AE100FA8377 /* ImageService.swift */,
@@ -959,6 +962,7 @@
 				BEEF000A000000000000A00A /* WeatherManager.swift in Sources */,
 				BEEF0008000000000000A008 /* NotchStatsStrip.swift in Sources */,
 				BEEF0006000000000000A006 /* RouterUsageManager.swift in Sources */,
+				BEEF0012000000000000A012 /* WisprUsageManager.swift in Sources */,
 				BEEF000E000000000000A00E /* DictationManager.swift in Sources */,
 				BEEF0004000000000000A004 /* SystemStatsManager.swift in Sources */,
 				1163988D2DF5CAB40052E6AF /* EventModel.swift in Sources */,

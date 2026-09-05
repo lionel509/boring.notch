@@ -210,16 +210,24 @@ struct CalendarView: View {
                         .font(.title3)
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
+                    // The same flip the rotating slot and the stats strip use: the new
+                    // line rises from below as the old one leaves upward. One motion for
+                    // "this readout just became a different readout", everywhere.
                     Text(secondLine)
                         .font(.title3)
                         .fontWeight(.light)
                         .foregroundColor(Color(white: 0.65))
-                        .contentTransition(.numericText())
+                        .id(showsTemperature)
+                        .transition(
+                            .asymmetric(
+                                insertion: .move(edge: .bottom).combined(with: .opacity),
+                                removal: .move(edge: .top).combined(with: .opacity)))
+                        .clipped()
                 }
                 .fixedSize(horizontal: true, vertical: false)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    withAnimation(.smooth(duration: 0.25)) { showsTemperature.toggle() }
+                    withAnimation(.snappy(duration: 0.22, extraBounce: 0)) { showsTemperature.toggle() }
                 }
                 .help(showsTemperature ? weather.statusMessage : "Show the temperature")
 

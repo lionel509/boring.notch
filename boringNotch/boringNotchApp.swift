@@ -280,7 +280,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        DictationManager.shared.start()
+        // Only when it is actually wanted: start() registers a CoreAudio listener per
+        // audio process, and there is no reason to watch the microphone for a readout
+        // nobody has asked to see.
+        if Defaults[.showDictationActivity] {
+            DictationManager.shared.start()
+        }
 
         // Scan once at launch so the first time the notch opens the figures are already
         // there, rather than appearing a beat later.
