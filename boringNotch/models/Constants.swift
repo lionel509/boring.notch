@@ -128,6 +128,10 @@ extension Defaults.Keys {
     /// notch height, so it is a choice rather than the default shape.
     static let lyricsShowContext = Key<Bool>("lyricsShowContext", default: true)
 
+    /// The badge for the app the music is coming from, on the artwork's corner. Off: it
+    /// only earns its space when more than one player is actually in use.
+    static let showPlayerAppBadge = Key<Bool>("showPlayerAppBadge", default: false)
+
     /// Title and artist sit in the corner of the artwork, which fades so they stay
     /// readable and clears on hover so the cover can actually be seen.
     static let albumArtShowsIdentity = Key<Bool>("albumArtShowsIdentity", default: true)

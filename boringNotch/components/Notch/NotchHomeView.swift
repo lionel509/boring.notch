@@ -24,7 +24,11 @@ struct MusicPlayerView: View {
     var body: some View {
         HStack {
             AlbumArtView(vm: vm, albumArtNamespace: albumArtNamespace).padding(.all, 5)
-            MusicControlsView().drawingGroup().compositingGroup()
+            // No .drawingGroup() here. It rasterises this whole subtree offscreen, and
+            // the subtree contains the scrubber's timeline ticking ten times a second —
+            // so the lyric scroll was being re-rasterised mid-animation on every tick,
+            // which is what made it stutter.
+            MusicControlsView().compositingGroup()
         }
     }
 }
@@ -167,7 +171,8 @@ struct AlbumArtView: View {
 
     @ViewBuilder
     private var appIconOverlay: some View {
-        if vm.notchState == .open && !musicManager.usingAppIconForArtwork {
+        if Defaults[.showPlayerAppBadge]
+            && vm.notchState == .open && !musicManager.usingAppIconForArtwork {
             AppIcon(for: musicManager.bundleIdentifier ?? "com.apple.Music")
                 .resizable()
                 .aspectRatio(contentMode: .fill)
@@ -207,12 +212,10 @@ struct MusicControlsView: View {
 
     /// The lyrics, in the column the title and artist used to occupy.
     ///
-    /// This scrolls rather than swapping lines. Every line is positioned at its own index
-    /// times the line height and the whole column is offset to bring the current one to the
-    /// middle, so advancing a line is a movement of exactly one line height — three
-    /// independent text transitions that happen to fire together do not read as a scroll,
-    /// they read as a flicker. Only a few lines either side are built; the rest would be
-    /// hundreds of Text views sitting outside the clip.
+    /// The timeline ticks four times a second to keep the position current, but the column
+    /// itself only depends on which line is playing. `.equatable()` makes SwiftUI compare
+    /// the inputs and skip rebuilding the column on the ticks that change nothing — without
+    /// it the scroll was being torn down and rebuilt underneath its own animation.
     @ViewBuilder
     private func lyricsBlock(width: CGFloat) -> some View {
         if Defaults[.enableLyrics] {
@@ -223,87 +226,18 @@ struct MusicControlsView: View {
                     let progressed = musicManager.elapsedTime + (delta * musicManager.playbackRate)
                     return min(max(progressed, 0), musicManager.songDuration)
                 }()
-                let lines = musicManager.lyricLines
-                let index = musicManager.lyricIndex(at: currentElapsed)
-                let visible = showLyricsContext ? 3 : 1
-                let centre = showLyricsContext ? 1 : 0
 
-                Group {
-                    if lines.isEmpty {
-                        lyricRow(
-                            musicManager.isFetchingLyrics ? "Loading lyrics…" : "No lyrics found",
-                            isCurrent: false, width: width)
-                    } else {
-                        ZStack(alignment: .topLeading) {
-                            ForEach(Array(lyricNeighbourhood(of: index, count: lines.count)),
-                                    id: \.self) { position in
-                                lyricRow(
-                                    lines[position],
-                                    isCurrent: position == index,
-                                    width: width)
-                                    .offset(y: CGFloat(position) * lyricLineHeight)
-                            }
-                        }
-                        .frame(width: width, alignment: .topLeading)
-                        .offset(y: CGFloat(centre - index) * lyricLineHeight)
-                        .animation(.smooth(duration: 0.38), value: index)
-                    }
-                }
-                .frame(
+                LyricScrollColumn(
+                    lines: musicManager.lyricLines,
+                    index: musicManager.lyricIndex(at: currentElapsed),
                     width: width,
-                    height: lyricLineHeight * CGFloat(visible),
-                    alignment: .topLeading)
-                .clipped()
-                .opacity(musicManager.isPlaying ? 1 : 0)
+                    showsContext: showLyricsContext,
+                    isFetching: musicManager.isFetchingLyrics,
+                    isPlaying: musicManager.isPlaying
+                )
+                .equatable()
             }
         }
-    }
-
-    /// The lines actually worth building: the visible ones plus enough either side that a
-    /// line is already in place before it scrolls into view.
-    private func lyricNeighbourhood(of index: Int, count: Int) -> Range<Int> {
-        let lower = max(index - 2, 0)
-        let upper = min(index + 3, count)
-        return lower..<max(upper, lower)
-    }
-
-    /// Splits a leading singer tag off a lyric line.
-    ///
-    /// K-pop sheets on LRCLIB routinely name the member singing each line —
-    /// "(Moka) What are you doing in that". That is worth keeping, but it is an annotation
-    /// rather than part of the lyric, and at this width it was pushing the actual words off
-    /// the end. Only a parenthetical at the very start counts: mid-line parentheses are
-    /// backing vocals, which *are* lyrics, and a line that is nothing but a parenthetical
-    /// is an ad-lib rather than a tag.
-    private static func splitSingerTag(_ text: String) -> (tag: String, body: String) {
-        guard text.hasPrefix("("), let close = text.firstIndex(of: ")") else { return ("", text) }
-        let tag = String(text[...close])
-        let rest = text[text.index(after: close)...].drop { $0 == " " }
-        guard !rest.isEmpty, tag.count <= 24 else { return ("", text) }
-        return (tag + " ", String(rest))
-    }
-
-    private func lyricRow(_ text: String, isCurrent: Bool, width: CGFloat) -> some View {
-        let isPersian = text.unicodeScalars.contains { scalar in
-            let v = scalar.value
-            return v >= 0x0600 && v <= 0x06FF
-        }
-        let (tag, body) = Self.splitSingerTag(text)
-        let styled: Text = tag.isEmpty
-            ? Text(text)
-            : Text(tag).foregroundColor(.gray.opacity(isCurrent ? 0.6 : 0.4)) + Text(body)
-        return styled
-            .font(isPersian
-                ? .custom("Vazirmatn-Regular",
-                          size: NSFont.preferredFont(forTextStyle: .subheadline).pointSize)
-                : .subheadline)
-            .fontWeight(isCurrent ? .medium : .regular)
-            // The current line is the one being sung; its neighbours are context and should
-            // never compete with it.
-            .foregroundStyle(isCurrent ? Color.white : Color.gray.opacity(0.5))
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .frame(width: width, height: lyricLineHeight, alignment: .leading)
     }
 
     private var musicSlider: some View {
@@ -615,6 +549,96 @@ struct NotchHomeView: View {
         }
         .transition(.asymmetric(insertion: .opacity.combined(with: .move(edge: .top)), removal: .opacity))
         .blur(radius: vm.notchState == .closed ? 30 : 0)
+    }
+}
+
+/// Three lyric lines that scroll by exactly one line as the song advances.
+///
+/// Every line is placed at its own index times the line height and the whole column is
+/// offset to bring the current one to the middle, so an advance is a single movement.
+/// Three independent text transitions firing together do not read as a scroll — they read
+/// as a flicker.
+struct LyricScrollColumn: View, Equatable {
+    let lines: [String]
+    let index: Int
+    let width: CGFloat
+    let showsContext: Bool
+    let isFetching: Bool
+    let isPlaying: Bool
+
+    private var visibleRows: Int { showsContext ? 3 : 1 }
+    private var centreRow: Int { showsContext ? 1 : 0 }
+
+    var body: some View {
+        Group {
+            if lines.isEmpty {
+                row(isFetching ? "Loading lyrics…" : "No lyrics found", isCurrent: false)
+            } else {
+                ZStack(alignment: .topLeading) {
+                    ForEach(Array(neighbourhood), id: \.self) { position in
+                        row(lines[position], isCurrent: position == index)
+                            .offset(y: CGFloat(position) * lyricLineHeight)
+                    }
+                }
+                .frame(width: width, alignment: .topLeading)
+                .offset(y: CGFloat(centreRow - index) * lyricLineHeight)
+                .animation(.smooth(duration: 0.4), value: index)
+            }
+        }
+        .frame(
+            width: width,
+            height: lyricLineHeight * CGFloat(visibleRows),
+            alignment: .topLeading)
+        .clipped()
+        .opacity(isPlaying ? 1 : 0)
+    }
+
+    /// Only the lines worth building: the visible ones plus enough either side that a line
+    /// is already in place before it scrolls in. The rest would be hundreds of views
+    /// sitting outside the clip.
+    private var neighbourhood: Range<Int> {
+        let lower = max(index - 2, 0)
+        let upper = min(index + 3, lines.count)
+        return lower..<max(upper, lower)
+    }
+
+    /// Splits a leading singer tag off a lyric line.
+    ///
+    /// K-pop sheets on LRCLIB routinely name the member singing each line —
+    /// "(Moka) What are you doing in that". Worth keeping, but it is an annotation rather
+    /// than the lyric, and at this width it pushes the actual words off the end. Only a
+    /// parenthetical at the very start counts: mid-line parentheses are backing vocals,
+    /// which *are* lyrics, and a line that is nothing but a parenthetical is an ad-lib.
+    private static func splitSingerTag(_ text: String) -> (tag: String, body: String) {
+        guard text.hasPrefix("("), let close = text.firstIndex(of: ")") else { return ("", text) }
+        let tag = String(text[...close])
+        let rest = text[text.index(after: close)...].drop { $0 == " " }
+        guard !rest.isEmpty, tag.count <= 24 else { return ("", text) }
+        return (tag + " ", String(rest))
+    }
+
+    private func row(_ text: String, isCurrent: Bool) -> some View {
+        let isPersian = text.unicodeScalars.contains { scalar in
+            let v = scalar.value
+            return v >= 0x0600 && v <= 0x06FF
+        }
+        let (tag, body) = Self.splitSingerTag(text)
+        let styled: Text = tag.isEmpty
+            ? Text(text)
+            : Text(tag).foregroundColor(.gray.opacity(isCurrent ? 0.6 : 0.4)) + Text(body)
+
+        return styled
+            .font(isPersian
+                ? .custom("Vazirmatn-Regular",
+                          size: NSFont.preferredFont(forTextStyle: .subheadline).pointSize)
+                : .subheadline)
+            .fontWeight(isCurrent ? .medium : .regular)
+            // The current line is the one being sung; its neighbours are context and must
+            // never compete with it.
+            .foregroundStyle(isCurrent ? Color.white : Color.gray.opacity(0.5))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(width: width, height: lyricLineHeight, alignment: .leading)
     }
 }
 

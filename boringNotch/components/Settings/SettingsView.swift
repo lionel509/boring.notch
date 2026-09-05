@@ -684,6 +684,15 @@ struct Media: View {
             
             Section {
                 MusicSlotConfigurationView()
+                Defaults.Toggle(key: .showPlayerAppBadge) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show the player's badge on the artwork")
+                        Text("Which app the music is coming from. Worth it only if you use "
+                             + "more than one.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Defaults.Toggle(key: .albumArtShowsIdentity) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Title and artist on the artwork")
