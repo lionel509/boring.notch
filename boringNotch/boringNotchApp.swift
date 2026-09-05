@@ -280,6 +280,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        DictationManager.shared.start()
 
         // Scan once at launch so the first time the notch opens the figures are already
         // there, rather than appearing a beat later.

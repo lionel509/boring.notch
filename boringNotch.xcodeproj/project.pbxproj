@@ -115,6 +115,7 @@
 		BEEF000A000000000000A00A /* WeatherManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0009000000000000A009 /* WeatherManager.swift */; };
 		BEEF0008000000000000A008 /* NotchStatsStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0007000000000000A007 /* NotchStatsStrip.swift */; };
 		BEEF0006000000000000A006 /* RouterUsageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0005000000000000A005 /* RouterUsageManager.swift */; };
+		BEEF000E000000000000A00E /* DictationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF000D000000000000A00D /* DictationManager.swift */; };
 		BEEF0004000000000000A004 /* SystemStatsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0003000000000000A003 /* SystemStatsManager.swift */; };
 		9A0887322C7A693000C160EA /* TabButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0887312C7A693000C160EA /* TabButton.swift */; };
 		9A0887352C7AFF8E00C160EA /* TabSelectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0887342C7AFF8E00C160EA /* TabSelectionView.swift */; };
@@ -291,6 +292,7 @@
 		BEEF0009000000000000A009 /* WeatherManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherManager.swift; sourceTree = "<group>"; };
 		BEEF0007000000000000A007 /* NotchStatsStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchStatsStrip.swift; sourceTree = "<group>"; };
 		BEEF0005000000000000A005 /* RouterUsageManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouterUsageManager.swift; sourceTree = "<group>"; };
+		BEEF000D000000000000A00D /* DictationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationManager.swift; sourceTree = "<group>"; };
 		BEEF0003000000000000A003 /* SystemStatsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemStatsManager.swift; sourceTree = "<group>"; };
 		9A0887312C7A693000C160EA /* TabButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabButton.swift; sourceTree = "<group>"; };
 		9A0887342C7AFF8E00C160EA /* TabSelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabSelectionView.swift; sourceTree = "<group>"; };
@@ -524,6 +526,7 @@
 			children = (
 				BEEF0009000000000000A009 /* WeatherManager.swift */,
 				BEEF0005000000000000A005 /* RouterUsageManager.swift */,
+				BEEF000D000000000000A00D /* DictationManager.swift */,
 				BEEF0003000000000000A003 /* SystemStatsManager.swift */,
 				11D58EA12E760AE100FA8377 /* ImageService.swift */,
 				F38DE6472D8243E2008B5C6D /* BatteryActivityManager.swift */,
@@ -952,6 +955,7 @@
 				BEEF000A000000000000A00A /* WeatherManager.swift in Sources */,
 				BEEF0008000000000000A008 /* NotchStatsStrip.swift in Sources */,
 				BEEF0006000000000000A006 /* RouterUsageManager.swift in Sources */,
+				BEEF000E000000000000A00E /* DictationManager.swift in Sources */,
 				BEEF0004000000000000A004 /* SystemStatsManager.swift in Sources */,
 				1163988D2DF5CAB40052E6AF /* EventModel.swift in Sources */,
 				14D570B92C5E98A20011E668 /* drop.swift in Sources */,

@@ -128,6 +128,11 @@ extension Defaults.Keys {
     /// notch height, so it is a choice rather than the default shape.
     static let lyricsShowContext = Key<Bool>("lyricsShowContext", default: true)
 
+    /// Light the notch while an app is recording from the microphone.
+    static let showDictationActivity = Key<Bool>("showDictationActivity", default: true)
+
+    static let dictationDiagnostic = Key<String>("dictationDiagnostic", default: "not started")
+
     /// The badge for the app the music is coming from, on the artwork's corner. Off: it
     /// only earns its space when more than one player is actually in use.
     static let showPlayerAppBadge = Key<Bool>("showPlayerAppBadge", default: false)

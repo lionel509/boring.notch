@@ -21,6 +21,7 @@ struct ContentView: View {
 
     @ObservedObject var coordinator = BoringViewCoordinator.shared
     @ObservedObject var musicManager = MusicManager.shared
+    @ObservedObject var dictationManager = DictationManager.shared
     @ObservedObject var batteryModel = BatteryStatusViewModel.shared
     @ObservedObject var brightnessManager = BrightnessManager.shared
     @ObservedObject var volumeManager = VolumeManager.shared
@@ -361,6 +362,11 @@ struct ContentView: View {
                       } else if coordinator.sneakPeek.show && Defaults[.inlineHUD] && (coordinator.sneakPeek.type != .music) && (coordinator.sneakPeek.type != .battery) && vm.notchState == .closed {
                           InlineHUD(type: $coordinator.sneakPeek.type, value: $coordinator.sneakPeek.value, icon: $coordinator.sneakPeek.icon, hoverAnimation: $isHovering, gestureProgress: $gestureProgress)
                               .transition(.opacity)
+                      } else if vm.notchState == .closed && dictationManager.isRecording && Defaults[.showDictationActivity] && !vm.hideOnClosed {
+                          // Above music on purpose: recording is transient and the track is
+                          // not going anywhere.
+                          DictationLiveActivity()
+                              .transition(.opacity)
                       } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music) && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle) && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed {
                           MusicLiveActivity()
                               .frame(alignment: .center)
@@ -470,6 +476,36 @@ struct ContentView: View {
     }
 
     @ViewBuilder
+    /// Shown while an app holds the microphone: which app, and that it is live.
+    ///
+    /// macOS already puts an orange dot in the menu bar, but the dot does not say who. This
+    /// does, in the place your eye is already going.
+    func DictationLiveActivity() -> some View {
+        HStack {
+            Image(systemName: "mic.fill")
+                .foregroundStyle(.red)
+                .font(.system(size: max(9, vm.effectiveClosedNotchHeight - 18)))
+                .frame(
+                    width: max(0, vm.effectiveClosedNotchHeight - 12),
+                    height: max(0, vm.effectiveClosedNotchHeight - 12))
+
+            Rectangle()
+                .fill(.black)
+                .overlay(
+                    HStack(spacing: 5) {
+                        Spacer(minLength: vm.closedNotchSize.width)
+                        Text(dictationManager.recordingApp ?? "Listening")
+                            .font(.caption2)
+                            .foregroundStyle(.gray)
+                            .lineLimit(1)
+                        ListeningDots()
+                        Spacer(minLength: 0)
+                    }
+                )
+        }
+        .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
+    }
+
     func MusicLiveActivity() -> some View {
         HStack {
             Image(nsImage: musicManager.albumArt)
