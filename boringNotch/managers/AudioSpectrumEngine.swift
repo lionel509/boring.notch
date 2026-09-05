@@ -402,10 +402,18 @@ final class AudioSpectrumEngine {
             }
         }
 
-        // Normalise, then compress: raw magnitudes are far too spiky to look
-        // like anything, and loudness is perceived roughly logarithmically.
-        let scale = 2.0 / Float(fftSize)
-        vDSP.multiply(scale, magnitudes, result: &magnitudes)
+        // The FFT's 2/N scaling used to be applied across all 1024 bins with
+        // vDSP.multiply(scale, magnitudes, result: &magnitudes) -- reading and writing
+        // the same array, so Swift copied it to make it unique: an allocation and a
+        // 4 KB memmove every frame, which a profile showed was the largest single item
+        // on this thread.
+        //
+        // It is also unnecessary twice over. Every band is measured as a *difference*
+        // from the running reference, and a constant gain cancels out of a difference,
+        // so the bars do not depend on it at all. The one place the absolute level
+        // still matters is the silence gate, and there it is a single scalar added in
+        // the log domain rather than a multiply across the whole spectrum.
+        let scaleDb = 20 * log10f(2.0 / Float(fftSize))
 
         var peaks = [Float](repeating: 0, count: bandCount)
         var framePeak: Float = 0
@@ -419,7 +427,7 @@ final class AudioSpectrumEngine {
         // Peak-hold: instant attack, slow release.
         reference = framePeak > reference ? framePeak : reference * referenceRelease
 
-        let framePeakDb = 20 * log10f(max(framePeak, 1e-7))
+        let framePeakDb = 20 * log10f(max(framePeak, 1e-7)) + scaleDb
         let referenceDb = 20 * log10f(max(reference, 1e-7))
 
         var next = [Float](repeating: 0, count: bandCount)
