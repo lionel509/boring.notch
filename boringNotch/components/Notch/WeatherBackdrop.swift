@@ -47,6 +47,10 @@ struct WeatherBackdrop: View {
     let useDesktopBlur: Bool
     /// 0 at sunrise, 1 at sunset. Drives where the sun sits and how warm it is.
     let sunProgress: Double
+    /// 0 and 1 new, 0.25 first quarter, 0.5 full. Drives the terminator.
+    let moonPhase: Double
+    /// 0 at moonrise, 1 at moonset; nil while the moon is below the horizon.
+    let moonProgress: Double?
 
     /// How often the scene redraws.
     ///
@@ -135,6 +139,7 @@ struct WeatherBackdrop: View {
             if condition == .clear || condition == .cloudy { drawSun(&context, size, time) }
         } else {
             drawStars(&context, size, time)
+            if condition == .clear || condition == .cloudy { drawMoon(&context, size) }
             drawShootingStar(&context, size, time)
         }
 
@@ -180,6 +185,71 @@ struct WeatherBackdrop: View {
                     .clear,
                 ]),
                 center: centre, startRadius: 0, endRadius: radius))
+    }
+
+    /// The moon, at tonight's real phase and in roughly the right part of the sky.
+    ///
+    /// Unlike the sun this is a disc rather than a bloom, because the shape is the whole
+    /// point — a gibbous moon that renders as a soft circle is just a dim sun. The lit
+    /// region is the limb on one side closed by the terminator on the other, where the
+    /// terminator is an ellipse whose width is cos(2*pi*phase): +1 at new (the two curves
+    /// coincide and nothing is drawn, which is correct), 0 at the quarters (a straight
+    /// edge, half lit), -1 at full (a complete circle). Waning phases mirror, so the lit
+    /// side swaps over as it should.
+    private func drawMoon(_ context: inout GraphicsContext, _ size: CGSize) {
+        guard let progress = moonProgress else { return }
+
+        let arc = sin(min(max(progress, 0), 1) * .pi)
+        let centre = CGPoint(
+            x: size.width * (0.14 + 0.72 * progress),
+            y: size.height * (0.92 - 0.72 * arc))
+        let radius = size.height * 0.11
+
+        // Fades out at the horizon rather than clipping off the bottom edge.
+        let visibility = min(arc * 2.4, 1)
+        // A sliver carries far less light than a full moon, and drawing them equally bright
+        // is the tell that a moon is decorative rather than observed.
+        let lit = (1 - cos(2 * .pi * moonPhase)) / 2
+        guard lit > 0.02, visibility > 0.01 else { return }
+
+        let glow = radius * 3.2
+        context.fill(
+            Path(ellipseIn: CGRect(
+                x: centre.x - glow, y: centre.y - glow, width: glow * 2, height: glow * 2)),
+            with: .radialGradient(
+                Gradient(colors: [
+                    Color(red: 0.85, green: 0.88, blue: 1.0)
+                        .opacity(0.22 * lit * visibility * intensity),
+                    .clear,
+                ]),
+                center: centre, startRadius: 0, endRadius: glow))
+
+        let terminatorWidth = cos(2 * .pi * moonPhase)
+        let mirror: Double = moonPhase > 0.5 ? -1 : 1
+        let steps = 28
+
+        var disc = Path()
+        // The lit limb: the half of the circle facing the sun.
+        for step in 0...steps {
+            let angle = -Double.pi / 2 + Double.pi * Double(step) / Double(steps)
+            let point = CGPoint(
+                x: centre.x + mirror * radius * cos(angle),
+                y: centre.y + radius * sin(angle))
+            if step == 0 { disc.move(to: point) } else { disc.addLine(to: point) }
+        }
+        // The terminator, back the other way.
+        for step in 0...steps {
+            let angle = Double.pi / 2 - Double.pi * Double(step) / Double(steps)
+            disc.addLine(to: CGPoint(
+                x: centre.x + mirror * radius * terminatorWidth * cos(angle),
+                y: centre.y + radius * sin(angle)))
+        }
+        disc.closeSubpath()
+
+        context.fill(
+            disc,
+            with: .color(Color(red: 0.96, green: 0.96, blue: 0.92)
+                .opacity(0.82 * visibility * intensity)))
     }
 
     private func drawStars(_ context: inout GraphicsContext, _ size: CGSize, _ time: Double) {

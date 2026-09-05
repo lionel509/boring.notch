@@ -16,10 +16,50 @@ struct MusicPlayerView: View {
     @EnvironmentObject var vm: BoringViewModel
     let albumArtNamespace: Namespace.ID
 
+    /// Laid out like Spotify's now-playing bar: a small square of artwork with the track
+    /// identity beside it, and the transport and scrubber spanning the full width below.
+    ///
+    /// The artwork used to have no explicit size at all — it was `aspectRatio(1, .fit)`
+    /// inside an HStack, so it grew to whatever the column beside it was tall, which is how
+    /// it ended up around 90 pt and dominating a 370 pt column. Sizing it here also frees
+    /// the scrubber, which was previously squeezed into the space left over beside it.
     var body: some View {
-        HStack {
-            AlbumArtView(vm: vm, albumArtNamespace: albumArtNamespace).padding(.all, 5)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                AlbumArtView(vm: vm, albumArtNamespace: albumArtNamespace)
+                    .frame(width: 52, height: 52)
+                TrackIdentityView()
+                    .frame(height: 52)
+            }
             MusicControlsView().drawingGroup().compositingGroup()
+        }
+        .padding(.leading, 5)
+        .padding(.top, 4)
+    }
+}
+
+/// Title over artist, beside the artwork.
+///
+/// The artist drops to `.subheadline` and stays grey: in Spotify's bar the two lines are
+/// deliberately unequal, and giving both `.headline` — which is what this did — makes the
+/// pair read as two titles.
+struct TrackIdentityView: View {
+    @ObservedObject var musicManager = MusicManager.shared
+
+    var body: some View {
+        GeometryReader { geo in
+            VStack(alignment: .leading, spacing: 1) {
+                MarqueeText(
+                    $musicManager.songTitle, font: .headline, nsFont: .headline,
+                    textColor: .white, frameWidth: geo.size.width)
+                MarqueeText(
+                    $musicManager.artistName, font: .subheadline, nsFont: .subheadline,
+                    textColor: Defaults[.playerColorTinting]
+                        ? Color(nsColor: musicManager.avgColor)
+                            .ensureMinimumBrightness(factor: 0.6) : .gray,
+                    frameWidth: geo.size.width)
+            }
+            .frame(maxHeight: .infinity, alignment: .center)
         }
     }
 }
@@ -120,85 +160,69 @@ struct MusicControlsView: View {
     @Default(.musicControlSlotLimit) private var slotLimit
 
     var body: some View {
-        VStack(alignment: .leading) {
-            songInfoAndSlider
-            slotToolbar
+        GeometryReader { geo in
+            // Spotify's order: the transport row sits above the scrubber, not below it.
+            VStack(alignment: .leading, spacing: 2) {
+                slotToolbar
+                musicSlider
+                lyricsLine(width: geo.size.width)
+            }
         }
         .buttonStyle(PlainButtonStyle())
     }
 
-    private var songInfoAndSlider: some View {
-        GeometryReader { geo in
-            VStack(alignment: .leading, spacing: 4) {
-                songInfo(width: geo.size.width)
-                musicSlider
-            }
-        }
-        .padding(.top, 10)
-        .padding(.leading, 5)
-    }
-
-    private func songInfo(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MarqueeText(
-                $musicManager.songTitle, font: .headline, nsFont: .headline, textColor: .white,
-                frameWidth: width)
-            MarqueeText(
-                $musicManager.artistName,
-                font: .headline,
-                nsFont: .headline,
-                textColor: Defaults[.playerColorTinting]
-                    ? Color(nsColor: musicManager.avgColor)
-                        .ensureMinimumBrightness(factor: 0.6) : .gray,
-                frameWidth: width
-            )
-            .fontWeight(.medium)
-            if Defaults[.enableLyrics] {
-                TimelineView(.animation(minimumInterval: 0.25)) { timeline in
-                    let currentElapsed: Double = {
-                        guard musicManager.isPlaying else { return musicManager.elapsedTime }
-                        let delta = timeline.date.timeIntervalSince(musicManager.timestampDate)
-                        let progressed = musicManager.elapsedTime + (delta * musicManager.playbackRate)
-                        return min(max(progressed, 0), musicManager.songDuration)
-                    }()
-                    let line: String = {
-                        if musicManager.isFetchingLyrics { return "Loading lyrics…" }
-                        if !musicManager.syncedLyrics.isEmpty {
-                            return musicManager.lyricLine(at: currentElapsed)
-                        }
-                        let estimated = musicManager.estimatedLyricLine(at: currentElapsed)
-                        return estimated.isEmpty ? "No lyrics found" : estimated
-                    }()
-                    let isPersian = line.unicodeScalars.contains { scalar in
-                        let v = scalar.value
-                        return v >= 0x0600 && v <= 0x06FF
+    /// The lyric line, if enabled.
+    ///
+    /// Spotify's bar carries only title and artist, so the lyric is the one thing here
+    /// it has no place for. It goes under the scrubber where it gets the full width,
+    /// rather than competing with the title inside the identity cluster.
+    @ViewBuilder
+    private func lyricsLine(width: CGFloat) -> some View {
+        if Defaults[.enableLyrics] {
+            TimelineView(.animation(minimumInterval: 0.25)) { timeline in
+                let currentElapsed: Double = {
+                    guard musicManager.isPlaying else { return musicManager.elapsedTime }
+                    let delta = timeline.date.timeIntervalSince(musicManager.timestampDate)
+                    let progressed = musicManager.elapsedTime + (delta * musicManager.playbackRate)
+                    return min(max(progressed, 0), musicManager.songDuration)
+                }()
+                let line: String = {
+                    if musicManager.isFetchingLyrics { return "Loading lyrics…" }
+                    if !musicManager.syncedLyrics.isEmpty {
+                        return musicManager.lyricLine(at: currentElapsed)
                     }
-                    // Each line rolls up as the next arrives, the way a lyrics sheet
-                    // advances, rather than swapping in place. Keyed on the line itself so
-                    // SwiftUI treats a new lyric as a new view — the TimelineView ticks
-                    // four times a second, but the id only changes when the words do.
-                    ZStack(alignment: .leading) {
-                        MarqueeText(
-                            .constant(line),
-                            font: .subheadline,
-                            nsFont: .subheadline,
-                            textColor: musicManager.isFetchingLyrics ? .gray.opacity(0.7) : .gray,
-                            frameWidth: width
-                        )
-                        .font(isPersian ? .custom("Vazirmatn-Regular", size: NSFont.preferredFont(forTextStyle: .subheadline).pointSize) : .subheadline)
-                        .lineLimit(1)
-                        .id(line)
-                        .transition(
-                            .asymmetric(
-                                insertion: .move(edge: .bottom).combined(with: .opacity),
-                                removal: .move(edge: .top).combined(with: .opacity)))
-                    }
-                    // Clipped so a line on its way out does not paint over the artist above
-                    // or the scrubber below while it travels.
-                    .clipped()
-                    .animation(.smooth(duration: 0.32), value: line)
-                    .opacity(musicManager.isPlaying ? 1 : 0)
+                    let estimated = musicManager.estimatedLyricLine(at: currentElapsed)
+                    return estimated.isEmpty ? "No lyrics found" : estimated
+                }()
+                let isPersian = line.unicodeScalars.contains { scalar in
+                    let v = scalar.value
+                    return v >= 0x0600 && v <= 0x06FF
                 }
+                // Each line rolls up as the next arrives, the way a lyrics sheet
+                // advances, rather than swapping in place. Keyed on the line itself so
+                // SwiftUI treats a new lyric as a new view — the TimelineView ticks
+                // four times a second, but the id only changes when the words do.
+                ZStack(alignment: .leading) {
+                    MarqueeText(
+                        .constant(line),
+                        font: .subheadline,
+                        nsFont: .subheadline,
+                        textColor: musicManager.isFetchingLyrics ? .gray.opacity(0.7) : .gray,
+                        frameWidth: width
+                    )
+                    .font(isPersian ? .custom("Vazirmatn-Regular", size: NSFont.preferredFont(forTextStyle: .subheadline).pointSize) : .subheadline)
+                    .lineLimit(1)
+                    .id(line)
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .bottom).combined(with: .opacity),
+                            removal: .move(edge: .top).combined(with: .opacity)))
+                }
+                // Clipped so a line on its way out does not paint over the artist above
+                // or the scrubber below while it travels.
+                .clipped()
+                .animation(.smooth(duration: 0.32), value: line)
+                .opacity(musicManager.isPlaying ? 1 : 0)
             }
         }
     }
@@ -516,6 +540,7 @@ struct NotchHomeView: View {
 }
 
 struct MusicSliderView: View {
+    @Default(.showRemainingTime) private var showRemainingTime
     @Binding var sliderValue: Double
     @Binding var duration: Double
     @Binding var lastDragged: Date
@@ -546,7 +571,15 @@ struct MusicSliderView: View {
             HStack {
                 Text(timeString(from: sliderValue))
                 Spacer()
-                Text(timeString(from: duration))
+                // Click to swap between time left and total length, the way Spotify's own
+                // label does. Its own tap target, so it cannot steal a scrub.
+                Text(
+                    showRemainingTime
+                        ? "-" + timeString(from: max(0, duration - sliderValue))
+                        : timeString(from: duration)
+                )
+                .contentTransition(.numericText())
+                .onTapGesture { showRemainingTime.toggle() }
             }
             .fontWeight(.medium)
             .foregroundColor(

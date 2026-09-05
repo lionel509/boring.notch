@@ -102,6 +102,52 @@ final class WeatherManager: ObservableObject {
         return min(max(now.timeIntervalSince(rise) / span, 0), 1)
     }
 
+    /// How far through the lunar cycle we are: 0 and 1 are new, 0.25 first quarter,
+    /// 0.5 full, 0.75 last quarter.
+    ///
+    /// Pure arithmetic off the clock — the synodic month is 29.530588853 days and
+    /// 2000-01-06 18:14 UTC was a new moon, so this needs no network, no key and no
+    /// permission, which is the whole reason it is worth drawing. It ignores the small
+    /// libration wobble in the true cycle; over a human lifetime the drift is under a day,
+    /// which is far below what a 14 pt disc can show.
+    var moonPhase: Double {
+        let newMoonEpoch = Date(timeIntervalSince1970: 947_182_440)
+        let synodicMonth: TimeInterval = 29.530588853 * 86_400
+        let elapsed = Date().timeIntervalSince(newMoonEpoch)
+        let cycles = elapsed / synodicMonth
+        return cycles - floor(cycles)
+    }
+
+    /// Where the moon sits along its arc, 0 rising and 1 setting. Nil while it is below
+    /// the horizon, which is most of the night for a young or old moon.
+    ///
+    /// The moon's elongation from the sun *is* its phase, so its daily arc is the sun's
+    /// shifted by exactly that: a new moon rides with the sun and is up in daylight, a full
+    /// moon is opposite it and highest at midnight. That relationship is real, so tracking
+    /// it costs one subtraction and beats parking a moon in the corner all night.
+    var moonProgress: Double? {
+        let now = Date()
+        let calendar = Calendar.current
+
+        let rise = conditions?.sunrise
+            ?? calendar.date(bySettingHour: 6, minute: 30, second: 0, of: now)
+        let set = conditions?.sunset
+            ?? calendar.date(bySettingHour: 19, minute: 30, second: 0, of: now)
+        guard let rise, let set, set > rise else { return nil }
+
+        // Solar noon, and how far past it we are as a fraction of the whole day.
+        let noon = rise.addingTimeInterval(set.timeIntervalSince(rise) / 2)
+        let sinceNoon = now.timeIntervalSince(noon) / 86_400
+        // The moon trails the sun by its phase. Wrapped to -0.5...0.5 so 0 is the moon's
+        // own high point and +/-0.5 is its low point.
+        var fromMoonHigh = sinceNoon - moonPhase
+        fromMoonHigh -= (fromMoonHigh + 0.5).rounded(.down)
+
+        // Up for the half cycle centred on its high point; the edges are the horizon.
+        guard abs(fromMoonHigh) < 0.25 else { return nil }
+        return fromMoonHigh * 2 + 0.5
+    }
+
     func refresh() {
         guard !isFetching else { return }
         if let conditions, Date().timeIntervalSince(conditions.fetchedAt) < Self.cacheLifetime {
