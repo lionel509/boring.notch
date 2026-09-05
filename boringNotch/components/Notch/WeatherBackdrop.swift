@@ -248,6 +248,8 @@ struct WeatherBackdrop: View {
             // cut off their feet, which is what puts them in the city rather than on it.
             drawSearchlights(&context, size, time, baseY: skylineTop + 6,
                              ceiling: size.height * Self.notchBlend)
+            drawLasers(&context, size, time, baseY: skylineTop + 4,
+                       ceiling: size.height * Self.notchBlend)
             drawCity(&context, size, time, waterY: waterY)
         }
 
@@ -581,8 +583,16 @@ struct WeatherBackdrop: View {
 
         // Mirror about the waterline, and squash a little: a reflection seen at a low
         // angle across water is always shorter than the thing it reflects.
-        let mirror = CGAffineTransform(translationX: 0, y: 2 * waterY)
-            .scaledBy(x: 1, y: -0.72)
+        //
+        // The squash has to be paid for in the translation. `scaledBy` applies the scale
+        // *before* the existing transform, so a plain 2 * waterY translation only mirrors
+        // correctly at a scale of exactly -1 — with the 0.72 squash it left every
+        // reflection sitting a fifth of the waterline too low, which is why the neon
+        // looked like it belonged to no building in particular. Solving
+        // y' = waterY - 0.72 * (y - waterY) gives the factor below.
+        let squash: CGFloat = 0.72
+        let mirror = CGAffineTransform(translationX: 0, y: waterY * (1 + squash))
+            .scaledBy(x: 1, y: -squash)
 
         // A copy of the context, clipped to the water, so nothing mirrored can climb
         // back out above the waterline.
@@ -628,6 +638,7 @@ struct WeatherBackdrop: View {
                     endPoint: CGPoint(x: 0, y: size.height)))
         }
 
+        drawPromenade(&context, size, time, waterY: waterY)
         drawBoats(&context, size, time, waterY: waterY, depth: depth)
 
         // The surface itself: a few slow bands of light lying across the water. One path,
@@ -806,6 +817,102 @@ struct WeatherBackdrop: View {
         }
     }
 
+    /// The waterfront itself: a broken line of light along the quay.
+    ///
+    /// Every neon city on water has this and it is most of why the photographs look the
+    /// way they do — signs and windows are up in the buildings, but the strip right at
+    /// the water is bars and restaurants and streetlights, and it is the brightest line
+    /// in the frame. Drawn as segments rather than a rule, because a continuous line
+    /// reads as a light fitting and a broken one reads as a street.
+    private func drawPromenade(
+        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double, waterY: CGFloat
+    ) {
+        guard !isDay else { return }
+        let palette = neonPalette
+
+        var x: CGFloat = -6
+        var index = 0
+        while x < size.width + 6 && index < 26 {
+            let seed = Double(index) * 6.41
+            let width = 6 + CGFloat(fract(sin(seed * 12.9) * 4471.3)) * 16
+            let gap = 3 + CGFloat(fract(sin(seed * 44.7) * 2217.7)) * 9
+
+            // Most of the strip is warm streetlight; a third of it is a sign.
+            let pick = fract(sin(seed * 71.9) * 8812.3)
+            let color = pick > 0.66
+                ? palette[Int(pick * Double(palette.count)) % palette.count]
+                : Color(red: 1.0, green: 0.80, blue: 0.48)
+            let flicker = 0.78 + 0.22 * (0.5 + 0.5 * sin(time * 1.7 + Double(index)))
+
+            let bar = CGRect(x: x, y: waterY - 2.2, width: width, height: 1.6)
+            context.fill(
+                Path(ellipseIn: bar.insetBy(dx: -width * 0.18, dy: -3.4)),
+                with: .radialGradient(
+                    Gradient(colors: [color.opacity(0.22 * flicker * intensity), .clear]),
+                    center: CGPoint(x: bar.midX, y: bar.midY),
+                    startRadius: 0, endRadius: width * 0.7))
+            context.fill(
+                Path(roundedRect: bar, cornerRadius: 0.8),
+                with: .color(color.opacity(0.72 * flicker * intensity)))
+
+            x += width + gap
+            index += 1
+        }
+    }
+
+    /// A laser fan, off a rooftop.
+    ///
+    /// The counterpart to the searchlights rather than more of them: a searchlight is a
+    /// wide soft wedge of lit air, a laser is a hard thin line that does not spread. Both
+    /// at once is what a skyline looks like on a night when something is on — the beams
+    /// are the venue, the lasers are the show.
+    ///
+    /// Five lines from one point, fanning and sweeping together, because a laser rig is
+    /// one machine. They pulse as a set for the same reason.
+    private func drawLasers(
+        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double,
+        baseY: CGFloat, ceiling: CGFloat
+    ) {
+        guard !isDay else { return }
+
+        // On for a while, off for longer. A rig that never stops is wallpaper.
+        let period = 26.0
+        let cycle = time.truncatingRemainder(dividingBy: period)
+        guard cycle < 9.0 else { return }
+        let envelope = min(1, min(cycle, 9.0 - cycle) / 1.4)
+
+        let origin = CGPoint(x: size.width * 0.68, y: baseY)
+        let reach = origin.y - ceiling * 0.4
+        let sweep = sin(time * 0.55) * 0.42
+        let spread = 0.20 + 0.10 * sin(time * 0.31)
+        let palette = neonPalette
+
+        for index in 0..<5 {
+            let angle = sweep + (Double(index) - 2) * spread
+            let tip = CGPoint(
+                x: origin.x + CGFloat(sin(angle)) * reach,
+                y: origin.y - CGFloat(cos(angle)) * reach)
+
+            var beam = Path()
+            beam.move(to: origin)
+            beam.addLine(to: tip)
+
+            let color = palette[index % palette.count]
+            // Fades along its length rather than ending: a laser you can see is dust in
+            // the air, and there is less of it higher up.
+            context.stroke(
+                beam,
+                with: .linearGradient(
+                    Gradient(colors: [
+                        color.opacity(0.55 * envelope * intensity),
+                        color.opacity(0.16 * envelope * intensity),
+                        .clear,
+                    ]),
+                    startPoint: origin, endPoint: tip),
+                style: StrokeStyle(lineWidth: 0.9, lineCap: .round))
+        }
+    }
+
     // MARK: Harbour traffic
 
     /// Boats crossing the water: a hull, a warm cabin light, a wake, and the light's
@@ -819,10 +926,10 @@ struct WeatherBackdrop: View {
         _ context: inout GraphicsContext, _ size: CGSize, _ time: Double,
         waterY: CGFloat, depth: CGFloat
     ) {
-        for index in 0..<2 {
+        for index in 0..<3 {
             let seed = Double(index) * 23.9
-            let period = 84.0 + fract(sin(seed * 11.3) * 6613.1) * 54.0
-            let crossing = 74.0
+            let period = 38.0 + fract(sin(seed * 11.3) * 6613.1) * 26.0
+            let crossing = 34.0
             let cycle = (time + fract(sin(seed * 63.7) * 2219.9) * period)
                 .truncatingRemainder(dividingBy: period)
             guard cycle < crossing else { continue }
@@ -839,8 +946,8 @@ struct WeatherBackdrop: View {
             let x = size.width * CGFloat(eastbound ? progress : 1 - progress)
             let fade = min(1, sin(progress * .pi) * 4) * intensity
 
-            let length = 11 * scale
-            let height = 2.6 * scale
+            let length = 13 * scale
+            let height = 3.0 * scale
 
             // Hull: flat deck, curved underside, a stub of a wheelhouse.
             var hull = Path()
@@ -897,7 +1004,20 @@ struct WeatherBackdrop: View {
         var rect: CGRect
         var color: Color
         var brightness: Double
-        var vertical: Bool
+        var kind: Kind
+
+        /// The four shapes a sign actually takes on a real skyline.
+        enum Kind {
+            /// A blade hung down the corner of a narrow tower.
+            case blade
+            /// A band across a facade.
+            case band
+            /// A billboard standing on the roof, on legs. The one that says Tianjin
+            /// rather than Anywhere.
+            case rooftop
+            /// A whole storey lit in one colour — the bar floor, the restaurant floor.
+            case storey
+        }
     }
 
     /// The colours neon comes in when nothing is playing. Saturated, because a
@@ -952,7 +1072,7 @@ struct WeatherBackdrop: View {
         for (index, building) in buildings.enumerated() {
             let seed = Double(index) * 13.77
             let pick = fract(sin(seed * 27.31) * 6641.9)
-            guard pick > 0.66, signs.count < 5 else { continue }
+            guard pick > 0.30, signs.count < 9 else { continue }
 
             let color = neonPalette[
                 Int(fract(sin(seed * 55.9) * 3319.1) * Double(neonPalette.count))
@@ -969,25 +1089,48 @@ struct WeatherBackdrop: View {
                 if cycle < 0.09 || (cycle > 0.17 && cycle < 0.23) { brightness = 0.18 }
             }
 
-            let vertical = building.width < 19 && building.height > 26
+            let shape = fract(sin(seed * 88.1) * 4413.7)
+            let kind: NeonSign.Kind
+            if building.width < 19 && building.height > 26 {
+                kind = .blade
+            } else if shape > 0.74 && building.height > 22 {
+                kind = .rooftop
+            } else if shape > 0.46 {
+                kind = .storey
+            } else {
+                kind = .band
+            }
+
             let rect: CGRect
-            if vertical {
+            switch kind {
+            case .blade:
                 rect = CGRect(
                     x: building.midX - 1.3,
-                    y: building.minY + building.height * 0.16,
+                    y: building.minY + building.height * 0.14,
                     width: 2.6,
-                    height: min(building.height * 0.46, 22))
-            } else {
-                let width = building.width * 0.62
+                    height: min(building.height * 0.5, 24))
+            case .band:
+                let width = building.width * 0.64
                 rect = CGRect(
                     x: building.midX - width / 2,
                     y: building.minY + building.height * CGFloat(0.16 + pick * 0.3),
-                    width: width,
-                    height: 2.6)
+                    width: width, height: 2.6)
+            case .rooftop:
+                let width = building.width * 0.78
+                rect = CGRect(
+                    x: building.midX - width / 2,
+                    y: building.minY - 5.5,
+                    width: width, height: 3.4)
+            case .storey:
+                // Inset from the edges, because a lit floor is windows, not paint.
+                rect = CGRect(
+                    x: building.minX + 1.4,
+                    y: building.minY + building.height * CGFloat(0.3 + pick * 0.45),
+                    width: building.width - 2.8, height: 2.2)
             }
 
             signs.append(NeonSign(
-                rect: rect, color: color, brightness: brightness, vertical: vertical))
+                rect: rect, color: color, brightness: brightness, kind: kind))
         }
         return signs
     }
@@ -996,9 +1139,10 @@ struct WeatherBackdrop: View {
     /// and a light source with hard edges and no spill reads as a sticker.
     private func drawNeon(_ context: inout GraphicsContext, signs: [NeonSign]) {
         for sign in signs {
+            let tall = sign.kind == .blade
             let bloom = sign.rect.insetBy(
-                dx: -sign.rect.width * (sign.vertical ? 3.4 : 0.42) - 5,
-                dy: -sign.rect.height * (sign.vertical ? 0.42 : 3.4) - 5)
+                dx: -sign.rect.width * (tall ? 3.4 : 0.42) - 5,
+                dy: -sign.rect.height * (tall ? 0.42 : 3.4) - 5)
 
             context.fill(
                 Path(ellipseIn: bloom),
@@ -1014,6 +1158,21 @@ struct WeatherBackdrop: View {
             context.fill(
                 Path(roundedRect: sign.rect, cornerRadius: 1.3),
                 with: .color(sign.color.opacity(0.92 * sign.brightness * intensity)))
+
+            // A billboard is bolted to something. Two thin legs down to the roof is the
+            // whole difference between a sign standing on a building and one floating
+            // above it.
+            guard sign.kind == .rooftop else { continue }
+            var legs = Path()
+            for side in [0.25, 0.75] {
+                let x = sign.rect.minX + sign.rect.width * CGFloat(side)
+                legs.move(to: CGPoint(x: x, y: sign.rect.maxY))
+                legs.addLine(to: CGPoint(x: x, y: sign.rect.maxY + 5.5))
+            }
+            context.stroke(
+                legs,
+                with: .color(.black.opacity(0.75 * intensity)),
+                style: StrokeStyle(lineWidth: 0.7))
         }
     }
 
