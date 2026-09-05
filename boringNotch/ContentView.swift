@@ -87,6 +87,22 @@ struct ContentView: View {
         return chinWidth
     }
 
+    /// Hoisted out of the view builder it is used in: with eleven arguments inline, the
+    /// type checker gave up on the enclosing expression rather than on this one.
+    private var weatherBackdrop: some View {
+        WeatherBackdrop(
+            condition: weather.conditions?.condition ?? .clear,
+            isDay: weather.conditions?.isDay ?? weather.isDaytimeByClock,
+            intensity: weatherIntensity,
+            useDesktopBlur: weatherUseDesktopBlur,
+            sunProgress: weather.sunProgress,
+            moonPhase: weather.moonPhase,
+            moonProgress: weather.moonProgress,
+            showCity: Defaults[.weatherShowCity],
+            accent: musicManager.avgColor,
+            bottomInset: Defaults[.showStatsStrip] ? statsStripHeight : 0)
+    }
+
     var body: some View {
         // Calculate scale based on gesture progress only
         let gestureScale: CGFloat = {
@@ -113,16 +129,7 @@ struct ContentView: View {
                             // anything moving in it is a distraction — and nothing should
                             // animate behind a shape nobody is looking at.
                             if showWeatherBackdrop, vm.notchState == .open {
-                                WeatherBackdrop(
-                                    condition: weather.conditions?.condition ?? .clear,
-                                    isDay: weather.conditions?.isDay ?? weather.isDaytimeByClock,
-                                    intensity: weatherIntensity,
-                                    useDesktopBlur: weatherUseDesktopBlur,
-                                    sunProgress: weather.sunProgress,
-                                    moonPhase: weather.moonPhase,
-                                    moonProgress: weather.moonProgress,
-                                    showCity: Defaults[.weatherShowCity],
-                                    accent: musicManager.avgColor)
+                                weatherBackdrop
                             } else {
                                 Color.black
                             }

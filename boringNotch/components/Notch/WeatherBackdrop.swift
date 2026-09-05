@@ -55,6 +55,14 @@ struct WeatherBackdrop: View {
     let showCity: Bool
     /// The album art's average colour, which the neon takes its hue from.
     let accent: NSColor
+    /// Height at the bottom of the panel that belongs to something else — the stats row.
+    ///
+    /// The scene has to compose for the space it is actually seen in. Without this the
+    /// waterline, the promenade and the reflection all landed inside the stats row, which
+    /// put the brightest horizontal feature in the whole scene exactly along that row's
+    /// top edge — and a bright line across the panel at the same height as a dark band
+    /// reads as a box sitting on the notch, however carefully the box itself is shaped.
+    let bottomInset: CGFloat
 
     /// How often the scene redraws.
     ///
@@ -169,7 +177,7 @@ struct WeatherBackdrop: View {
                 .init(color: .black, location: 0),
                 .init(color: .black, location: Self.notchBlend * 0.75),
                 .init(color: skyColors[0], location: Self.skyTop),
-                .init(color: skyColors[1], location: Self.waterline),
+                .init(color: skyColors[1], location: waterlineFraction),
                 .init(color: waterColor, location: 1),
             ],
             startPoint: .top,
@@ -209,9 +217,16 @@ struct WeatherBackdrop: View {
     private static let notchBlend: CGFloat = 0.20
     /// Where the sky has finished emerging from that black.
     private static let skyTop: CGFloat = 0.42
-    /// Where the land stops and the harbour starts. Buildings stand on this line and are
-    /// reflected below it.
+    /// Where the land stops and the harbour starts, as a fraction of the *stage* — the
+    /// panel minus `bottomInset`. Buildings stand on this line and are reflected below it.
     private static let waterline: CGFloat = 0.82
+
+    /// The same line as a fraction of the whole panel, for the sky gradient, which has no
+    /// geometry of its own to measure.
+    private var waterlineFraction: CGFloat {
+        let panel = max(openNotchSize.height, 1)
+        return max(panel - bottomInset, 1) / panel * Self.waterline
+    }
 
     /// Water is the sky, darker and colder — which is most of why a reflection reads as
     /// water rather than as a second city printed upside down.
@@ -250,7 +265,8 @@ struct WeatherBackdrop: View {
     // MARK: - Scene
 
     private func draw(in context: inout GraphicsContext, size: CGSize, time: Double) {
-        let waterY = size.height * Self.waterline
+        // The stage is the panel minus whatever sits on top of its bottom edge.
+        let waterY = (size.height - bottomInset) * Self.waterline
         // The rooftops. Buildings stand on the waterline and rise into the lower sky.
         let skylineTop = waterY - size.height * 0.30
 
@@ -730,13 +746,25 @@ struct WeatherBackdrop: View {
             style: StrokeStyle(lineWidth: 0.7, lineCap: .round))
 
         // A bright line right at the waterline, where the city's light meets the water.
+        // The line where the city's light meets the water, faded out at both ends rather
+        // than drawn edge to edge: a full-width rule across a panel is an edge, whatever
+        // it was meant to be.
+        let edgeColor = Color(red: 1.0, green: 0.78, blue: 0.48)
+            .opacity((0.10 + 0.08 * nightfall) * intensity)
         var edge = Path()
         edge.move(to: CGPoint(x: 0, y: waterY))
         edge.addLine(to: CGPoint(x: size.width, y: waterY))
         context.stroke(
             edge,
-            with: .color(Color(red: 1.0, green: 0.78, blue: 0.48)
-                .opacity((0.10 + 0.08 * nightfall) * intensity)),
+            with: .linearGradient(
+                Gradient(stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: edgeColor, location: 0.22),
+                    .init(color: edgeColor, location: 0.78),
+                    .init(color: .clear, location: 1),
+                ]),
+                startPoint: CGPoint(x: 0, y: waterY),
+                endPoint: CGPoint(x: size.width, y: waterY)),
             style: StrokeStyle(lineWidth: 0.8))
     }
 
