@@ -17,6 +17,16 @@ class AudioSpectrum: NSView {
     private static let barWidth: CGFloat = 1.7
     private static let spacing: CGFloat = 1.3
 
+    /// The height a bar sits at with nothing to show.
+    ///
+    /// `setupBars` has to *apply* this and not merely record it. A layer built without
+    /// a transform draws at its full frame height, so any view created at a moment when
+    /// no new frame was coming opened at 100% and stayed there -- which is exactly what
+    /// a track cast to another device looks like from here: the app reports playing, the
+    /// tap opens, and the engine then publishes nothing because every frame of silence
+    /// is identical to the last one.
+    private static let restingScale: CGFloat = 0.18
+
     private var barLayers: [CAShapeLayer] = []
     private var barScales: [CGFloat] = []
     private var isPlaying: Bool = true
@@ -56,8 +66,9 @@ class AudioSpectrum: NSView {
                                     xRadius: barWidth / 2,
                                     yRadius: barWidth / 2)
             barLayer.path = path.cgPath
+            barLayer.transform = CATransform3DMakeScale(1, Self.restingScale, 1)
             barLayers.append(barLayer)
-            barScales.append(0.18)
+            barScales.append(Self.restingScale)
             layer?.addSublayer(barLayer)
         }
     }
@@ -77,7 +88,23 @@ class AudioSpectrum: NSView {
     private func stopAnimating(reset: Bool = true) {
         animationTimer?.invalidate()
         animationTimer = nil
-        if reset { resetBars() }
+        guard !reset else {
+            resetBars()
+            return
+        }
+        // Stopping the timer is not enough to stop the animation. `updateBars` adds
+        // each one with `fillMode = .forwards` and `isRemovedOnCompletion = false`, so
+        // it stays attached and keeps overriding the presentation layer forever --
+        // every level `applyLevels` writes afterwards would be invisible behind the
+        // last random height. Hand the bars back to their model transforms first so
+        // removing the animation does not make them jump.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (i, barLayer) in barLayers.enumerated() {
+            barLayer.transform = CATransform3DMakeScale(1, barScales[i], 1)
+            barLayer.removeAllAnimations()
+        }
+        CATransaction.commit()
     }
     
     /// Drive the bars from real FFT output. No CABasicAnimation here: the
@@ -91,7 +118,7 @@ class AudioSpectrum: NSView {
         CATransaction.setDisableActions(true)
         for (i, barLayer) in barLayers.enumerated() {
             let level = i < levels.count ? CGFloat(levels[i]) : 0
-            let scale = 0.18 + 0.82 * max(0, min(1, level))
+            let scale = Self.restingScale + (1 - Self.restingScale) * max(0, min(1, level))
             barScales[i] = scale
             barLayer.transform = CATransform3DMakeScale(1, scale, 1)
         }
@@ -114,7 +141,7 @@ class AudioSpectrum: NSView {
     private func updateBars() {
         for (i, barLayer) in barLayers.enumerated() {
             let currentScale = barScales[i]
-            let targetScale = CGFloat.random(in: 0.18 ... 1.0)
+            let targetScale = CGFloat.random(in: Self.restingScale ... 1.0)
             barScales[i] = targetScale
             let animation = CABasicAnimation(keyPath: "transform.scale.y")
             animation.fromValue = currentScale
@@ -132,8 +159,8 @@ class AudioSpectrum: NSView {
     private func resetBars() {
         for (i, barLayer) in barLayers.enumerated() {
             barLayer.removeAllAnimations()
-            barLayer.transform = CATransform3DMakeScale(1, 0.18, 1)
-            barScales[i] = 0.18
+            barLayer.transform = CATransform3DMakeScale(1, Self.restingScale, 1)
+            barScales[i] = Self.restingScale
         }
     }
     

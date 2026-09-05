@@ -558,6 +558,15 @@ final class SharedSpectrum {
     private var subscribers: [UUID: ([Float]) -> Void] = [:]
     private var target: String?
     private var startedFor: String??
+    /// The last frame handed out, kept so a subscriber that joins mid-stream gets one
+    /// immediately.
+    ///
+    /// The engine only publishes frames that *changed*, which means a steady state --
+    /// silence, most obviously, from a track playing on a cast device -- publishes
+    /// exactly once and then never again. A view created after that point would
+    /// otherwise subscribe to a callback that stays silent for the whole track and
+    /// draw whatever its initial state happened to be.
+    private var latest: [Float] = []
     private var isPlaying = false
     private var screensAsleep = false
 
@@ -570,6 +579,7 @@ final class SharedSpectrum {
         self.source = SpectrumSource(bandCount: bandCount)
         self.source.onBands = { [weak self] levels in
             guard let self else { return }
+            self.latest = levels
             for handler in self.subscribers.values { handler(levels) }
         }
 
@@ -611,6 +621,7 @@ final class SharedSpectrum {
     func subscribe(_ handler: @escaping ([Float]) -> Void) -> UUID {
         let token = UUID()
         subscribers[token] = handler
+        if !latest.isEmpty { handler(latest) }
         reconcile()
         return token
     }
@@ -636,6 +647,7 @@ final class SharedSpectrum {
             if startedFor != nil {
                 source.stop()
                 startedFor = nil
+                latest = []
             }
             return
         }
@@ -645,7 +657,10 @@ final class SharedSpectrum {
         // retrying it on every state change would spend real work to fail again.
         guard startedFor != .some(target) else { return }
 
-        if startedFor != nil { source.stop() }
+        if startedFor != nil {
+            source.stop()
+            latest = []
+        }
         source.start(bundleIdentifier: target)
         startedFor = .some(target)
     }
