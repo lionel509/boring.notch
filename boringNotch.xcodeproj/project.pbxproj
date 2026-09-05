@@ -111,6 +111,8 @@
 		5955950D2E900ED800C66711 /* ApplicationRelauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5955950C2E900ED800C66711 /* ApplicationRelauncher.swift */; };
 		59D8C23C2E589FAA00147B33 /* VolumeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59D8C23B2E589FAA00147B33 /* VolumeManager.swift */; };
 		BEEF0002000000000000A002 /* AudioSpectrumEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0001000000000000A001 /* AudioSpectrumEngine.swift */; };
+		BEEF000C000000000000A00C /* WeatherBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF000B000000000000A00B /* WeatherBackdrop.swift */; };
+		BEEF000A000000000000A00A /* WeatherManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0009000000000000A009 /* WeatherManager.swift */; };
 		BEEF0008000000000000A008 /* NotchStatsStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0007000000000000A007 /* NotchStatsStrip.swift */; };
 		BEEF0006000000000000A006 /* RouterUsageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0005000000000000A005 /* RouterUsageManager.swift */; };
 		BEEF0004000000000000A004 /* SystemStatsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0003000000000000A003 /* SystemStatsManager.swift */; };
@@ -285,6 +287,8 @@
 		5955950C2E900ED800C66711 /* ApplicationRelauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationRelauncher.swift; sourceTree = "<group>"; };
 		59D8C23B2E589FAA00147B33 /* VolumeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeManager.swift; sourceTree = "<group>"; };
 		BEEF0001000000000000A001 /* AudioSpectrumEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSpectrumEngine.swift; sourceTree = "<group>"; };
+		BEEF000B000000000000A00B /* WeatherBackdrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherBackdrop.swift; sourceTree = "<group>"; };
+		BEEF0009000000000000A009 /* WeatherManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherManager.swift; sourceTree = "<group>"; };
 		BEEF0007000000000000A007 /* NotchStatsStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchStatsStrip.swift; sourceTree = "<group>"; };
 		BEEF0005000000000000A005 /* RouterUsageManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouterUsageManager.swift; sourceTree = "<group>"; };
 		BEEF0003000000000000A003 /* SystemStatsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemStatsManager.swift; sourceTree = "<group>"; };
@@ -518,6 +522,7 @@
 		147163B52C5D804B0068B555 /* managers */ = {
 			isa = PBXGroup;
 			children = (
+				BEEF0009000000000000A009 /* WeatherManager.swift */,
 				BEEF0005000000000000A005 /* RouterUsageManager.swift */,
 				BEEF0003000000000000A003 /* SystemStatsManager.swift */,
 				11D58EA12E760AE100FA8377 /* ImageService.swift */,
@@ -715,6 +720,7 @@
 		B186542F2C6F455E000B926A /* Notch */ = {
 			isa = PBXGroup;
 			children = (
+				BEEF000B000000000000A00B /* WeatherBackdrop.swift */,
 				BEEF0007000000000000A007 /* NotchStatsStrip.swift */,
 				1194E8862EA6DDA7009C82D6 /* BoringNotchSkyLightWindow.swift */,
 				1160F8D72DD98230006FBB94 /* NotchShape.swift */,
@@ -942,6 +948,8 @@
 				116398962DF5D6C00052E6AF /* CalendarServiceProviding.swift in Sources */,
 				59D8C23C2E589FAA00147B33 /* VolumeManager.swift in Sources */,
 				BEEF0002000000000000A002 /* AudioSpectrumEngine.swift in Sources */,
+				BEEF000C000000000000A00C /* WeatherBackdrop.swift in Sources */,
+				BEEF000A000000000000A00A /* WeatherManager.swift in Sources */,
 				BEEF0008000000000000A008 /* NotchStatsStrip.swift in Sources */,
 				BEEF0006000000000000A006 /* RouterUsageManager.swift in Sources */,
 				BEEF0004000000000000A004 /* SystemStatsManager.swift in Sources */,
