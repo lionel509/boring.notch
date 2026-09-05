@@ -102,15 +102,63 @@ struct WeatherBackdrop: View {
             // An early pass stacked 82% material on a 42% black scrim, which on a sunny
             // afternoon made the notch indistinguishable from plain black — frosting is
             // meant to soften the backdrop, not delete it.
-            Color.black.opacity(useDesktopBlur ? 0.22 : 0.18)
+            //
+            // Weighted toward the bottom, because that is where both the bright half of
+            // the scene and the quiet half of the text ended up. The city glow, the neon
+            // and the water all sit in the lower third, and so do the scrubber's
+            // timestamps and the stats row — which are grey on purpose and stopped being
+            // legible the moment a lit skyline appeared behind them. A flat scrim heavy
+            // enough to fix that would have taken the sky out with it.
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(useDesktopBlur ? 0.20 : 0.16), location: 0),
+                    .init(color: .black.opacity(useDesktopBlur ? 0.24 : 0.20), location: 0.45),
+                    .init(color: .black.opacity(useDesktopBlur ? 0.46 : 0.42), location: 0.78),
+                    .init(color: .black.opacity(useDesktopBlur ? 0.54 : 0.50), location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom)
         }
         .allowsHitTesting(false)
     }
 
     // MARK: - Sky
 
+    /// Black at the top, sky in the middle, water at the bottom.
+    ///
+    /// The top band is not a stylistic choice: the physical notch is a hole in the
+    /// display with no pixels in it, and the panel is wider than the hole. Any colour up
+    /// there draws a lit band around a black cutout and the illusion that the notch grew
+    /// is over. Starting at black and only reaching sky colour below the cutout's depth
+    /// keeps the seam invisible, and it happens to be what the top of a night sky looks
+    /// like anyway.
     private var sky: some View {
-        LinearGradient(colors: skyColors, startPoint: .top, endPoint: .bottom)
+        LinearGradient(
+            stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black, location: Self.notchBlend * 0.75),
+                .init(color: skyColors[0], location: Self.skyTop),
+                .init(color: skyColors[1], location: Self.waterline),
+                .init(color: waterColor, location: 1),
+            ],
+            startPoint: .top,
+            endPoint: .bottom)
+    }
+
+    /// The band that has to match the hardware cutout, as a fraction of panel height.
+    private static let notchBlend: CGFloat = 0.20
+    /// Where the sky has finished emerging from that black.
+    private static let skyTop: CGFloat = 0.42
+    /// Where the land stops and the harbour starts. Buildings stand on this line and are
+    /// reflected below it.
+    private static let waterline: CGFloat = 0.82
+
+    /// Water is the sky, darker and colder — which is most of why a reflection reads as
+    /// water rather than as a second city printed upside down.
+    private var waterColor: Color {
+        isDay
+            ? Color(red: 0.07, green: 0.12, blue: 0.18)
+            : Color(red: 0.01, green: 0.02, blue: 0.05)
     }
 
     private var skyColors: [Color] {
@@ -141,37 +189,36 @@ struct WeatherBackdrop: View {
 
     // MARK: - Scene
 
-    /// Where the sky stops and the city starts, as a fraction of the panel.
-    ///
-    /// The sky gets the top two thirds because that is what the notch is shaped like --
-    /// a wide letterbox -- and a horizon in the middle of it would read as a stripe. The
-    /// city is a band along the bottom, close enough to the edge that it grounds the
-    /// scene without competing with the album art sitting on top of it.
-    private static let horizon: CGFloat = 0.66
-
     private func draw(in context: inout GraphicsContext, size: CGSize, time: Double) {
-        let horizonY = size.height * Self.horizon
+        let waterY = size.height * Self.waterline
+        // The rooftops. Buildings stand on the waterline and rise into the lower sky.
+        let skylineTop = waterY - size.height * 0.30
 
-        // Sky first, and confined above the rooftops -- a star behind a building is the
-        // one thing that would give the whole illusion away.
+        // Sky first, and kept out of both the black top band and the rooftops -- a star
+        // beside the hardware cutout, or behind a building, is the one thing that would
+        // give the whole illusion away.
         if isDay {
             if condition == .clear || condition == .cloudy { drawSun(&context, size, time) }
         } else {
-            drawStars(&context, size, time, ceiling: horizonY)
+            drawStars(&context, size, time,
+                      from: size.height * Self.notchBlend, to: skylineTop)
             if condition == .clear || condition == .cloudy { drawMoon(&context, size) }
             drawShootingStar(&context, size, time)
         }
 
-        if condition == .cloudy || condition == .fog { drawClouds(&context, size, time) }
+        // Clouds in every condition now, not only the overcast ones -- a sky with nothing
+        // in it but stars reads as empty. Clear gets two high wisps, which is honest
+        // enough: a clear night is a night without weather, not a night without air.
+        drawClouds(&context, size, time)
 
         // Aircraft cross in front of the sky and behind the skyline, which is what makes
         // the city read as nearer than they are.
         if showCity {
-            drawAircraft(&context, size, time, horizonY: horizonY)
-            drawCity(&context, size, time, horizonY: horizonY)
+            drawAircraft(&context, size, time, horizonY: skylineTop)
+            drawCity(&context, size, time, waterY: waterY)
         }
 
-        // Weather falls in front of everything, city included.
+        // Weather falls in front of everything, city and harbour included.
         switch condition {
         case .rain, .storm: drawPrecipitation(&context, size, time, isSnow: false)
         case .snow: drawPrecipitation(&context, size, time, isSnow: true)
@@ -290,7 +337,8 @@ struct WeatherBackdrop: View {
     private static let starLevels = 6
 
     private func drawStars(
-        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double, ceiling: CGFloat
+        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double,
+        from top: CGFloat, to bottom: CGFloat
     ) {
         // Deterministic from the index, so the field is stable frame to frame without
         // storing any state.
@@ -299,7 +347,7 @@ struct WeatherBackdrop: View {
         for index in 0..<46 {
             let seed = Double(index)
             let x = fract(sin(seed * 12.9898) * 43758.5453) * size.width
-            let y = fract(sin(seed * 78.233) * 24634.6345) * ceiling * 0.94
+            let y = top + fract(sin(seed * 78.233) * 24634.6345) * (bottom - top)
             let phase = fract(sin(seed * 39.425) * 11223.334) * 6.283
             let twinkle = 0.45 + 0.55 * (0.5 + 0.5 * sin(time * 1.4 + phase))
             let radius = 0.5 + fract(sin(seed * 4.771) * 3251.11) * 0.9
@@ -376,18 +424,37 @@ struct WeatherBackdrop: View {
         }
     }
 
+    /// Cloud cover by condition.
+    ///
+    /// Clear used to draw none at all, which left the sky reading as empty rather than as
+    /// clear. Two faint wisps is honest: a clear night is a night without weather, not a
+    /// night without air.
+    private var cloudCover: (count: Int, opacity: Double) {
+        switch condition {
+        case .clear: (2, 0.07)
+        case .cloudy: (4, 0.16)
+        case .fog: (6, 0.20)
+        case .rain, .storm: (4, 0.13)
+        case .snow: (3, 0.12)
+        }
+    }
+
     private func drawClouds(_ context: inout GraphicsContext, _ size: CGSize, _ time: Double) {
-        for index in 0..<4 {
+        let cover = cloudCover
+        for index in 0..<cover.count {
             let seed = Double(index)
             let speed = 0.006 + fract(sin(seed * 21.7) * 3312.9) * 0.008
             let x = fract(fract(sin(seed * 12.9) * 4471.3) + time * speed) * (size.width + 260) - 130
-            let y = size.height * (0.16 + fract(sin(seed * 55.1) * 1129.7) * 0.5)
+            // Kept inside the sky band: a cloud in the black top would put a grey smear
+            // beside the hardware cutout, and one at the waterline would sit in the city.
+            let band = Self.waterline - Self.notchBlend - 0.3
+            let y = size.height * (Self.notchBlend + fract(sin(seed * 55.1) * 1129.7) * band)
             let width = size.height * (1.3 + fract(sin(seed * 8.3) * 771.1) * 1.1)
 
             context.fill(
                 Path(ellipseIn: CGRect(x: x, y: y, width: width, height: width * 0.42)),
                 with: .radialGradient(
-                    Gradient(colors: [.white.opacity(0.16 * intensity), .clear]),
+                    Gradient(colors: [.white.opacity(cover.opacity * intensity), .clear]),
                     center: CGPoint(x: x + width / 2, y: y + width * 0.21),
                     startRadius: 0, endRadius: width * 0.5))
         }
@@ -406,10 +473,10 @@ struct WeatherBackdrop: View {
     /// grouped by brightness the same way the stars are. The whole city is about eight
     /// draw calls -- fewer than the star field cost before this commit.
     private func drawCity(
-        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double, horizonY: CGFloat
+        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double, waterY: CGFloat
     ) {
-        let baseY = size.height + 1  // A hair past the edge, so no seam shows.
-        let depth = size.height - horizonY
+        let baseY = waterY
+        let depth = size.height * 0.30
 
         // The glow that makes a city read as a city at night: light thrown up into the
         // air above it, brightest right at the rooftops. Without it a dark silhouette on
@@ -418,13 +485,13 @@ struct WeatherBackdrop: View {
             ? Color(red: 0.62, green: 0.68, blue: 0.78)
             : Color(red: 1.0, green: 0.72, blue: 0.38)
         let glowRect = CGRect(
-            x: -size.width * 0.1, y: horizonY - depth * 0.55,
-            width: size.width * 1.2, height: depth * 1.7)
+            x: -size.width * 0.1, y: baseY - depth * 1.5,
+            width: size.width * 1.2, height: depth * 3)
         context.fill(
             Path(ellipseIn: glowRect),
             with: .radialGradient(
                 Gradient(colors: [
-                    glowColor.opacity((isDay ? 0.10 : 0.26) * intensity),
+                    glowColor.opacity((isDay ? 0.08 : 0.20) * intensity),
                     .clear,
                 ]),
                 center: CGPoint(x: size.width * 0.5, y: baseY),
@@ -449,8 +516,110 @@ struct WeatherBackdrop: View {
                 ? Color(red: 0.06, green: 0.07, blue: 0.10).opacity(0.86 * intensity)
                 : Color.black.opacity(0.92 * intensity)))
 
-        drawWindows(&context, buildings: near.buildings, time: time)
+        let windows = windowPaths(buildings: near.buildings, time: time)
+        drawWindows(&context, paths: windows)
+        let neon = neonSigns(buildings: near.buildings, time: time)
+        drawNeon(&context, signs: neon)
         drawSpires(&context, buildings: near.buildings, time: time)
+        drawHarbour(
+            &context, size, time,
+            waterY: waterY, skyline: near.silhouette, windows: windows, neon: neon)
+    }
+
+    /// The water, and the city standing in it.
+    ///
+    /// The reflection is the same geometry mirrored about the waterline rather than
+    /// anything redrawn, so it costs a transform instead of a second skyline: one fill
+    /// for the buildings, one per window brightness group, all of them faded downward by
+    /// a gradient because a reflection loses definition with distance from what it
+    /// reflects. What sells it as water rather than as an upside-down city is the last
+    /// step -- horizontal ripples cut across the whole thing, breaking the verticals the
+    /// way a harbour surface does.
+    private func drawHarbour(
+        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double,
+        waterY: CGFloat, skyline: Path, windows: [Path], neon: [NeonSign]
+    ) {
+        let depth = size.height - waterY
+        guard depth > 4 else { return }
+
+        // Mirror about the waterline, and squash a little: a reflection seen at a low
+        // angle across water is always shorter than the thing it reflects.
+        let mirror = CGAffineTransform(translationX: 0, y: 2 * waterY)
+            .scaledBy(x: 1, y: -0.72)
+
+        // A copy of the context, clipped to the water, so nothing mirrored can climb
+        // back out above the waterline.
+        var surface = context
+        surface.clip(to: Path(CGRect(x: 0, y: waterY, width: size.width, height: depth)))
+
+        surface.fill(
+            skyline.applying(mirror),
+            with: .linearGradient(
+                Gradient(colors: [
+                    Color.black.opacity(0.55 * intensity),
+                    Color.black.opacity(0.05 * intensity),
+                ]),
+                startPoint: CGPoint(x: 0, y: waterY),
+                endPoint: CGPoint(x: 0, y: size.height)))
+
+        let warm = Color(red: 1.0, green: 0.82, blue: 0.52)
+        for (level, path) in windows.enumerated() where !path.isEmpty {
+            surface.fill(
+                path.applying(mirror),
+                with: .linearGradient(
+                    Gradient(colors: [
+                        warm.opacity((0.20 + 0.12 * Double(level)) * intensity),
+                        .clear,
+                    ]),
+                    startPoint: CGPoint(x: 0, y: waterY),
+                    endPoint: CGPoint(x: 0, y: size.height)))
+        }
+
+        // Neon on water is the whole reason to put a city on a waterfront. Smeared wider
+        // than the sign that casts it, because a small bright source on a moving surface
+        // spreads rather than reflects.
+        for sign in neon {
+            let smear = sign.rect.insetBy(dx: -sign.rect.width * 0.3 - 2, dy: 0)
+            surface.fill(
+                Path(smear).applying(mirror),
+                with: .linearGradient(
+                    Gradient(colors: [
+                        sign.color.opacity(0.42 * sign.brightness * intensity),
+                        .clear,
+                    ]),
+                    startPoint: CGPoint(x: 0, y: waterY),
+                    endPoint: CGPoint(x: 0, y: size.height)))
+        }
+
+        // The surface itself: a few slow bands of light lying across the water. One path,
+        // one stroke, and they drift at different rates so the pattern never repeats
+        // visibly.
+        var ripples = Path()
+        let count = max(Int(depth / 5), 3)
+        for index in 0..<count {
+            let seed = Double(index)
+            let base = waterY + depth * CGFloat(Double(index) / Double(count))
+            let sway = sin(time * (0.35 + fract(sin(seed * 21.3) * 3312.9) * 0.4) + seed)
+            let inset = size.width * CGFloat(0.04 + fract(sin(seed * 8.7) * 4471.3) * 0.3)
+            let y = base + CGFloat(sway) * 0.8
+
+            ripples.move(to: CGPoint(x: inset, y: y))
+            ripples.addLine(to: CGPoint(x: size.width - inset * 0.6, y: y))
+        }
+        context.stroke(
+            ripples,
+            with: .color(.white.opacity((isDay ? 0.10 : 0.07) * intensity)),
+            style: StrokeStyle(lineWidth: 0.7, lineCap: .round))
+
+        // A bright line right at the waterline, where the city's light meets the water.
+        var edge = Path()
+        edge.move(to: CGPoint(x: 0, y: waterY))
+        edge.addLine(to: CGPoint(x: size.width, y: waterY))
+        context.stroke(
+            edge,
+            with: .color(Color(red: 1.0, green: 0.78, blue: 0.48)
+                .opacity((isDay ? 0.10 : 0.18) * intensity)),
+            style: StrokeStyle(lineWidth: 0.8))
     }
 
     private struct Skyline {
@@ -489,12 +658,20 @@ struct WeatherBackdrop: View {
     /// A window's state comes from a hash of its position plus a slow phase, so most sit
     /// still while a few fade up or down over tens of seconds -- somebody getting home,
     /// somebody going to bed. Fast flicker would read as a broken display.
-    private func drawWindows(
-        _ context: inout GraphicsContext, buildings: [CGRect], time: Double
-    ) {
+    private func drawWindows(_ context: inout GraphicsContext, paths: [Path]) {
+        // Warm, and never white: a white window in a black notch reads as a dead pixel.
+        let warm = Color(red: 1.0, green: 0.84, blue: 0.55)
+        for (level, path) in paths.enumerated() where !path.isEmpty {
+            let brightness = 0.30 + 0.28 * Double(level)
+            context.fill(path, with: .color(warm.opacity(brightness * intensity)))
+        }
+    }
+
+    /// Built once and used twice — once for the windows and once for their reflection.
+    private func windowPaths(buildings: [CGRect], time: Double) -> [Path] {
         // Daylight leaves windows unlit: at noon a lit office window is invisible anyway,
         // and drawing them is work for nothing.
-        guard !isDay else { return }
+        guard !isDay else { return [] }
 
         let cell: CGFloat = 4.2
         let pane = CGSize(width: 1.6, height: 2.1)
@@ -526,12 +703,105 @@ struct WeatherBackdrop: View {
                 }
             }
         }
+        return buckets
+    }
 
-        // Warm, and never white: a white window in a black notch reads as a dead pixel.
-        let warm = Color(red: 1.0, green: 0.84, blue: 0.55)
-        for (level, path) in buckets.enumerated() where !path.isEmpty {
-            let brightness = 0.30 + 0.28 * Double(level)
-            context.fill(path, with: .color(warm.opacity(brightness * intensity)))
+    // MARK: Neon
+
+    /// One sign: where it is, what colour it burns, and how brightly this frame.
+    private struct NeonSign {
+        var rect: CGRect
+        var color: Color
+        var brightness: Double
+        var vertical: Bool
+    }
+
+    /// The colours neon actually comes in. Saturated, because a desaturated neon sign is
+    /// just a lamp, and this is the one place in the scene allowed to be loud — it sits
+    /// behind frosted glass and reads as a colour cast rather than as a shape.
+    private static let neonPalette: [Color] = [
+        Color(red: 1.00, green: 0.24, blue: 0.60),   // hot pink
+        Color(red: 0.32, green: 0.92, blue: 1.00),   // cyan
+        Color(red: 1.00, green: 0.66, blue: 0.18),   // amber
+        Color(red: 0.70, green: 0.42, blue: 1.00),   // violet
+        Color(red: 0.36, green: 1.00, blue: 0.64),   // green
+    ]
+
+    /// Signs on about a third of the near buildings, horizontal along a facade or running
+    /// down a narrow one, the way they actually hang.
+    ///
+    /// Most burn steady with a slight buzz. A few have the stutter of a tube on its way
+    /// out — brief, irregular, and only on the ones whose hash says so, because a whole
+    /// skyline flickering in unison reads as a rendering fault rather than as a city.
+    private func neonSigns(buildings: [CGRect], time: Double) -> [NeonSign] {
+        guard !isDay else { return [] }
+        var signs: [NeonSign] = []
+
+        for (index, building) in buildings.enumerated() {
+            let seed = Double(index) * 13.77
+            let pick = fract(sin(seed * 27.31) * 6641.9)
+            guard pick > 0.66, signs.count < 5 else { continue }
+
+            let color = Self.neonPalette[
+                Int(fract(sin(seed * 55.9) * 3319.1) * Double(Self.neonPalette.count))
+                    % Self.neonPalette.count]
+
+            // A steady tube still moves a little; this is the hum, not a blink.
+            let phase = fract(sin(seed * 71.9) * 8812.3) * 6.283
+            var brightness = 0.86 + 0.14 * (0.5 + 0.5 * sin(time * 3.1 + phase))
+
+            // The failing ones: dark for a fraction of a second, every several seconds.
+            if fract(sin(seed * 44.3) * 2217.7) > 0.62 {
+                let period = 5.0 + fract(sin(seed * 19.4) * 5514.2) * 7.0
+                let cycle = (time + phase).truncatingRemainder(dividingBy: period)
+                if cycle < 0.09 || (cycle > 0.17 && cycle < 0.23) { brightness = 0.18 }
+            }
+
+            let vertical = building.width < 19 && building.height > 26
+            let rect: CGRect
+            if vertical {
+                rect = CGRect(
+                    x: building.midX - 1.3,
+                    y: building.minY + building.height * 0.16,
+                    width: 2.6,
+                    height: min(building.height * 0.46, 22))
+            } else {
+                let width = building.width * 0.62
+                rect = CGRect(
+                    x: building.midX - width / 2,
+                    y: building.minY + building.height * CGFloat(0.16 + pick * 0.3),
+                    width: width,
+                    height: 2.6)
+            }
+
+            signs.append(NeonSign(
+                rect: rect, color: color, brightness: brightness, vertical: vertical))
+        }
+        return signs
+    }
+
+    /// Tube plus bloom. The bloom is most of the effect — a neon sign is a light source,
+    /// and a light source with hard edges and no spill reads as a sticker.
+    private func drawNeon(_ context: inout GraphicsContext, signs: [NeonSign]) {
+        for sign in signs {
+            let bloom = sign.rect.insetBy(
+                dx: -sign.rect.width * (sign.vertical ? 3.4 : 0.42) - 5,
+                dy: -sign.rect.height * (sign.vertical ? 0.42 : 3.4) - 5)
+
+            context.fill(
+                Path(ellipseIn: bloom),
+                with: .radialGradient(
+                    Gradient(colors: [
+                        sign.color.opacity(0.32 * sign.brightness * intensity),
+                        .clear,
+                    ]),
+                    center: CGPoint(x: bloom.midX, y: bloom.midY),
+                    startRadius: 0,
+                    endRadius: max(bloom.width, bloom.height) / 2))
+
+            context.fill(
+                Path(roundedRect: sign.rect, cornerRadius: 1.3),
+                with: .color(sign.color.opacity(0.92 * sign.brightness * intensity)))
         }
     }
 

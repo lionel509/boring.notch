@@ -745,9 +745,13 @@ struct MusicSliderView: View {
                 .onTapGesture { showRemainingTime.toggle() }
             }
             .fontWeight(.medium)
+            // Was .gray, which is a mid grey and was legible against a plain dark panel.
+            // It is not legible against a lit skyline, and these two numbers are the
+            // whole point of the row.
             .foregroundColor(
                 Defaults[.playerColorTinting]
-                    ? Color(nsColor: color).ensureMinimumBrightness(factor: 0.6) : .gray
+                    ? Color(nsColor: color).ensureMinimumBrightness(factor: 0.75)
+                    : .white.opacity(0.78)
             )
             .font(.caption)
         }
