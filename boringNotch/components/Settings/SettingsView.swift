@@ -684,10 +684,10 @@ struct Media: View {
             
             Section {
                 MusicSlotConfigurationView()
-                Defaults.Toggle(key: .albumArtAsBanner) {
+                Defaults.Toggle(key: .albumArtShowsIdentity) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Title and artist over the artwork")
-                        Text("The cover blurs so the text stays readable, and clears when "
+                        Text("Title and artist on the artwork")
+                        Text("The cover fades so the text stays readable, and clears when "
                              + "you hover it.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -702,8 +702,8 @@ struct Media: View {
                 Defaults.Toggle(key: .lyricsShowContext) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Show the lines before and after")
-                        Text("Adds two lines of context. The notch grows by 30 pt to fit "
-                             + "them rather than squeezing the player.")
+                        Text("Shows three lines that scroll with the song, in the space "
+                             + "the title and artist used to take.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

@@ -32,18 +32,11 @@ var statsStripHeight: CGFloat {
 }
 
 /// One lyric line. Two extra lines is what the context view costs.
-let lyricLineHeight: CGFloat = 15
+let lyricLineHeight: CGFloat = 16
 
-/// The context lines above and below the current lyric.
-///
-/// The player pane already sits at roughly 143 pt of the ~146 pt it is given, so there is
-/// no slack to take these out of — measured, after last time's mistake of reading the
-/// layout constants instead of the rendered view. The notch grows for them the same way it
-/// grows for the stats strip.
-var lyricsContextHeight: CGFloat {
-    guard Defaults[.enableLyrics], Defaults[.lyricsShowContext] else { return 0 }
-    return lyricLineHeight * 2
-}
+/// The lyrics sit in the column the title and artist used to have, so three lines cost
+/// nothing over the two lines of text plus one of lyric that were there before. The notch
+/// does not grow for them.
 
 private let baseOpenNotchSize: CGSize = .init(width: 640, height: 190)
 
@@ -61,7 +54,7 @@ private let baseOpenNotchSize: CGSize = .init(width: 640, height: 190)
 var openNotchSize: CGSize {
     .init(
         width: baseOpenNotchSize.width,
-        height: baseOpenNotchSize.height + statsStripHeight + lyricsContextHeight
+        height: baseOpenNotchSize.height + statsStripHeight
     )
 }
 
@@ -70,8 +63,7 @@ var openNotchSize: CGSize {
 /// nothing visually — it is the same trick `shadowPadding` already relies on.
 let windowSize: CGSize = .init(
     width: baseOpenNotchSize.width,
-    height: baseOpenNotchSize.height + statsStripRowHeight + statsStripTopGap
-        + lyricLineHeight * 2 + shadowPadding)
+    height: baseOpenNotchSize.height + statsStripRowHeight + statsStripTopGap + shadowPadding)
 let cornerRadiusInsets: (opened: (top: CGFloat, bottom: CGFloat), closed: (top: CGFloat, bottom: CGFloat)) = (opened: (top: 19, bottom: 24), closed: (top: 6, bottom: 14))
 
 enum MusicPlayerImageSizes {

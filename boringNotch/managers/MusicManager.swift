@@ -568,29 +568,23 @@ class MusicManager: ObservableObject {
         return idx
     }
 
-    /// The current line with the one before and after it.
+    /// Every lyric line in order, synced or estimated.
     ///
-    /// Three lines read very differently from one: a single line arrives with no context
-    /// and vanishes, while a window shows where the song is. Both neighbours can be empty
-    /// at the ends of a track, and the display reserves their space regardless so nothing
-    /// shifts as they fill in.
-    func lyricWindow(at elapsed: Double) -> (previous: String, current: String, next: String) {
-        if !syncedLyrics.isEmpty {
-            let idx = syncedIndex(at: elapsed)
-            return (
-                idx > 0 ? syncedLyrics[idx - 1].text : "",
-                syncedLyrics[idx].text,
-                idx + 1 < syncedLyrics.count ? syncedLyrics[idx + 1].text : "")
-        }
+    /// The display scrolls through these by index rather than being handed a window, so
+    /// that advancing one line is a movement of exactly one line height instead of three
+    /// separate text swaps that happen to line up.
+    var lyricLines: [String] {
+        syncedLyrics.isEmpty ? plainLyricLines : syncedLyrics.map(\.text)
+    }
+
+    /// Index of the line being sung, into `lyricLines`.
+    func lyricIndex(at elapsed: Double) -> Int {
+        if !syncedLyrics.isEmpty { return syncedIndex(at: elapsed) }
 
         let lines = plainLyricLines
-        guard !lines.isEmpty, songDuration > 0 else { return ("", "", "") }
+        guard !lines.isEmpty, songDuration > 0 else { return 0 }
         let fraction = min(max(elapsed / songDuration, 0), 0.999)
-        let idx = min(Int(fraction * Double(lines.count)), lines.count - 1)
-        return (
-            idx > 0 ? lines[idx - 1] : "",
-            lines[idx],
-            idx + 1 < lines.count ? lines[idx + 1] : "")
+        return min(Int(fraction * Double(lines.count)), lines.count - 1)
     }
 
     private func triggerFlipAnimation() {
