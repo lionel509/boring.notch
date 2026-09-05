@@ -710,8 +710,12 @@ struct MusicSliderView: View {
     var onValueChange: (Double) -> Void
 
 
+    /// Matches `CustomSlider`'s spectrum height, so the taller track is not clipped by
+    /// the box it sits in.
+    private var trackHeight: CGFloat { Defaults[.spectrumPlaybackTrack] ? 16 : 10 }
+
     var body: some View {
-        VStack {
+        VStack(spacing: 2) {
             CustomSlider(
                 value: $sliderValue,
                 range: 0...duration,
@@ -725,7 +729,7 @@ struct MusicSliderView: View {
                     isPlaying: isPlaying,
                     bundleIdentifier: MusicManager.shared.bundleIdentifier)
             )
-            .frame(height: 10, alignment: .center)
+            .frame(height: trackHeight, alignment: .center)
 
             HStack {
                 Text(timeString(from: sliderValue))
@@ -791,8 +795,13 @@ struct CustomSlider: View {
             let progress = rangeSpan == .zero ? 0 : (value - range.lowerBound) / rangeSpan
             let filledTrackWidth = min(max(progress, 0), 1) * width
 
+            let spectrumActive = spectrum != nil && spectrumTrack && !dragging
+            // 10 pt is enough for a rule and not enough for a spectrum. The extra six
+            // come out of the gap above the time labels, not out of the notch.
+            let trackHeight: CGFloat = spectrumActive ? 16 : 10
+
             ZStack(alignment: .leading) {
-                if let spectrum, spectrumTrack, !dragging {
+                if let spectrum, spectrumActive {
                     SpectrumTrack(
                         progress: min(max(progress, 0), 1),
                         color: color,
@@ -800,7 +809,7 @@ struct CustomSlider: View {
                         bundleIdentifier: spectrum.bundleIdentifier,
                         restingHeight: height
                     )
-                    .frame(height: 10)
+                    .frame(height: trackHeight)
                 } else {
                     Rectangle()
                         .fill(.gray.opacity(0.3))
@@ -813,7 +822,7 @@ struct CustomSlider: View {
                         .cornerRadius(height / 2)
                 }
             }
-            .frame(height: 10)
+            .frame(height: trackHeight)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)

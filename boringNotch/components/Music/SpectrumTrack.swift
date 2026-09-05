@@ -23,9 +23,14 @@ struct SpectrumTrack: View {
     let color: Color
     let isPlaying: Bool
     let bundleIdentifier: String?
-    /// Height of the flat track this replaces, used as the resting thickness so the
-    /// bar does not visibly change weight when audio stops.
+    /// Height of the flat track this replaces, drawn as-is when no audio is arriving.
     let restingHeight: CGFloat
+
+    /// The floor a live bar sits at. Deliberately thinner than `restingHeight`: with a
+    /// 5 pt floor in a 10 pt row the loudest possible band could only be twice the
+    /// height of silence, which is why the first version read as a dotted line rather
+    /// than as a spectrum.
+    private static let liveFloor: CGFloat = 1.5
 
     @State private var levels: [Float] = []
     @State private var token: UUID?
@@ -57,11 +62,12 @@ struct SpectrumTrack: View {
                 let inset = (canvasSize.width - CGFloat(count) * Self.barPitch) / 2
 
                 for index in 0 ..< count {
-                    let level = CGFloat(sample(at: index, of: count))
+                    let level = CGFloat(Self.expand(sample(at: index, of: count)))
                     // Mirrored around the centre line so the bar keeps reading as a
                     // rule with progress on it, rather than as a chart sitting on the
                     // row's floor.
-                    let height = max(restingHeight, level * canvasSize.height)
+                    let height = Self.liveFloor
+                        + level * (canvasSize.height - Self.liveFloor)
                     let x = inset + CGFloat(index) * Self.barPitch
                     let rect = CGRect(
                         x: x,
@@ -119,6 +125,20 @@ struct SpectrumTrack: View {
         context.fill(
             Path(roundedRect: fill, cornerRadius: restingHeight / 2),
             with: .color(color))
+    }
+
+    /// Stretch the working range across the full height.
+    ///
+    /// The engine maps a 60 dB window onto 0...1 honestly, and ordinary music lives in
+    /// the top half of it: every band sat between 0.4 and 0.7, so the bars differed by
+    /// a couple of points and the whole row looked flat. This is a contrast curve, not
+    /// a gain -- quiet still reads as quiet, but the part of the range music actually
+    /// occupies is what the height now spends itself on.
+    private static func expand(_ level: Float) -> Float {
+        let floor: Float = 0.22
+        let ceiling: Float = 0.88
+        let normalised = (level - floor) / (ceiling - floor)
+        return min(max(normalised, 0), 1)
     }
 
     /// Linear interpolation between the two bands either side of this bar. Only the

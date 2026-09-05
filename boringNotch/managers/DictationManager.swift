@@ -156,7 +156,11 @@ final class DictationManager: ObservableObject {
             let processID = pid(of: process)
             guard processID > 0,
                   let app = NSRunningApplication(processIdentifier: processID),
-                  app.bundleIdentifier != nil,
+                  let identifier = app.bundleIdentifier,
+                  // Not us. The spectrum's own process tap counts as an input stream, so
+                  // the notch would light up to announce that the notch is listening --
+                  // every time music plays, which is exactly when nobody is recording.
+                  identifier != Bundle.main.bundleIdentifier,
                   let name = app.localizedName
             else { continue }
             return friendlyName(name)
