@@ -6,6 +6,7 @@
 //
 
 import Defaults
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -31,8 +32,14 @@ var statsStripHeight: CGFloat {
     return statsStripRowHeight + statsStripTopGap
 }
 
-/// One lyric line. Two extra lines is what the context view costs.
-let lyricLineHeight: CGFloat = 16
+/// One visual row of lyric. A wrapped line occupies two of them.
+let lyricLineHeight: CGFloat = {
+    // Measured off the font rather than guessed. Hangul and kana sit taller than Latin in
+    // the fallback faces, and a hardcoded height clipped them — visibly so once the column
+    // scrolls and the row passes the viewport edge.
+    let font = NSFont.preferredFont(forTextStyle: .subheadline)
+    return ceil(font.ascender - font.descender + font.leading) + 3
+}()
 
 /// The lyrics sit in the column the title and artist used to have, so three lines cost
 /// nothing over the two lines of text plus one of lyric that were there before. The notch

@@ -552,12 +552,12 @@ struct NotchHomeView: View {
     }
 }
 
-/// Three lyric lines that scroll by exactly one line as the song advances.
+/// Three rows of lyric that scroll as the song advances.
 ///
-/// Every line is placed at its own index times the line height and the whole column is
-/// offset to bring the current one to the middle, so an advance is a single movement.
-/// Three independent text transitions firing together do not read as a scroll — they read
-/// as a flicker.
+/// A long line wraps to a second row rather than truncating, which is what Spotify does —
+/// truncation loses the end of the line, and the end is often the part that rhymes. Rows
+/// are therefore not one-per-lyric, so each line is placed by accumulating row counts out
+/// from the current line rather than by multiplying an index.
 struct LyricScrollColumn: View, Equatable {
     let lines: [String]
     let index: Int
@@ -566,23 +566,30 @@ struct LyricScrollColumn: View, Equatable {
     let isFetching: Bool
     let isPlaying: Bool
 
+    /// A wrapped line costs a row that a context line would otherwise have used, so two is
+    /// the ceiling: at three the current line fills the column on its own.
+    private static let maximumRows = 2
+
     private var visibleRows: Int { showsContext ? 3 : 1 }
     private var centreRow: Int { showsContext ? 1 : 0 }
 
     var body: some View {
         Group {
             if lines.isEmpty {
-                row(isFetching ? "Loading lyrics…" : "No lyrics found", isCurrent: false)
+                row(isFetching ? "Loading lyrics…" : "No lyrics found", isCurrent: false, rows: 1)
             } else {
                 ZStack(alignment: .topLeading) {
-                    ForEach(Array(neighbourhood), id: \.self) { position in
-                        row(lines[position], isCurrent: position == index)
-                            .offset(y: CGFloat(position) * lyricLineHeight)
+                    ForEach(placements, id: \.position) { placement in
+                        row(
+                            lines[placement.position],
+                            isCurrent: placement.position == index,
+                            rows: placement.rows
+                        )
+                        .offset(y: CGFloat(centreRow + placement.row) * lyricLineHeight)
+                        .animation(.smooth(duration: 0.4), value: placement.row)
                     }
                 }
                 .frame(width: width, alignment: .topLeading)
-                .offset(y: CGFloat(centreRow - index) * lyricLineHeight)
-                .animation(.smooth(duration: 0.4), value: index)
             }
         }
         .frame(
@@ -593,13 +600,41 @@ struct LyricScrollColumn: View, Equatable {
         .opacity(isPlaying ? 1 : 0)
     }
 
-    /// Only the lines worth building: the visible ones plus enough either side that a line
-    /// is already in place before it scrolls in. The rest would be hundreds of views
-    /// sitting outside the clip.
-    private var neighbourhood: Range<Int> {
-        let lower = max(index - 2, 0)
-        let upper = min(index + 3, lines.count)
-        return lower..<max(upper, lower)
+    /// Where each nearby line sits, in rows relative to the current one.
+    ///
+    /// Positions are accumulated outward from the current line instead of measured from the
+    /// start of the song: only a handful of lines are ever on screen, and summing every
+    /// preceding line's height on each tick to reach line 200 would be wasted work.
+    private var placements: [(position: Int, row: Int, rows: Int)] {
+        var result: [(position: Int, row: Int, rows: Int)] = []
+
+        var cursor = 0
+        for position in index..<min(index + 3, lines.count) {
+            let rows = rowCount(for: lines[position])
+            result.append((position, cursor, rows))
+            cursor += rows
+        }
+
+        cursor = 0
+        for position in stride(from: index - 1, through: max(index - 2, 0), by: -1) {
+            let rows = rowCount(for: lines[position])
+            cursor -= rows
+            result.append((position, cursor, rows))
+        }
+
+        return result
+    }
+
+    /// Whether a line fits on one row at this width.
+    ///
+    /// Measured against the real font rather than counted in characters — Hangul is roughly
+    /// twice the advance width of a Latin letter, so a character count would call a short
+    /// Korean line short when it is not.
+    private func rowCount(for text: String) -> Int {
+        guard width > 0 else { return 1 }
+        let font = NSFont.preferredFont(forTextStyle: .subheadline)
+        let measured = NSAttributedString(string: text, attributes: [.font: font]).size().width
+        return measured <= width ? 1 : Self.maximumRows
     }
 
     /// Splits a leading singer tag off a lyric line.
@@ -617,7 +652,7 @@ struct LyricScrollColumn: View, Equatable {
         return (tag + " ", String(rest))
     }
 
-    private func row(_ text: String, isCurrent: Bool) -> some View {
+    private func row(_ text: String, isCurrent: Bool, rows: Int) -> some View {
         let isPersian = text.unicodeScalars.contains { scalar in
             let v = scalar.value
             return v >= 0x0600 && v <= 0x06FF
@@ -632,13 +667,22 @@ struct LyricScrollColumn: View, Equatable {
                 ? .custom("Vazirmatn-Regular",
                           size: NSFont.preferredFont(forTextStyle: .subheadline).pointSize)
                 : .subheadline)
-            .fontWeight(isCurrent ? .medium : .regular)
-            // The current line is the one being sung; its neighbours are context and must
-            // never compete with it.
+            // One weight for every row, current or not.
+            //
+            // The current line used to be .medium and its neighbours .regular, which meant
+            // the weight changed under the scroll animation — and an animating font weight
+            // is re-rasterised glyph by glyph, which a CJK fallback face does not survive:
+            // the Korean lines blanked out while they moved. Spotify separates the current
+            // line by colour alone for the same reason it reads better.
+            .fontWeight(.medium)
             .foregroundStyle(isCurrent ? Color.white : Color.gray.opacity(0.5))
-            .lineLimit(1)
+            .lineLimit(rows)
+            .multilineTextAlignment(.leading)
             .truncationMode(.tail)
-            .frame(width: width, height: lyricLineHeight, alignment: .leading)
+            .frame(
+                width: width,
+                height: lyricLineHeight * CGFloat(rows),
+                alignment: .topLeading)
     }
 }
 
