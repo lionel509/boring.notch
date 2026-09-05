@@ -124,6 +124,14 @@ extension Defaults.Keys {
     /// Blur the desktop behind the notch and tint it with the weather, rather than
     /// painting a sky. Real glass over the actual wallpaper.
     static let weatherUseDesktopBlur = Key<Bool>("weatherUseDesktopBlur", default: true)
+    /// Show the line before and after the current lyric, not just the current one. Costs
+    /// notch height, so it is a choice rather than the default shape.
+    static let lyricsShowContext = Key<Bool>("lyricsShowContext", default: true)
+
+    /// Title and artist sit on the artwork, which blurs so they stay readable and clears
+    /// on hover so the cover can actually be seen.
+    static let albumArtAsBanner = Key<Bool>("albumArtAsBanner", default: true)
+
     /// Right-hand time on the scrubber: time left rather than total length. Spotify makes
     /// that label clickable and remembers the choice, so this does too.
     static let showRemainingTime = Key<Bool>("showRemainingTime", default: true)

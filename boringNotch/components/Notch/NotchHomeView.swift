@@ -23,18 +23,130 @@ struct MusicPlayerView: View {
     /// inside an HStack, so it grew to whatever the column beside it was tall, which is how
     /// it ended up around 90 pt and dominating a 370 pt column. Sizing it here also frees
     /// the scrubber, which was previously squeezed into the space left over beside it.
+    @Default(.albumArtAsBanner) private var albumArtAsBanner
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                AlbumArtView(vm: vm, albumArtNamespace: albumArtNamespace)
-                    .frame(width: 52, height: 52)
-                TrackIdentityView()
-                    .frame(height: 52)
+            if albumArtAsBanner {
+                AlbumBannerView(vm: vm, albumArtNamespace: albumArtNamespace)
+            } else {
+                HStack(spacing: 10) {
+                    AlbumArtView(vm: vm, albumArtNamespace: albumArtNamespace)
+                        .frame(width: 52, height: 52)
+                    TrackIdentityView()
+                        .frame(height: 52)
+                }
             }
             MusicControlsView().drawingGroup().compositingGroup()
         }
         .padding(.leading, 5)
+        .padding(.trailing, 5)
         .padding(.top, 4)
+    }
+}
+
+/// The artwork as the surface the title sits on, rather than a tile beside it.
+///
+/// A square cover next to the text spends most of the pane's width on a picture and leaves
+/// the title a narrow column to scroll through. Setting the text *on* the cover gives the
+/// title the full width and costs no extra height. The cover is blurred so arbitrary
+/// artwork cannot swallow white text, and clears on hover so it can still be looked at —
+/// blur is what makes the text legible, so revealing the art means the text has to go.
+///
+/// It stays opaque rather than translucent on purpose. Everything here already sits over
+/// the weather backdrop, and layering a see-through blur on top of a frosted sky is exactly
+/// what turned to mud the first time.
+struct AlbumBannerView: View {
+    @ObservedObject var musicManager = MusicManager.shared
+    @ObservedObject var vm: BoringViewModel
+    let albumArtNamespace: Namespace.ID
+    @State private var revealing = false
+
+    private let height: CGFloat = 54
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            artwork
+            scrim
+            identity
+            appBadge
+        }
+        .frame(height: height)
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: Defaults[.cornerRadiusScaling]
+                    ? MusicPlayerImageSizes.cornerRadiusInset.opened
+                    : MusicPlayerImageSizes.cornerRadiusInset.closed,
+                style: .continuous))
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.smooth(duration: 0.26)) { revealing = hovering }
+        }
+        .onTapGesture { musicManager.openMusicApp() }
+    }
+
+    private var artwork: some View {
+        Image(nsImage: musicManager.albumArt)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .matchedGeometryEffect(id: "albumArt", in: albumArtNamespace)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .clipped()
+            // Scaled up slightly while blurred: a blur samples past its own edges, so at
+            // 1.0 the border of the banner goes soft and shows the panel through it.
+            .scaleEffect(revealing ? 1.0 : 1.08)
+            .blur(radius: revealing ? 0 : 7, opaque: true)
+            .opacity(musicManager.isPlaying ? 1 : 0.55)
+    }
+
+    private var scrim: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .black.opacity(0.10), location: 0),
+                .init(color: .black.opacity(0.42), location: 0.5),
+                .init(color: .black.opacity(0.72), location: 1),
+            ],
+            startPoint: .top,
+            endPoint: .bottom)
+            .opacity(revealing ? 0 : 1)
+            .allowsHitTesting(false)
+    }
+
+    private var identity: some View {
+        GeometryReader { geo in
+            VStack(alignment: .leading, spacing: 0) {
+                MarqueeText(
+                    $musicManager.songTitle, font: .headline, nsFont: .headline,
+                    textColor: .white, frameWidth: max(geo.size.width - 56, 40))
+                MarqueeText(
+                    $musicManager.artistName, font: .subheadline, nsFont: .subheadline,
+                    textColor: Defaults[.playerColorTinting]
+                        ? Color(nsColor: musicManager.avgColor)
+                            .ensureMinimumBrightness(factor: 0.85)
+                        : .white.opacity(0.75),
+                    frameWidth: max(geo.size.width - 56, 40))
+            }
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .padding(.bottom, 5)
+        }
+        .opacity(revealing ? 0 : 1)
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private var appBadge: some View {
+        if vm.notchState == .open && !musicManager.usingAppIconForArtwork {
+            AppIcon(for: musicManager.bundleIdentifier ?? "com.apple.Music")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 20, height: 20)
+                .padding(7)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .opacity(revealing ? 0 : 1)
+                .allowsHitTesting(false)
+        }
     }
 }
 
@@ -158,6 +270,7 @@ struct MusicControlsView: View {
     @State private var lastDragged: Date = .distantPast
     @Default(.musicControlSlots) private var slotConfig
     @Default(.musicControlSlotLimit) private var slotLimit
+    @Default(.lyricsShowContext) private var showLyricsContext
 
     var body: some View {
         GeometryReader { geo in
@@ -165,19 +278,20 @@ struct MusicControlsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 slotToolbar
                 musicSlider
-                lyricsLine(width: geo.size.width)
+                lyricsBlock(width: geo.size.width)
             }
         }
         .buttonStyle(PlainButtonStyle())
     }
 
-    /// The lyric line, if enabled.
+    /// The lyric, with the line before and after it when there is room.
     ///
-    /// Spotify's bar carries only title and artist, so the lyric is the one thing here
-    /// it has no place for. It goes under the scrubber where it gets the full width,
-    /// rather than competing with the title inside the identity cluster.
+    /// Spotify's bar carries only title and artist, so this is the one thing here it has no
+    /// place for. It goes under the scrubber where it gets the full width rather than
+    /// competing with the title, and every line reserves its height whether or not it has
+    /// text, so a track's first or last line does not shift the rest of the pane.
     @ViewBuilder
-    private func lyricsLine(width: CGFloat) -> some View {
+    private func lyricsBlock(width: CGFloat) -> some View {
         if Defaults[.enableLyrics] {
             TimelineView(.animation(minimumInterval: 0.25)) { timeline in
                 let currentElapsed: Double = {
@@ -186,45 +300,70 @@ struct MusicControlsView: View {
                     let progressed = musicManager.elapsedTime + (delta * musicManager.playbackRate)
                     return min(max(progressed, 0), musicManager.songDuration)
                 }()
+                let window = musicManager.lyricWindow(at: currentElapsed)
                 let line: String = {
                     if musicManager.isFetchingLyrics { return "Loading lyrics…" }
-                    if !musicManager.syncedLyrics.isEmpty {
-                        return musicManager.lyricLine(at: currentElapsed)
-                    }
-                    let estimated = musicManager.estimatedLyricLine(at: currentElapsed)
-                    return estimated.isEmpty ? "No lyrics found" : estimated
+                    return window.current.isEmpty ? "No lyrics found" : window.current
                 }()
-                let isPersian = line.unicodeScalars.contains { scalar in
-                    let v = scalar.value
-                    return v >= 0x0600 && v <= 0x06FF
+
+                VStack(alignment: .leading, spacing: 0) {
+                    if showLyricsContext {
+                        contextLine(window.previous)
+                    }
+                    currentLyricLine(line, width: width)
+                    if showLyricsContext {
+                        contextLine(window.next)
+                    }
                 }
-                // Each line rolls up as the next arrives, the way a lyrics sheet
-                // advances, rather than swapping in place. Keyed on the line itself so
-                // SwiftUI treats a new lyric as a new view — the TimelineView ticks
-                // four times a second, but the id only changes when the words do.
-                ZStack(alignment: .leading) {
-                    MarqueeText(
-                        .constant(line),
-                        font: .subheadline,
-                        nsFont: .subheadline,
-                        textColor: musicManager.isFetchingLyrics ? .gray.opacity(0.7) : .gray,
-                        frameWidth: width
-                    )
-                    .font(isPersian ? .custom("Vazirmatn-Regular", size: NSFont.preferredFont(forTextStyle: .subheadline).pointSize) : .subheadline)
-                    .lineLimit(1)
-                    .id(line)
-                    .transition(
-                        .asymmetric(
-                            insertion: .move(edge: .bottom).combined(with: .opacity),
-                            removal: .move(edge: .top).combined(with: .opacity)))
-                }
-                // Clipped so a line on its way out does not paint over the artist above
-                // or the scrubber below while it travels.
-                .clipped()
-                .animation(.smooth(duration: 0.32), value: line)
                 .opacity(musicManager.isPlaying ? 1 : 0)
             }
         }
+    }
+
+    /// A neighbouring line: present but clearly not the one being sung.
+    private func contextLine(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.gray.opacity(0.55))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(height: lyricLineHeight, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .animation(.smooth(duration: 0.32), value: text)
+    }
+
+    private func currentLyricLine(_ line: String, width: CGFloat) -> some View {
+        let isPersian = line.unicodeScalars.contains { scalar in
+            let v = scalar.value
+            return v >= 0x0600 && v <= 0x06FF
+        }
+        // Each line rolls up as the next arrives, the way a lyrics sheet advances, rather
+        // than swapping in place. Keyed on the line itself so SwiftUI treats a new lyric as
+        // a new view — the TimelineView ticks four times a second, but the id only changes
+        // when the words do.
+        return ZStack(alignment: .leading) {
+            MarqueeText(
+                .constant(line),
+                font: .subheadline,
+                nsFont: .subheadline,
+                textColor: musicManager.isFetchingLyrics ? .gray.opacity(0.7) : .white,
+                frameWidth: width
+            )
+            .font(isPersian
+                ? .custom("Vazirmatn-Regular",
+                          size: NSFont.preferredFont(forTextStyle: .subheadline).pointSize)
+                : .subheadline)
+            .lineLimit(1)
+            .id(line)
+            .transition(
+                .asymmetric(
+                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                    removal: .move(edge: .top).combined(with: .opacity)))
+        }
+        // Clipped so a line on its way out does not paint over its neighbours while it
+        // travels.
+        .clipped()
+        .animation(.smooth(duration: 0.32), value: line)
     }
 
     private var musicSlider: some View {

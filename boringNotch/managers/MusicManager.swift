@@ -548,7 +548,11 @@ class MusicManager: ObservableObject {
 
     func lyricLine(at elapsed: Double) -> String {
         guard !syncedLyrics.isEmpty else { return currentLyrics }
-        // Binary search for last line with time <= elapsed
+        return syncedLyrics[syncedIndex(at: elapsed)].text
+    }
+
+    /// Index of the last synced line at or before `elapsed`. Binary search.
+    private func syncedIndex(at elapsed: Double) -> Int {
         var low = 0
         var high = syncedLyrics.count - 1
         var idx = 0
@@ -561,7 +565,32 @@ class MusicManager: ObservableObject {
                 high = mid - 1
             }
         }
-        return syncedLyrics[idx].text
+        return idx
+    }
+
+    /// The current line with the one before and after it.
+    ///
+    /// Three lines read very differently from one: a single line arrives with no context
+    /// and vanishes, while a window shows where the song is. Both neighbours can be empty
+    /// at the ends of a track, and the display reserves their space regardless so nothing
+    /// shifts as they fill in.
+    func lyricWindow(at elapsed: Double) -> (previous: String, current: String, next: String) {
+        if !syncedLyrics.isEmpty {
+            let idx = syncedIndex(at: elapsed)
+            return (
+                idx > 0 ? syncedLyrics[idx - 1].text : "",
+                syncedLyrics[idx].text,
+                idx + 1 < syncedLyrics.count ? syncedLyrics[idx + 1].text : "")
+        }
+
+        let lines = plainLyricLines
+        guard !lines.isEmpty, songDuration > 0 else { return ("", "", "") }
+        let fraction = min(max(elapsed / songDuration, 0), 0.999)
+        let idx = min(Int(fraction * Double(lines.count)), lines.count - 1)
+        return (
+            idx > 0 ? lines[idx - 1] : "",
+            lines[idx],
+            idx + 1 < lines.count ? lines[idx + 1] : "")
     }
 
     private func triggerFlipAnimation() {

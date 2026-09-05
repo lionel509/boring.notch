@@ -107,20 +107,46 @@ struct ContentView: View {
                     )
                     .padding([.horizontal, .bottom], vm.notchState == .open ? 12 : 0)
                     .background {
-                        // Only while open. Closed, the notch is 32pt of chrome and anything
-                        // moving in it is a distraction — and nothing should animate behind
-                        // a shape nobody is looking at.
-                        if showWeatherBackdrop, vm.notchState == .open {
-                            WeatherBackdrop(
-                                condition: weather.conditions?.condition ?? .clear,
-                                isDay: weather.conditions?.isDay ?? weather.isDaytimeByClock,
-                                intensity: weatherIntensity,
-                                useDesktopBlur: weatherUseDesktopBlur,
-                                sunProgress: weather.sunProgress,
-                                moonPhase: weather.moonPhase,
-                                moonProgress: weather.moonProgress)
-                        } else {
-                            Color.black
+                        Group {
+                            // Only while open. Closed, the notch is 32pt of chrome and
+                            // anything moving in it is a distraction — and nothing should
+                            // animate behind a shape nobody is looking at.
+                            if showWeatherBackdrop, vm.notchState == .open {
+                                WeatherBackdrop(
+                                    condition: weather.conditions?.condition ?? .clear,
+                                    isDay: weather.conditions?.isDay ?? weather.isDaytimeByClock,
+                                    intensity: weatherIntensity,
+                                    useDesktopBlur: weatherUseDesktopBlur,
+                                    sunProgress: weather.sunProgress,
+                                    moonPhase: weather.moonPhase,
+                                    moonProgress: weather.moonProgress)
+                            } else {
+                                Color.black
+                            }
+                        }
+                        // Eases the panel out of the hardware notch.
+                        //
+                        // The physical notch is a hole in the display — it has no pixels
+                        // and is always black — so the seam is not something a shape drawn
+                        // *inside* it can fix. Painting the notch cover black only moved
+                        // the hard edge down. Instead the whole top band starts at the
+                        // hardware's black and lightens into the backdrop, so there is no
+                        // edge anywhere along the width for the eye to catch. With the
+                        // backdrop off this is black over black and changes nothing.
+                        .overlay(alignment: .top) {
+                            if vm.notchState == .open {
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .black, location: 0),
+                                        .init(color: .black.opacity(0.78), location: 0.4),
+                                        .init(color: .black.opacity(0.32), location: 0.72),
+                                        .init(color: .clear, location: 1),
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom)
+                                    .frame(height: max(34, vm.effectiveClosedNotchHeight + 16))
+                                    .allowsHitTesting(false)
+                            }
                         }
                     }
                     .clipShape(currentNotchShape)

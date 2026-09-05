@@ -684,12 +684,31 @@ struct Media: View {
             
             Section {
                 MusicSlotConfigurationView()
+                Defaults.Toggle(key: .albumArtAsBanner) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Title and artist over the artwork")
+                        Text("The cover blurs so the text stays readable, and clears when "
+                             + "you hover it.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Defaults.Toggle(key: .enableLyrics) {
                     HStack {
-                        Text("Show lyrics below artist name")
+                        Text("Show lyrics under the scrubber")
                         customBadge(text: "Beta")
                     }
                 }
+                Defaults.Toggle(key: .lyricsShowContext) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show the lines before and after")
+                        Text("Adds two lines of context. The notch grows by 30 pt to fit "
+                             + "them rather than squeezing the player.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(!enableLyrics)
             } header: {
                 Text("Media controls")
             }  footer: {
