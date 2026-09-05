@@ -155,6 +155,9 @@ extension Defaults.Keys {
     /// Show the current temperature under the month in the calendar panel, in place of
     /// the year. Falls back to the year on its own when no place is set.
     static let calendarShowsTemperature = Key<Bool>("calendarShowsTemperature", default: true)
+    /// Draw a city skyline along the bottom of the weather backdrop: lit windows,
+    /// obstruction lights on the masts, and aircraft crossing above it.
+    static let weatherShowCity = Key<Bool>("weatherShowCity", default: true)
     static let weatherPlace = Key<String>("weatherPlace", default: "")
     static let weatherResolvedPlace = Key<String>("weatherResolvedPlace", default: "")
     static let weatherLatitude = Key<Double>("weatherLatitude", default: 0)

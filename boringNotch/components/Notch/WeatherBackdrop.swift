@@ -51,6 +51,8 @@ struct WeatherBackdrop: View {
     let moonPhase: Double
     /// 0 at moonrise, 1 at moonset; nil while the moon is below the horizon.
     let moonProgress: Double?
+    /// Draw the city along the bottom, with its lit windows and passing aircraft.
+    let showCity: Bool
 
     /// How often the scene redraws.
     ///
@@ -63,8 +65,13 @@ struct WeatherBackdrop: View {
         switch condition {
         case .rain, .storm, .snow: return 1.0 / 30.0   // falling, genuinely needs frames
         case .cloudy: return 1.0 / 12.0                // drifting
-        case .fog, .clear: return 4.0                  // nothing moves but the sun, and it
-                                                       // crosses the sky over hours
+        case .fog, .clear:
+            // Four seconds was right when nothing moved but the sun. With aircraft
+            // crossing, four seconds is a plane teleporting a sixth of the way across the
+            // sky per frame, so a clear day now redraws at 10 fps — still the cheapest
+            // case, and the scene it redraws is roughly half the draw calls it used to be
+            // now the stars and the city batch into a handful of fills.
+            return showCity ? 1.0 / 10.0 : 4.0
         }
     }
 
@@ -134,20 +141,41 @@ struct WeatherBackdrop: View {
 
     // MARK: - Scene
 
+    /// Where the sky stops and the city starts, as a fraction of the panel.
+    ///
+    /// The sky gets the top two thirds because that is what the notch is shaped like --
+    /// a wide letterbox -- and a horizon in the middle of it would read as a stripe. The
+    /// city is a band along the bottom, close enough to the edge that it grounds the
+    /// scene without competing with the album art sitting on top of it.
+    private static let horizon: CGFloat = 0.66
+
     private func draw(in context: inout GraphicsContext, size: CGSize, time: Double) {
+        let horizonY = size.height * Self.horizon
+
+        // Sky first, and confined above the rooftops -- a star behind a building is the
+        // one thing that would give the whole illusion away.
         if isDay {
             if condition == .clear || condition == .cloudy { drawSun(&context, size, time) }
         } else {
-            drawStars(&context, size, time)
+            drawStars(&context, size, time, ceiling: horizonY)
             if condition == .clear || condition == .cloudy { drawMoon(&context, size) }
             drawShootingStar(&context, size, time)
         }
 
+        if condition == .cloudy || condition == .fog { drawClouds(&context, size, time) }
+
+        // Aircraft cross in front of the sky and behind the skyline, which is what makes
+        // the city read as nearer than they are.
+        if showCity {
+            drawAircraft(&context, size, time, horizonY: horizonY)
+            drawCity(&context, size, time, horizonY: horizonY)
+        }
+
+        // Weather falls in front of everything, city included.
         switch condition {
         case .rain, .storm: drawPrecipitation(&context, size, time, isSnow: false)
         case .snow: drawPrecipitation(&context, size, time, isSnow: true)
-        case .cloudy, .fog: drawClouds(&context, size, time)
-        case .clear: break
+        case .cloudy, .fog, .clear: break
         }
     }
 
@@ -252,20 +280,38 @@ struct WeatherBackdrop: View {
                 .opacity(0.82 * visibility * intensity)))
     }
 
-    private func drawStars(_ context: inout GraphicsContext, _ size: CGSize, _ time: Double) {
+    /// Star brightness, quantised into this many steps.
+    ///
+    /// Every star used to be its own `context.fill`, which is 46 draw calls a frame for
+    /// 46 dots. Rounding each star's twinkle to one of six levels lets all the stars at
+    /// a given brightness go into one path and one fill: six calls instead of forty-six,
+    /// for a difference in brightness no eye resolves on a 2 pt dot. This is what pays
+    /// for the city below.
+    private static let starLevels = 6
+
+    private func drawStars(
+        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double, ceiling: CGFloat
+    ) {
         // Deterministic from the index, so the field is stable frame to frame without
         // storing any state.
+        var buckets = [Path](repeating: Path(), count: Self.starLevels)
+
         for index in 0..<46 {
             let seed = Double(index)
             let x = fract(sin(seed * 12.9898) * 43758.5453) * size.width
-            let y = fract(sin(seed * 78.233) * 24634.6345) * size.height * 0.8
+            let y = fract(sin(seed * 78.233) * 24634.6345) * ceiling * 0.94
             let phase = fract(sin(seed * 39.425) * 11223.334) * 6.283
             let twinkle = 0.45 + 0.55 * (0.5 + 0.5 * sin(time * 1.4 + phase))
             let radius = 0.5 + fract(sin(seed * 4.771) * 3251.11) * 0.9
 
-            context.fill(
-                Path(ellipseIn: CGRect(x: x, y: y, width: radius * 2, height: radius * 2)),
-                with: .color(.white.opacity(0.9 * twinkle * intensity)))
+            let level = min(Int(twinkle * Double(Self.starLevels)), Self.starLevels - 1)
+            buckets[level].addEllipse(in: CGRect(
+                x: x, y: y, width: radius * 2, height: radius * 2))
+        }
+
+        for (level, path) in buckets.enumerated() where !path.isEmpty {
+            let brightness = (Double(level) + 0.5) / Double(Self.starLevels)
+            context.fill(path, with: .color(.white.opacity(0.9 * brightness * intensity)))
         }
     }
 
@@ -344,6 +390,225 @@ struct WeatherBackdrop: View {
                     Gradient(colors: [.white.opacity(0.16 * intensity), .clear]),
                     center: CGPoint(x: x + width / 2, y: y + width * 0.21),
                     startRadius: 0, endRadius: width * 0.5))
+        }
+    }
+
+    // MARK: - City
+
+    /// The skyline, drawn as a handful of paths rather than a pile of rectangles.
+    ///
+    /// Buildings are laid out left to right from a hash of their index, so the city is
+    /// the same city every time the notch opens rather than reshuffling itself. Two
+    /// depths: a far row that sits in the haze and a near row in near-silhouette, which
+    /// is the cheapest way to get a skyline to read as having depth.
+    ///
+    /// Everything at one depth goes into one path and one fill, and the lit windows are
+    /// grouped by brightness the same way the stars are. The whole city is about eight
+    /// draw calls -- fewer than the star field cost before this commit.
+    private func drawCity(
+        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double, horizonY: CGFloat
+    ) {
+        let baseY = size.height + 1  // A hair past the edge, so no seam shows.
+        let depth = size.height - horizonY
+
+        // The glow that makes a city read as a city at night: light thrown up into the
+        // air above it, brightest right at the rooftops. Without it a dark silhouette on
+        // a sky that is already black at the bottom is simply invisible.
+        let glowColor = isDay
+            ? Color(red: 0.62, green: 0.68, blue: 0.78)
+            : Color(red: 1.0, green: 0.72, blue: 0.38)
+        let glowRect = CGRect(
+            x: -size.width * 0.1, y: horizonY - depth * 0.55,
+            width: size.width * 1.2, height: depth * 1.7)
+        context.fill(
+            Path(ellipseIn: glowRect),
+            with: .radialGradient(
+                Gradient(colors: [
+                    glowColor.opacity((isDay ? 0.10 : 0.26) * intensity),
+                    .clear,
+                ]),
+                center: CGPoint(x: size.width * 0.5, y: baseY),
+                startRadius: 0, endRadius: depth * 1.5))
+
+        // Far row: shorter, hazier, and offset so it never lines up with the near row.
+        let far = skyline(
+            width: size.width, baseY: baseY, maxHeight: depth * 0.62, seedOffset: 71.3,
+            minWidth: 9, widthSpread: 13, gap: 5)
+        context.fill(
+            far.silhouette,
+            with: .color(isDay
+                ? Color(red: 0.13, green: 0.15, blue: 0.20).opacity(0.72 * intensity)
+                : Color(red: 0.05, green: 0.06, blue: 0.11).opacity(0.88 * intensity)))
+
+        let near = skyline(
+            width: size.width, baseY: baseY, maxHeight: depth * 0.95, seedOffset: 12.7,
+            minWidth: 14, widthSpread: 22, gap: 7)
+        context.fill(
+            near.silhouette,
+            with: .color(isDay
+                ? Color(red: 0.06, green: 0.07, blue: 0.10).opacity(0.86 * intensity)
+                : Color.black.opacity(0.92 * intensity)))
+
+        drawWindows(&context, buildings: near.buildings, time: time)
+        drawSpires(&context, buildings: near.buildings, time: time)
+    }
+
+    private struct Skyline {
+        var silhouette = Path()
+        var buildings: [CGRect] = []
+    }
+
+    /// Tiles buildings across the width from index hashes. Deterministic, so the skyline
+    /// is stable across frames and across launches; capped so a narrow panel cannot spin
+    /// the loop.
+    private func skyline(
+        width: CGFloat, baseY: CGFloat, maxHeight: CGFloat, seedOffset: Double,
+        minWidth: CGFloat, widthSpread: CGFloat, gap: CGFloat
+    ) -> Skyline {
+        var result = Skyline()
+        var x: CGFloat = -minWidth
+        var index = 0
+
+        while x < width + minWidth && index < 40 {
+            let seed = Double(index) + seedOffset
+            let buildingWidth = minWidth + CGFloat(fract(sin(seed * 12.9898) * 43758.5453)) * widthSpread
+            let height = maxHeight * (0.3 + CGFloat(fract(sin(seed * 78.233) * 24634.6345)) * 0.7)
+            let rect = CGRect(x: x, y: baseY - height, width: buildingWidth, height: height)
+
+            result.silhouette.addRect(rect)
+            result.buildings.append(rect)
+
+            x += buildingWidth + CGFloat(fract(sin(seed * 33.71) * 9134.2)) * gap
+            index += 1
+        }
+        return result
+    }
+
+    /// Lit windows, in three brightness groups so the whole city costs three fills.
+    ///
+    /// A window's state comes from a hash of its position plus a slow phase, so most sit
+    /// still while a few fade up or down over tens of seconds -- somebody getting home,
+    /// somebody going to bed. Fast flicker would read as a broken display.
+    private func drawWindows(
+        _ context: inout GraphicsContext, buildings: [CGRect], time: Double
+    ) {
+        // Daylight leaves windows unlit: at noon a lit office window is invisible anyway,
+        // and drawing them is work for nothing.
+        guard !isDay else { return }
+
+        let cell: CGFloat = 4.2
+        let pane = CGSize(width: 1.6, height: 2.1)
+        var buckets = [Path](repeating: Path(), count: 3)
+
+        for (buildingIndex, building) in buildings.enumerated() {
+            let columns = max(Int((building.width - 3) / cell), 1)
+            let rows = max(Int((building.height - 4) / cell), 1)
+            guard rows > 0, columns > 0 else { continue }
+
+            let inset = (building.width - CGFloat(columns) * cell) / 2
+
+            for row in 0..<min(rows, 14) {
+                for column in 0..<min(columns, 6) {
+                    let seed = Double(buildingIndex) * 37.0 + Double(row) * 7.0 + Double(column)
+                    let lit = fract(sin(seed * 45.164) * 21947.3)
+                    guard lit > 0.55 else { continue }
+
+                    // Most windows hold steady; the phase only matters for the few whose
+                    // hash puts them near a transition.
+                    let phase = fract(sin(seed * 91.377) * 7712.9) * 6.283
+                    let breath = 0.5 + 0.5 * sin(time * 0.22 + phase)
+                    let level = min(Int((lit - 0.55) / 0.45 * 2 + breath), 2)
+
+                    buckets[level].addRect(CGRect(
+                        x: building.minX + inset + CGFloat(column) * cell + 1,
+                        y: building.minY + 3 + CGFloat(row) * cell,
+                        width: pane.width, height: pane.height))
+                }
+            }
+        }
+
+        // Warm, and never white: a white window in a black notch reads as a dead pixel.
+        let warm = Color(red: 1.0, green: 0.84, blue: 0.55)
+        for (level, path) in buckets.enumerated() where !path.isEmpty {
+            let brightness = 0.30 + 0.28 * Double(level)
+            context.fill(path, with: .color(warm.opacity(brightness * intensity)))
+        }
+    }
+
+    /// Masts on the tallest buildings, each with the red obstruction light that every
+    /// real skyline blinks at aircraft. They blink out of step, because real ones do.
+    private func drawSpires(
+        _ context: inout GraphicsContext, buildings: [CGRect], time: Double
+    ) {
+        var masts = Path()
+        var lights = Path()
+
+        for (index, building) in buildings.enumerated() {
+            let seed = Double(index) * 5.31
+            guard fract(sin(seed * 61.7) * 4517.9) > 0.72 else { continue }
+
+            let x = building.midX
+            let top = building.minY - building.height * 0.16
+            masts.move(to: CGPoint(x: x, y: building.minY))
+            masts.addLine(to: CGPoint(x: x, y: top))
+
+            // Roughly one second on, one and a half off, offset per mast.
+            let phase = fract(sin(seed * 23.9) * 8821.4) * 2.5
+            guard (time + phase).truncatingRemainder(dividingBy: 2.5) < 1.0 else { continue }
+            lights.addEllipse(in: CGRect(x: x - 1.1, y: top - 1.1, width: 2.2, height: 2.2))
+        }
+
+        context.stroke(
+            masts,
+            with: .color(Color.black.opacity(0.8 * intensity)),
+            style: StrokeStyle(lineWidth: 0.8))
+        context.fill(
+            lights,
+            with: .color(Color(red: 1.0, green: 0.25, blue: 0.22).opacity(0.85 * intensity)))
+    }
+
+    /// Aircraft crossing the sky: a body, a wing, and a beacon that blinks.
+    ///
+    /// Two lanes, each carrying one aircraft at a time on its own long cycle, so mostly
+    /// there is one in the sky and occasionally two. They cross in about half a minute --
+    /// slow enough that noticing one feels like noticing something rather than watching a
+    /// screensaver.
+    private func drawAircraft(
+        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double, horizonY: CGFloat
+    ) {
+        for lane in 0..<2 {
+            let seed = Double(lane) * 17.3
+            let period = 46.0 + fract(sin(seed * 12.4) * 3391.7) * 26.0
+            let crossing = 30.0
+            let cycle = (time + fract(sin(seed * 71.1) * 5527.3) * period)
+                .truncatingRemainder(dividingBy: period)
+            guard cycle < crossing else { continue }
+
+            let progress = cycle / crossing
+            let flight = floor((time + seed) / period)
+            // Half the flights go the other way.
+            let eastbound = fract(sin(flight * 44.7 + seed) * 6612.1) > 0.5
+            let x = size.width * CGFloat(eastbound ? progress : 1 - progress)
+            let y = horizonY * CGFloat(0.16 + fract(sin(flight * 88.3 + seed) * 2214.9) * 0.5)
+            let heading: CGFloat = eastbound ? 1 : -1
+
+            // Fades at both ends so it enters and leaves rather than popping.
+            let fade = min(1, sin(progress * .pi) * 3)
+            let body = Color.white.opacity(0.55 * fade * intensity)
+
+            var shape = Path()
+            shape.move(to: CGPoint(x: x - 3 * heading, y: y))
+            shape.addLine(to: CGPoint(x: x + 3 * heading, y: y))
+            shape.move(to: CGPoint(x: x - 0.5 * heading, y: y - 1.6))
+            shape.addLine(to: CGPoint(x: x - 0.5 * heading, y: y + 1.6))
+            context.stroke(shape, with: .color(body), style: StrokeStyle(lineWidth: 0.9, lineCap: .round))
+
+            // The strobe: brief, and about once a second, the way an anti-collision light
+            // actually behaves.
+            guard time.truncatingRemainder(dividingBy: 1.0) < 0.12 else { continue }
+            context.fill(
+                Path(ellipseIn: CGRect(x: x + 2.4 * heading - 1, y: y - 1, width: 2, height: 2)),
+                with: .color(.white.opacity(0.9 * fade * intensity)))
         }
     }
 

@@ -1924,6 +1924,10 @@ struct StatsSettings: View {
                     Text("See the desktop through it")
                 }
                 .disabled(!showWeatherBackdrop)
+                Defaults.Toggle(key: .weatherShowCity) {
+                    Text("City skyline")
+                }
+                .disabled(!showWeatherBackdrop)
                 HStack {
                     TextField("Place", text: $weatherPlace)
                         .textFieldStyle(.roundedBorder)

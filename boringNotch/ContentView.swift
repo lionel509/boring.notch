@@ -120,7 +120,8 @@ struct ContentView: View {
                                     useDesktopBlur: weatherUseDesktopBlur,
                                     sunProgress: weather.sunProgress,
                                     moonPhase: weather.moonPhase,
-                                    moonProgress: weather.moonProgress)
+                                    moonProgress: weather.moonProgress,
+                                    showCity: Defaults[.weatherShowCity])
                             } else {
                                 Color.black
                             }
