@@ -179,22 +179,6 @@ extension Defaults.Keys {
     /// the fact rather than only visible as an empty row.
     static let routerLogDiagnostic = Key<String>("routerLogDiagnostic", default: "never read")
 
-    static let wisprDatabasePath = Key<String>(
-        "wisprDatabasePath",
-        default: "~/Library/Application Support/Wispr Flow/flow.sqlite")
-    /// Security-scoped bookmark for the Wispr Flow folder. Same reason as the request
-    /// log, plus one of its own: SQLite needs the `-wal` sidecar beside the database to
-    /// see anything dictated since the last checkpoint.
-    static let wisprDatabaseBookmark = Key<Data>("wisprDatabaseBookmark", default: Data())
-    /// Words dictated per local day, accumulated by this app.
-    ///
-    /// Persisted rather than derived, and that is forced: Wispr Flow prunes its local
-    /// history once it has uploaded, so the database holds hours, not weeks. A window
-    /// longer than that can only exist if something keeps the tally, and this is it.
-    static let wisprWordsByDay = Key<[String: Int]>("wisprWordsByDay", default: [:])
-    /// Highest transcript timestamp already counted, so a row is never banked twice.
-    static let wisprLastSeen = Key<String>("wisprLastSeen", default: "")
-    static let wisprDiagnostic = Key<String>("wisprDiagnostic", default: "never read")
     static let hideCompletedReminders = Key<Bool>("hideCompletedReminders", default: true)
     static let sliderColor = Key<SliderColorEnum>(
         "sliderUseAlbumArtColor",

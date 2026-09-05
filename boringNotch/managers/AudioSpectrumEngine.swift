@@ -24,9 +24,23 @@ import OSLog
 private let logger = Logger(subsystem: "theboringteam.boringnotch", category: "AudioSpectrum")
 
 @available(macOS 14.4, *)
-final class AudioSpectrumEngine: ObservableObject {
+final class AudioSpectrumEngine {
     /// Normalised 0...1 band magnitudes, low frequency first. Main-thread only.
-    @Published private(set) var bands: [Float]
+    private(set) var bands: [Float]
+
+    /// Called on the main thread with each new frame of levels.
+    ///
+    /// Deliberately a callback and deliberately not `@Published`: the old shape hopped to
+    /// the main thread to publish, and a separate timer on the main runloop then woke up
+    /// to read the property back out again -- two wakeups per frame to move one array,
+    /// with no SwiftUI observer at either end. Consumers keep the levels in their own
+    /// `@State`, so a redraw invalidates one leaf rather than a view tree.
+    var onBands: (([Float]) -> Void)?
+
+    /// Frames whose every band is unchanged are not delivered. During a quiet passage --
+    /// or a paused track whose tap is still open -- this drops the main-thread wakeup and
+    /// the layer transaction entirely rather than re-drawing an identical row of bars.
+    private var lastPublished: [Float] = []
 
     // MARK: Tunables
 
@@ -160,6 +174,7 @@ final class AudioSpectrumEngine: ObservableObject {
 
         let zeroed = [Float](repeating: 0, count: bandCount)
         smoothed = zeroed
+        lastPublished = []
         reference = 0
         if Thread.isMainThread {
             bands = zeroed
@@ -342,10 +357,14 @@ final class AudioSpectrumEngine: ObservableObject {
 
     private func startRefreshTimer() {
         let timer = DispatchSource.makeTimerSource(queue: analysisQueue)
-        // 40 Hz. Faster than the old 30 because the envelope now decays quickly
-        // enough that the frame rate, not the smoothing, is what limits how sharp a
-        // transient can look -- and still well short of a display-linked update.
-        timer.schedule(deadline: .now(), repeating: .milliseconds(25), leeway: .milliseconds(5))
+        // 30 Hz, and 15 when the user has asked the machine to go easy.
+        //
+        // This briefly ran at 40 on the theory that the sluggishness was the frame rate.
+        // It was not -- it was the 0.10 decay, and with that fixed the extra ten frames
+        // bought nothing visible while costing a third more FFTs and a third more
+        // main-thread wakeups, for every hour music plays.
+        let interval = ProcessInfo.processInfo.isLowPowerModeEnabled ? 66 : 33
+        timer.schedule(deadline: .now(), repeating: .milliseconds(interval), leeway: .milliseconds(8))
         timer.setEventHandler { [weak self] in self?.analyse() }
         timer.resume()
         refreshTimer = timer
@@ -420,8 +439,14 @@ final class AudioSpectrumEngine: ObservableObject {
         }
 
         let published = smoothed
+        if !lastPublished.isEmpty, zip(lastPublished, published).allSatisfy({ abs($0 - $1) < 0.002 }) {
+            return
+        }
+        lastPublished = published
         DispatchQueue.main.async { [weak self] in
-            self?.bands = published
+            guard let self else { return }
+            self.bands = published
+            self.onBands?(published)
         }
     }
 
@@ -458,13 +483,13 @@ final class AudioSpectrumEngine: ObservableObject {
 /// 30 Hz would invalidate a SwiftUI view 30 times a second, which in this app
 /// would trade one CPU runaway for another.
 final class SpectrumSource {
-    /// Called on the main thread ~40x/second while a tap is live.
+    /// Called on the main thread ~30x/second while a tap is live, and only for frames
+    /// whose levels actually changed.
     var onBands: (([Float]) -> Void)?
 
     private(set) var isLive = false
 
     private var engine: AnyObject?
-    private var pollTimer: Timer?
     let bandCount: Int
 
     init(bandCount: Int = 4) {
@@ -478,23 +503,18 @@ final class SpectrumSource {
         guard engine == nil else { return }
 
         let engine = AudioSpectrumEngine(bandCount: bandCount)
+        engine.onBands = { [weak self] levels in
+            self?.onBands?(levels)
+        }
         engine.start(bundleIdentifier: bundleIdentifier)
         guard engine.isRunning else { return }
         self.engine = engine
         isLive = true
-
-        let timer = Timer(timeInterval: 1.0 / 40.0, repeats: true) { [weak self] _ in
-            guard let self, let engine = self.engine as? AudioSpectrumEngine else { return }
-            self.onBands?(engine.bands)
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        pollTimer = timer
     }
 
     func stop() {
-        pollTimer?.invalidate()
-        pollTimer = nil
         if #available(macOS 14.4, *), let engine = engine as? AudioSpectrumEngine {
+            engine.onBands = nil
             engine.stop()
         }
         engine = nil

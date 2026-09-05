@@ -1840,8 +1840,6 @@ struct StatsSettings: View {
     @Default(.statsStripShowUsage) var showUsage
     @Default(.statsStripShowSystem) var showSystem
     @Default(.routerLogPath) var routerLogPath
-    @Default(.wisprDatabasePath) var wisprDatabasePath
-    @ObservedObject private var wispr = WisprUsageManager.shared
     @Default(.statsStripFlipInterval) var flipInterval
     @Default(.showWeatherBackdrop) var showWeatherBackdrop
     @Default(.weatherBackdropIntensity) var weatherIntensity
@@ -1893,40 +1891,6 @@ struct StatsSettings: View {
                 Text("API usage")
             } footer: {
                 Text("Read from the local proxy's request log rather than any provider's API, so no keys live in this app. It covers whatever routes through the proxy — not browser sessions, and not apps that call a provider directly. This app is sandboxed, so the log has to be granted once with Choose….")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .disabled(!showStatsStrip)
-
-            Section {
-                HStack {
-                    TextField("Wispr Flow database", text: $wisprDatabasePath)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11, design: .monospaced))
-                    Button("Choose…") {
-                        WisprUsageManager.shared.requestAccess()
-                    }
-                }
-                .disabled(!showUsage)
-
-                LabeledContent("Status") {
-                    if wispr.isAvailable {
-                        Text("\(wispr.words(for: .today)) words today · "
-                             + "\(wispr.words(for: .week)) this week")
-                            .foregroundStyle(.secondary)
-                    } else if wispr.needsAuthorization {
-                        Label("Not readable yet — choose the folder above", systemImage: "lock.fill")
-                            .foregroundStyle(.orange)
-                    } else {
-                        Label("No database at that path", systemImage: "questionmark.circle")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .font(.footnote)
-            } header: {
-                Text("Dictation")
-            } footer: {
-                Text("Words dictated through Wispr Flow, shown beside the token counts on the provider page. Wispr Flow uploads its transcripts and then prunes them, so its database holds hours rather than weeks — this app keeps its own running tally instead, which means the weekly figure counts from the day you grant access, not from the day you installed Wispr Flow. Pick the folder, not the file: the -wal beside it is where anything recent actually lives.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
