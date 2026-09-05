@@ -126,26 +126,52 @@ struct ContentView: View {
                         }
                         // Eases the panel out of the hardware notch.
                         //
-                        // The physical notch is a hole in the display — it has no pixels
-                        // and is always black — so the seam is not something a shape drawn
-                        // *inside* it can fix. Painting the notch cover black only moved
-                        // the hard edge down. Instead the whole top band starts at the
-                        // hardware's black and lightens into the backdrop, so there is no
-                        // edge anywhere along the width for the eye to catch. With the
-                        // backdrop off this is black over black and changes nothing.
+                        // The physical notch is a hole in the display — no pixels, always
+                        // black — so the seam cannot be fixed by anything drawn inside it.
+                        // Painting the cover black only moved the hard edge down.
+                        //
+                        // The black is also only needed *where the hardware is*. Running it
+                        // across the full width, which is what the first attempt did, trades
+                        // a small black shape for a black bar the width of the notch panel.
+                        // So it falls off in both directions: down into the backdrop, and
+                        // outward past the notch's own edges, leaving a pool of shadow under
+                        // the cutout rather than a band. With the backdrop off it is black
+                        // over black and changes nothing.
                         .overlay(alignment: .top) {
                             if vm.notchState == .open {
-                                LinearGradient(
-                                    stops: [
-                                        .init(color: .black, location: 0),
-                                        .init(color: .black.opacity(0.78), location: 0.4),
-                                        .init(color: .black.opacity(0.32), location: 0.72),
-                                        .init(color: .clear, location: 1),
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom)
-                                    .frame(height: max(34, vm.effectiveClosedNotchHeight + 16))
-                                    .allowsHitTesting(false)
+                                GeometryReader { geo in
+                                    // Where the hardware notch ends, as a fraction of the
+                                    // panel, plus the distance the shadow takes to vanish.
+                                    let edge = geo.size.width > 0
+                                        ? min(vm.closedNotchSize.width / 2 / geo.size.width, 0.5)
+                                        : 0.15
+                                    let falloff = 0.16
+
+                                    LinearGradient(
+                                        stops: [
+                                            .init(color: .black, location: 0),
+                                            .init(color: .black.opacity(0.72), location: 0.42),
+                                            .init(color: .black.opacity(0.26), location: 0.74),
+                                            .init(color: .clear, location: 1),
+                                        ],
+                                        startPoint: .top,
+                                        endPoint: .bottom)
+                                        .mask {
+                                            LinearGradient(
+                                                stops: [
+                                                    .init(color: .clear,
+                                                          location: max(0.5 - edge - falloff, 0)),
+                                                    .init(color: .black, location: 0.5 - edge),
+                                                    .init(color: .black, location: 0.5 + edge),
+                                                    .init(color: .clear,
+                                                          location: min(0.5 + edge + falloff, 1)),
+                                                ],
+                                                startPoint: .leading,
+                                                endPoint: .trailing)
+                                        }
+                                }
+                                .frame(height: max(30, vm.effectiveClosedNotchHeight + 12))
+                                .allowsHitTesting(false)
                             }
                         }
                     }
