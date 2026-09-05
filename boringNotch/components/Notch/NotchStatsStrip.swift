@@ -178,45 +178,6 @@ struct NotchStatsStrip: View {
                 removal: .move(edge: .top).combined(with: .opacity)))
         .frame(height: statsStripRowHeight)
         .clipped()
-        // Its own scrim, because this row sits exactly where the backdrop is busiest.
-        //
-        // The city's promenade, the lit windows and the water all land in the bottom
-        // band of the panel, and so does this — grey 6.5 pt labels over a lit skyline are
-        // not labels. Fixing it by darkening the whole backdrop was tried and it worked
-        // by turning the scene off, which is the wrong trade. A band behind this row
-        // alone costs the scene nothing above it, and it fades out at the top rather than
-        // drawing an edge across the notch.
-        .background {
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0), location: 0),
-                    .init(color: .black.opacity(0.55), location: 0.35),
-                    .init(color: .black.opacity(0.68), location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom)
-                // Shaped, not a slab. The first version filled its own rectangle, which
-                // put square corners and two hard vertical edges inside a panel whose
-                // bottom is rounded — it read as a box sitting on the notch rather than
-                // as the notch getting darker. The bottom corners take the panel's own
-                // radius, and the ends fade out so no edge is ever drawn.
-                .clipShape(
-                    UnevenRoundedRectangle(
-                        bottomLeadingRadius: bottomCornerRadius,
-                        bottomTrailingRadius: bottomCornerRadius,
-                        style: .continuous))
-                .mask(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0),
-                            .init(color: .black, location: 0.06),
-                            .init(color: .black, location: 0.94),
-                            .init(color: .clear, location: 1),
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing))
-                .allowsHitTesting(false)
-        }
         // Clears the player badge hanging off the album art's corner.
         .padding(.top, statsStripTopGap)
         .contentShape(Rectangle())

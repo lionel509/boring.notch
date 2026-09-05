@@ -319,6 +319,37 @@ struct WeatherBackdrop: View {
         case .snow: drawPrecipitation(&context, size, time, isSnow: true)
         case .cloudy, .fog, .clear: break
         }
+
+        drawFooting(&context, size)
+    }
+
+    /// The panel's bottom, darkened so the stats row has something to sit on.
+    ///
+    /// This belongs here rather than behind the row itself, and the difference is the
+    /// whole point. A band drawn behind a 24 pt row ends where the row ends — but the
+    /// panel keeps going below it, so the backdrop came back underneath and the result
+    /// read light, dark, light: three bands where there should be one falling off. Drawn
+    /// here it runs to the panel's real bottom edge and is clipped by the notch's own
+    /// shape, so it cannot produce a corner or an edge of its own.
+    ///
+    /// It starts above the row and reaches full strength below it, which also means the
+    /// water immediately above the row keeps its reflections.
+    private func drawFooting(_ context: inout GraphicsContext, _ size: CGSize) {
+        guard bottomInset > 1 else { return }
+        let top = size.height - bottomInset - 12
+        guard top < size.height else { return }
+
+        context.fill(
+            Path(CGRect(x: 0, y: top, width: size.width, height: size.height - top)),
+            with: .linearGradient(
+                Gradient(stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black.opacity(0.42), location: 0.42),
+                    .init(color: .black.opacity(0.72), location: 0.8),
+                    .init(color: .black.opacity(0.78), location: 1),
+                ]),
+                startPoint: CGPoint(x: 0, y: top),
+                endPoint: CGPoint(x: 0, y: size.height)))
     }
 
     /// A soft bloom rather than a disc, tracking the real sun across the sky rather than
