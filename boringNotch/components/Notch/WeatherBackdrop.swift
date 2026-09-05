@@ -53,6 +53,8 @@ struct WeatherBackdrop: View {
     let moonProgress: Double?
     /// Draw the city along the bottom, with its lit windows and passing aircraft.
     let showCity: Bool
+    /// The album art's average colour, which the neon takes its hue from.
+    let accent: NSColor
 
     /// How often the scene redraws.
     ///
@@ -97,6 +99,23 @@ struct WeatherBackdrop: View {
                     draw(in: &context, size: size, time: timeline.date.timeIntervalSinceReferenceDate)
                 }
             }
+
+            // Opaque, and above everything else in the stack.
+            //
+            // Making the sky gradient start at black was not enough: with the desktop
+            // showing through, the sky is only an 18% tint over the blur, so "black" came
+            // out as the wallpaper at 82%. The band the hardware cutout sits in has to be
+            // painted, not tinted — it is the one part of this panel whose job is to be
+            // the same colour as a hole in the display.
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: Self.notchBlend * 0.85),
+                    .init(color: .black.opacity(0), location: Self.notchBlend * 1.7),
+                ],
+                startPoint: .top,
+                endPoint: .bottom)
+                .allowsHitTesting(false)
 
             // Enough scrim to keep white text readable over a bright wallpaper, and no more.
             // An early pass stacked 82% material on a 42% black scrim, which on a sunny
@@ -143,6 +162,16 @@ struct WeatherBackdrop: View {
             ],
             startPoint: .top,
             endPoint: .bottom)
+    }
+
+    /// Where anything that rises and sets touches down: the rooftops.
+    private static func horizonY(_ size: CGSize) -> CGFloat {
+        size.height * waterline - size.height * 0.22
+    }
+
+    /// How far above that horizon the sky goes before it runs into the black band.
+    private static func skyReach(_ size: CGSize) -> CGFloat {
+        horizonY(size) - size.height * notchBlend * 1.15
     }
 
     /// The band that has to match the hardware cutout, as a fraction of panel height.
@@ -215,6 +244,10 @@ struct WeatherBackdrop: View {
         // the city read as nearer than they are.
         if showCity {
             drawAircraft(&context, size, time, horizonY: skylineTop)
+            // Beams first: they rise from behind the skyline, so the buildings drawn next
+            // cut off their feet, which is what puts them in the city rather than on it.
+            drawSearchlights(&context, size, time, baseY: skylineTop + 6,
+                             ceiling: size.height * Self.notchBlend)
             drawCity(&context, size, time, waterY: waterY)
         }
 
@@ -235,7 +268,11 @@ struct WeatherBackdrop: View {
         let arc = sin(min(max(sunProgress, 0), 1) * .pi)
         let centre = CGPoint(
             x: size.width * (0.12 + 0.76 * sunProgress),
-            y: size.height * (1.02 - 0.86 * arc))
+            // Rising out of the skyline rather than out of the bottom of the panel.
+            // Before the city existed the panel's floor was the horizon; now the horizon
+            // is the rooftops, and a sun climbing out of the water below them was the
+            // one thing in the scene that could not happen.
+            y: Self.horizonY(size) - CGFloat(arc) * Self.skyReach(size))
         let radius = size.height * (0.75 + 0.45 * arc)
 
         // Low sun goes warm. Golden hour is most of why anyone looks at a sunset.
@@ -277,7 +314,7 @@ struct WeatherBackdrop: View {
         let arc = sin(min(max(progress, 0), 1) * .pi)
         let centre = CGPoint(
             x: size.width * (0.14 + 0.72 * progress),
-            y: size.height * (0.92 - 0.72 * arc))
+            y: Self.horizonY(size) - CGFloat(arc) * Self.skyReach(size) * 0.86)
         let radius = size.height * 0.11
 
         // Fades out at the horizon rather than clipping off the bottom edge.
@@ -591,6 +628,8 @@ struct WeatherBackdrop: View {
                     endPoint: CGPoint(x: 0, y: size.height)))
         }
 
+        drawBoats(&context, size, time, waterY: waterY, depth: depth)
+
         // The surface itself: a few slow bands of light lying across the water. One path,
         // one stroke, and they drift at different rates so the pattern never repeats
         // visibly.
@@ -706,6 +745,151 @@ struct WeatherBackdrop: View {
         return buckets
     }
 
+    // MARK: Searchlights
+
+    /// Beams thrown up out of the city, sweeping.
+    ///
+    /// This is the thing that makes a skyline read as *nightlife* rather than as a place
+    /// where people work late — Tianjin, Shanghai, a Manhattan rooftop, any of them at
+    /// midnight. Each beam is a wedge from a rooftop widening as it climbs, fading out
+    /// before it reaches the black band so it never runs into the hardware cutout, and
+    /// swinging on its own slow period so the three never sweep together.
+    ///
+    /// Three fills. The expensive-looking part of this scene is the cheap part.
+    private func drawSearchlights(
+        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double,
+        baseY: CGFloat, ceiling: CGFloat
+    ) {
+        guard !isDay else { return }
+
+        for index in 0..<3 {
+            let seed = Double(index) * 9.13
+            let x = size.width * CGFloat(0.16 + fract(sin(seed * 12.9) * 4471.3) * 0.68)
+            let origin = CGPoint(
+                x: x,
+                y: baseY + CGFloat(fract(sin(seed * 44.1) * 1129.7)) * 8)
+
+            // Slow, and each on its own period so they drift in and out of phase rather
+            // than sweeping in formation.
+            let speed = 0.16 + fract(sin(seed * 7.7) * 1123.4) * 0.13
+            let angle = sin(time * speed + Double(index) * 2.3) * 0.62
+
+            let reach = origin.y - ceiling * 0.5
+            let tip = CGPoint(
+                x: origin.x + CGFloat(sin(angle)) * reach,
+                y: origin.y - reach * CGFloat(cos(angle)))
+            let spread = reach * 0.13
+
+            // Perpendicular to the beam, so the wedge widens squarely rather than
+            // shearing as it swings.
+            let normal = CGPoint(x: CGFloat(cos(angle)), y: CGFloat(sin(angle)))
+
+            var wedge = Path()
+            wedge.move(to: CGPoint(x: origin.x - normal.x * 1.6, y: origin.y - normal.y * 1.6))
+            wedge.addLine(to: CGPoint(x: origin.x + normal.x * 1.6, y: origin.y + normal.y * 1.6))
+            wedge.addLine(to: CGPoint(x: tip.x + normal.x * spread, y: tip.y + normal.y * spread))
+            wedge.addLine(to: CGPoint(x: tip.x - normal.x * spread, y: tip.y - normal.y * spread))
+            wedge.closeSubpath()
+
+            // Mostly white with a wash of the sign colours, the way a real beam picks up
+            // whatever is in the air under it.
+            let tint = neonPalette[index % neonPalette.count]
+            context.fill(
+                wedge,
+                with: .linearGradient(
+                    Gradient(colors: [
+                        Color.white.opacity(0.20 * intensity),
+                        tint.opacity(0.10 * intensity),
+                        .clear,
+                    ]),
+                    startPoint: origin, endPoint: tip))
+        }
+    }
+
+    // MARK: Harbour traffic
+
+    /// Boats crossing the water: a hull, a warm cabin light, a wake, and the light's
+    /// smear on the surface behind it.
+    ///
+    /// Slow — a minute and a half to cross — and small, because the scale of the thing is
+    /// what says how far away the far shore is. Two of them on separate cycles, so
+    /// sometimes there are two and sometimes the harbour is empty, which is what a
+    /// harbour looks like.
+    private func drawBoats(
+        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double,
+        waterY: CGFloat, depth: CGFloat
+    ) {
+        for index in 0..<2 {
+            let seed = Double(index) * 23.9
+            let period = 84.0 + fract(sin(seed * 11.3) * 6613.1) * 54.0
+            let crossing = 74.0
+            let cycle = (time + fract(sin(seed * 63.7) * 2219.9) * period)
+                .truncatingRemainder(dividingBy: period)
+            guard cycle < crossing else { continue }
+
+            let progress = cycle / crossing
+            let voyage = floor((time + seed) / period)
+            let eastbound = fract(sin(voyage * 51.3 + seed) * 7741.7) > 0.5
+            let heading: CGFloat = eastbound ? 1 : -1
+
+            // Further out means higher in the band and smaller.
+            let lane = CGFloat(0.18 + fract(sin(voyage * 29.1 + seed) * 3317.3) * 0.45)
+            let y = waterY + depth * lane
+            let scale = 0.6 + lane * 0.9
+            let x = size.width * CGFloat(eastbound ? progress : 1 - progress)
+            let fade = min(1, sin(progress * .pi) * 4) * intensity
+
+            let length = 11 * scale
+            let height = 2.6 * scale
+
+            // Hull: flat deck, curved underside, a stub of a wheelhouse.
+            var hull = Path()
+            hull.move(to: CGPoint(x: x - length / 2, y: y))
+            hull.addLine(to: CGPoint(x: x + length / 2, y: y))
+            hull.addQuadCurve(
+                to: CGPoint(x: x - length / 2, y: y),
+                control: CGPoint(x: x, y: y + height * 1.8))
+            hull.closeSubpath()
+            hull.addRect(CGRect(
+                x: x - length * 0.1 * heading, y: y - height * 1.5,
+                width: length * 0.26, height: height * 1.5))
+
+            context.fill(hull, with: .color(.black.opacity(0.82 * fade)))
+
+            // Cabin light, and its reflection running down the water underneath it.
+            let lightPoint = CGPoint(x: x + length * 0.06 * heading, y: y - height * 1.5)
+            context.fill(
+                Path(ellipseIn: CGRect(
+                    x: lightPoint.x - 1.1 * scale, y: lightPoint.y - 1.1 * scale,
+                    width: 2.2 * scale, height: 2.2 * scale)),
+                with: .color(Color(red: 1.0, green: 0.86, blue: 0.6).opacity(0.9 * fade)))
+            context.fill(
+                Path(CGRect(
+                    x: lightPoint.x - 0.7 * scale, y: y,
+                    width: 1.4 * scale, height: depth * 0.3)),
+                with: .linearGradient(
+                    Gradient(colors: [
+                        Color(red: 1.0, green: 0.82, blue: 0.55).opacity(0.34 * fade),
+                        .clear,
+                    ]),
+                    startPoint: CGPoint(x: 0, y: y),
+                    endPoint: CGPoint(x: 0, y: y + depth * 0.3)))
+
+            // Wake: two short strokes trailing astern, the near one longer.
+            var wake = Path()
+            for step in 0..<2 {
+                let trail = length * (1.4 + CGFloat(step) * 1.5)
+                let drop = height * (0.5 + CGFloat(step) * 0.7)
+                wake.move(to: CGPoint(x: x - length / 2 * heading, y: y + drop))
+                wake.addLine(to: CGPoint(x: x - trail * heading, y: y + drop))
+            }
+            context.stroke(
+                wake,
+                with: .color(.white.opacity(0.16 * fade)),
+                style: StrokeStyle(lineWidth: 0.7, lineCap: .round))
+        }
+    }
+
     // MARK: Neon
 
     /// One sign: where it is, what colour it burns, and how brightly this frame.
@@ -716,16 +900,44 @@ struct WeatherBackdrop: View {
         var vertical: Bool
     }
 
-    /// The colours neon actually comes in. Saturated, because a desaturated neon sign is
-    /// just a lamp, and this is the one place in the scene allowed to be loud — it sits
-    /// behind frosted glass and reads as a colour cast rather than as a shape.
-    private static let neonPalette: [Color] = [
+    /// The colours neon comes in when nothing is playing. Saturated, because a
+    /// desaturated neon sign is just a lamp, and this is the one place in the scene
+    /// allowed to be loud — it sits behind frosted glass and reads as a colour cast
+    /// rather than as a shape.
+    private static let defaultNeon: [Color] = [
         Color(red: 1.00, green: 0.24, blue: 0.60),   // hot pink
         Color(red: 0.32, green: 0.92, blue: 1.00),   // cyan
         Color(red: 1.00, green: 0.66, blue: 0.18),   // amber
         Color(red: 0.70, green: 0.42, blue: 1.00),   // violet
         Color(red: 0.36, green: 1.00, blue: 0.64),   // green
     ]
+
+    /// The city's neon, tuned to whatever is playing.
+    ///
+    /// Not the album colour five times over — a skyline in one flat hue reads as a
+    /// filter laid over the scene rather than as signs. This takes the artwork's *hue*
+    /// and fans out around it, the way a real street's signs are all different and still
+    /// obviously belong to the same street. Saturation and brightness are forced up
+    /// regardless of the artwork, because neon is neon.
+    ///
+    /// Falls back to the fixed palette when the artwork has no hue to borrow — a
+    /// black-and-white sleeve would otherwise hand the city five grey signs.
+    private var neonPalette: [Color] {
+        guard let rgb = accent.usingColorSpace(.deviceRGB) else { return Self.defaultNeon }
+
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+        rgb.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        guard saturation > 0.16, brightness > 0.10 else { return Self.defaultNeon }
+
+        // Spread around the artwork's hue: two neighbours either side and a complement,
+        // which is what keeps a street from looking monochrome.
+        return [0.0, 0.07, -0.09, 0.17, 0.45].map { offset in
+            Color(hue: Double((hue + CGFloat(offset)).truncatingRemainder(dividingBy: 1) + 1)
+                    .truncatingRemainder(dividingBy: 1),
+                  saturation: 0.82,
+                  brightness: 0.98)
+        }
+    }
 
     /// Signs on about a third of the near buildings, horizontal along a facade or running
     /// down a narrow one, the way they actually hang.
@@ -742,9 +954,9 @@ struct WeatherBackdrop: View {
             let pick = fract(sin(seed * 27.31) * 6641.9)
             guard pick > 0.66, signs.count < 5 else { continue }
 
-            let color = Self.neonPalette[
-                Int(fract(sin(seed * 55.9) * 3319.1) * Double(Self.neonPalette.count))
-                    % Self.neonPalette.count]
+            let color = neonPalette[
+                Int(fract(sin(seed * 55.9) * 3319.1) * Double(neonPalette.count))
+                    % neonPalette.count]
 
             // A steady tube still moves a little; this is the hum, not a blink.
             let phase = fract(sin(seed * 71.9) * 8812.3) * 6.283

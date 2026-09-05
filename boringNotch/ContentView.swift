@@ -121,7 +121,8 @@ struct ContentView: View {
                                     sunProgress: weather.sunProgress,
                                     moonPhase: weather.moonPhase,
                                     moonProgress: weather.moonProgress,
-                                    showCity: Defaults[.weatherShowCity])
+                                    showCity: Defaults[.weatherShowCity],
+                                    accent: musicManager.avgColor)
                             } else {
                                 Color.black
                             }
