@@ -195,6 +195,26 @@ struct NotchStatsStrip: View {
                 ],
                 startPoint: .top,
                 endPoint: .bottom)
+                // Shaped, not a slab. The first version filled its own rectangle, which
+                // put square corners and two hard vertical edges inside a panel whose
+                // bottom is rounded — it read as a box sitting on the notch rather than
+                // as the notch getting darker. The bottom corners take the panel's own
+                // radius, and the ends fade out so no edge is ever drawn.
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        bottomLeadingRadius: bottomCornerRadius,
+                        bottomTrailingRadius: bottomCornerRadius,
+                        style: .continuous))
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .black, location: 0.06),
+                            .init(color: .black, location: 0.94),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing))
                 .allowsHitTesting(false)
         }
         // Clears the player badge hanging off the album art's corner.
@@ -220,6 +240,14 @@ struct NotchStatsStrip: View {
             // Sampling exists only while this row does. A closed notch costs nothing.
             stats.stop()
         }
+    }
+
+    /// Matches the open notch's own bottom corners, so the scrim ends where the panel
+    /// ends rather than cutting across it.
+    private var bottomCornerRadius: CGFloat {
+        Defaults[.cornerRadiusScaling]
+            ? cornerRadiusInsets.opened.bottom
+            : cornerRadiusInsets.closed.bottom
     }
 
     private func row<Content: View>(@ViewBuilder _ content: @escaping () -> Content) -> some View {
