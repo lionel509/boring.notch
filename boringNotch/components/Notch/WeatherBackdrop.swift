@@ -243,14 +243,21 @@ struct WeatherBackdrop: View {
         // Aircraft cross in front of the sky and behind the skyline, which is what makes
         // the city read as nearer than they are.
         if showCity {
+            // The skyline is built before anything that has to stand on it. Beams used to
+            // start at a fixed line a few points above the rooftops, which put them in
+            // mid-air between buildings — they now come off the roof of an actual one.
+            let city = cityLayers(size: size, waterY: waterY)
+
             drawAircraft(&context, size, time, horizonY: skylineTop)
-            // Beams first: they rise from behind the skyline, so the buildings drawn next
-            // cut off their feet, which is what puts them in the city rather than on it.
-            drawSearchlights(&context, size, time, baseY: skylineTop + 6,
+            // Beams before the buildings, so the silhouette drawn next cuts off their
+            // feet: that is what puts a beam in the city rather than on top of it.
+            drawSearchlights(&context, size, time,
+                             roofs: city.near.buildings,
                              ceiling: size.height * Self.notchBlend)
-            drawLasers(&context, size, time, baseY: skylineTop + 4,
+            drawLasers(&context, size, time,
+                       roofs: city.near.buildings,
                        ceiling: size.height * Self.notchBlend)
-            drawCity(&context, size, time, waterY: waterY)
+            drawCity(&context, size, time, waterY: waterY, city: city)
         }
 
         // Weather falls in front of everything, city and harbour included.
@@ -511,8 +518,32 @@ struct WeatherBackdrop: View {
     /// Everything at one depth goes into one path and one fill, and the lit windows are
     /// grouped by brightness the same way the stars are. The whole city is about eight
     /// draw calls -- fewer than the star field cost before this commit.
+    /// The two rows of buildings, built once per frame and used by everything that has
+    /// to know where a roof is.
+    private func cityLayers(size: CGSize, waterY: CGFloat) -> (far: Skyline, near: Skyline) {
+        let depth = size.height * 0.30
+        return (
+            far: skyline(
+                width: size.width, baseY: waterY, maxHeight: depth * 0.62, seedOffset: 71.3,
+                minWidth: 9, widthSpread: 13, gap: 5),
+            near: skyline(
+                width: size.width, baseY: waterY, maxHeight: depth * 0.95, seedOffset: 12.7,
+                minWidth: 14, widthSpread: 22, gap: 7))
+    }
+
+    /// The tallest building whose centre falls in a given slice of the width, so a beam
+    /// lands on a landmark rather than on whatever happens to be under that x.
+    private func tallestBuilding(
+        in buildings: [CGRect], from: CGFloat, to: CGFloat
+    ) -> CGRect? {
+        buildings
+            .filter { $0.midX >= from && $0.midX <= to }
+            .min { $0.minY < $1.minY }
+    }
+
     private func drawCity(
-        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double, waterY: CGFloat
+        _ context: inout GraphicsContext, _ size: CGSize, _ time: Double, waterY: CGFloat,
+        city: (far: Skyline, near: Skyline)
     ) {
         let baseY = waterY
         let depth = size.height * 0.30
@@ -537,18 +568,13 @@ struct WeatherBackdrop: View {
                 startRadius: 0, endRadius: depth * 1.5))
 
         // Far row: shorter, hazier, and offset so it never lines up with the near row.
-        let far = skyline(
-            width: size.width, baseY: baseY, maxHeight: depth * 0.62, seedOffset: 71.3,
-            minWidth: 9, widthSpread: 13, gap: 5)
         context.fill(
-            far.silhouette,
+            city.far.silhouette,
             with: .color(isDay
                 ? Color(red: 0.13, green: 0.15, blue: 0.20).opacity(0.72 * intensity)
                 : Color(red: 0.05, green: 0.06, blue: 0.11).opacity(0.88 * intensity)))
 
-        let near = skyline(
-            width: size.width, baseY: baseY, maxHeight: depth * 0.95, seedOffset: 12.7,
-            minWidth: 14, widthSpread: 22, gap: 7)
+        let near = city.near
         context.fill(
             near.silhouette,
             with: .color(isDay
@@ -769,16 +795,23 @@ struct WeatherBackdrop: View {
     /// Three fills. The expensive-looking part of this scene is the cheap part.
     private func drawSearchlights(
         _ context: inout GraphicsContext, _ size: CGSize, _ time: Double,
-        baseY: CGFloat, ceiling: CGFloat
+        roofs: [CGRect], ceiling: CGFloat
     ) {
         guard !isDay else { return }
 
         for index in 0..<3 {
             let seed = Double(index) * 9.13
-            let x = size.width * CGFloat(0.16 + fract(sin(seed * 12.9) * 4471.3) * 0.68)
+            // One per third of the skyline, on the tallest roof in that third.
+            let slice = size.width / 3
+            guard let host = tallestBuilding(
+                in: roofs, from: slice * CGFloat(index), to: slice * CGFloat(index + 1))
+            else { continue }
+
+            // Slightly off centre, because a rig sits on a roof rather than in the middle
+            // of one.
             let origin = CGPoint(
-                x: x,
-                y: baseY + CGFloat(fract(sin(seed * 44.1) * 1129.7)) * 8)
+                x: host.midX + (CGFloat(fract(sin(seed * 44.1) * 1129.7)) - 0.5) * host.width * 0.5,
+                y: host.minY + 1)
 
             // Slow, and each on its own period so they drift in and out of phase rather
             // than sweeping in formation.
@@ -871,7 +904,7 @@ struct WeatherBackdrop: View {
     /// one machine. They pulse as a set for the same reason.
     private func drawLasers(
         _ context: inout GraphicsContext, _ size: CGSize, _ time: Double,
-        baseY: CGFloat, ceiling: CGFloat
+        roofs: [CGRect], ceiling: CGFloat
     ) {
         guard !isDay else { return }
 
@@ -881,7 +914,11 @@ struct WeatherBackdrop: View {
         guard cycle < 9.0 else { return }
         let envelope = min(1, min(cycle, 9.0 - cycle) / 1.4)
 
-        let origin = CGPoint(x: size.width * 0.68, y: baseY)
+        // The rig goes on the tallest roof in the right half — the building that would
+        // actually be hosting the party.
+        guard let host = tallestBuilding(in: roofs, from: size.width * 0.5, to: size.width)
+        else { return }
+        let origin = CGPoint(x: host.midX, y: host.minY + 1)
         let reach = origin.y - ceiling * 0.4
         let sweep = sin(time * 0.55) * 0.42
         let spread = 0.20 + 0.10 * sin(time * 0.31)
