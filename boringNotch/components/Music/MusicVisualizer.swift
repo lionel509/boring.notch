@@ -9,6 +9,13 @@ import Cocoa
 import SwiftUI
 
 class AudioSpectrum: NSView {
+    /// Nine thin bars rather than four fat ones. The strip is boxed in by the closed
+    /// notch -- about 20 pt of room -- so the detail has to come out of the bar width,
+    /// not out of the footprint: 1.2 pt is still two crisp pixels on a retina panel.
+    static let barCount = 9
+    private static let barWidth: CGFloat = 1.2
+    private static let spacing: CGFloat = 0.9
+
     private var barLayers: [CAShapeLayer] = []
     private var barScales: [CGFloat] = []
     private var isPlaying: Bool = true
@@ -27,10 +34,10 @@ class AudioSpectrum: NSView {
     }
 
     private func setupBars() {
-        let barWidth: CGFloat = 2
-        let barCount = 4
-        let spacing: CGFloat = barWidth
-        let totalWidth = CGFloat(barCount) * (barWidth + spacing)
+        let barWidth = Self.barWidth
+        let barCount = Self.barCount
+        let spacing = Self.spacing
+        let totalWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * spacing
         let totalHeight: CGFloat = 14
         frame.size = CGSize(width: totalWidth, height: totalHeight)
 
@@ -49,14 +56,17 @@ class AudioSpectrum: NSView {
                                     yRadius: barWidth / 2)
             barLayer.path = path.cgPath
             barLayers.append(barLayer)
-            barScales.append(0.35)
+            barScales.append(0.18)
             layer?.addSublayer(barLayer)
         }
     }
     
     private func startAnimating() {
         guard animationTimer == nil else { return }
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+        // The decorative fallback, used when no tap is running. It used to step every
+        // 0.3 s and autoreverse, so each bar spent 0.6 s on one excursion and the strip
+        // swayed rather than moved. Nine bars at 8 Hz reads as a signal instead.
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
             self?.updateBars()
         }
     }
@@ -78,7 +88,7 @@ class AudioSpectrum: NSView {
         CATransaction.setDisableActions(true)
         for (i, barLayer) in barLayers.enumerated() {
             let level = i < levels.count ? CGFloat(levels[i]) : 0
-            let scale = 0.35 + 0.65 * max(0, min(1, level))
+            let scale = 0.18 + 0.82 * max(0, min(1, level))
             barScales[i] = scale
             barLayer.transform = CATransform3DMakeScale(1, scale, 1)
         }
@@ -101,17 +111,16 @@ class AudioSpectrum: NSView {
     private func updateBars() {
         for (i, barLayer) in barLayers.enumerated() {
             let currentScale = barScales[i]
-            let targetScale = CGFloat.random(in: 0.35 ... 1.0)
+            let targetScale = CGFloat.random(in: 0.18 ... 1.0)
             barScales[i] = targetScale
             let animation = CABasicAnimation(keyPath: "transform.scale.y")
             animation.fromValue = currentScale
             animation.toValue = targetScale
-            animation.duration = 0.3
-            animation.autoreverses = true
+            animation.duration = 0.12
             animation.fillMode = .forwards
             animation.isRemovedOnCompletion = false
             if #available(macOS 13.0, *) {
-                animation.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: 24, preferred: 24)
+                animation.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: 30, preferred: 30)
             }
             barLayer.add(animation, forKey: "scaleY")
         }
@@ -120,8 +129,8 @@ class AudioSpectrum: NSView {
     private func resetBars() {
         for (i, barLayer) in barLayers.enumerated() {
             barLayer.removeAllAnimations()
-            barLayer.transform = CATransform3DMakeScale(1, 0.35, 1)
-            barScales[i] = 0.35
+            barLayer.transform = CATransform3DMakeScale(1, 0.18, 1)
+            barScales[i] = 0.18
         }
     }
     
@@ -142,49 +151,44 @@ struct AudioSpectrumView: NSViewRepresentable {
     var bundleIdentifier: String?
 
     final class Coordinator {
-        let source = SpectrumSource(bandCount: 4)
-        var startedFor: String??
+        var token: UUID?
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> AudioSpectrum {
         let spectrum = AudioSpectrum()
-        context.coordinator.source.onBands = { [weak spectrum] levels in
-            spectrum?.applyLevels(levels)
+        let coordinator = context.coordinator
+        // The tap is shared with the playback track in the open notch, so this view
+        // subscribes rather than opening its own. The engine resolves more bands than
+        // there are bars here; folding them down by peak keeps a transient that lands
+        // in one band from being averaged away by its quiet neighbours.
+        coordinator.token = SharedSpectrum.shared.subscribe { [weak spectrum] levels in
+            spectrum?.applyLevels(SharedSpectrum.fold(levels, into: AudioSpectrum.barCount))
         }
         spectrum.update(isPlaying: isPlaying, live: false)
         return spectrum
     }
 
     func updateNSView(_ nsView: AudioSpectrum, context: Context) {
-        let coordinator = context.coordinator
-        if isPlaying {
-            // Restart the tap when the playing app changes -- a tap is bound to
-            // one process and does not follow the user to a different player.
-            if coordinator.startedFor != .some(bundleIdentifier) {
-                coordinator.source.stop()
-                coordinator.source.start(bundleIdentifier: bundleIdentifier)
-                coordinator.startedFor = .some(bundleIdentifier)
-            }
-        } else if coordinator.startedFor != nil {
-            coordinator.source.stop()
-            coordinator.startedFor = nil
-        }
-        nsView.update(isPlaying: isPlaying, live: coordinator.source.isLive)
+        SharedSpectrum.shared.update(isPlaying: isPlaying, bundleIdentifier: bundleIdentifier)
+        nsView.update(isPlaying: isPlaying, live: SharedSpectrum.shared.isLive)
     }
 
-    /// Tearing the tap down with the view is not optional: a process tap holds
-    /// an aggregate audio device and an IOProc, and leaking those is worse than
-    /// leaking a timer.
+    /// Dropping the subscription with the view is not optional: the shared tap holds
+    /// an aggregate audio device and an IOProc for as long as anyone is listening,
+    /// and leaking those is worse than leaking a timer.
     static func dismantleNSView(_ nsView: AudioSpectrum, coordinator: Coordinator) {
-        coordinator.source.stop()
+        if let token = coordinator.token {
+            SharedSpectrum.shared.unsubscribe(token)
+            coordinator.token = nil
+        }
         nsView.update(isPlaying: false, live: false)
     }
 }
 
 #Preview {
     AudioSpectrumView(isPlaying: .constant(true), bundleIdentifier: nil)
-        .frame(width: 16, height: 20)
+        .frame(width: 19, height: 20)
         .padding()
 }

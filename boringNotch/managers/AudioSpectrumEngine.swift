@@ -31,16 +31,18 @@ final class AudioSpectrumEngine: ObservableObject {
     // MARK: Tunables
 
     private let bandCount: Int
-    private let fftSize = 1024
-    private let log2n = vDSP_Length(10)   // 2^10 == fftSize
+    private let fftSize = 2048
+    private let log2n = vDSP_Length(11)   // 2^11 == fftSize
 
     /// Bars must jump to a transient but fall back gently, or the whole thing
-    /// reads as noise rather than as music.
-    private let attack: Float = 0.55
-    private let decay: Float = 0.10
+    /// reads as noise rather than as music. The fall was the problem: at 0.10 a bar
+    /// needed most of a second to come back down, so every band sat near its own
+    /// recent peak and the strip moved as one soft blob. It now tracks the beat.
+    private let attack: Float = 0.9
+    private let decay: Float = 0.3
 
     /// Musically useful range. Below this is rumble, above it is mostly air.
-    private let minHz: Float = 40
+    private let minHz: Float = 50
     private let maxHz: Float = 16_000
 
     // MARK: CoreAudio state
@@ -318,9 +320,10 @@ final class AudioSpectrumEngine: ObservableObject {
 
     private func startRefreshTimer() {
         let timer = DispatchSource.makeTimerSource(queue: analysisQueue)
-        // 30 Hz is enough to read as motion without spending the CPU that a
-        // display-linked update would.
-        timer.schedule(deadline: .now(), repeating: .milliseconds(33), leeway: .milliseconds(8))
+        // 40 Hz. Faster than the old 30 because the envelope now decays quickly
+        // enough that the frame rate, not the smoothing, is what limits how sharp a
+        // transient can look -- and still well short of a display-linked update.
+        timer.schedule(deadline: .now(), repeating: .milliseconds(25), leeway: .milliseconds(5))
         timer.setEventHandler { [weak self] in self?.analyse() }
         timer.resume()
         refreshTimer = timer
@@ -416,7 +419,7 @@ final class AudioSpectrumEngine: ObservableObject {
 /// 30 Hz would invalidate a SwiftUI view 30 times a second, which in this app
 /// would trade one CPU runaway for another.
 final class SpectrumSource {
-    /// Called on the main thread ~30x/second while a tap is live.
+    /// Called on the main thread ~40x/second while a tap is live.
     var onBands: (([Float]) -> Void)?
 
     private(set) var isLive = false
@@ -441,7 +444,7 @@ final class SpectrumSource {
         self.engine = engine
         isLive = true
 
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1.0 / 40.0, repeats: true) { [weak self] _ in
             guard let self, let engine = self.engine as? AudioSpectrumEngine else { return }
             self.onBands?(engine.bands)
         }
@@ -457,5 +460,106 @@ final class SpectrumSource {
         }
         engine = nil
         isLive = false
+    }
+}
+
+// MARK: - Shared tap
+
+/// One tap, many drawings of it.
+///
+/// A process tap is bound to a process and is not free to stand up: two views each
+/// opening their own would mean two aggregate devices, two IO procs and two FFTs over
+/// the same samples. Since the notch now draws the spectrum in two places at once --
+/// the bars beside the closed notch and the playback track inside the open one -- the
+/// tap lives here and the views subscribe to it.
+///
+/// Levels still arrive by callback rather than `@Published`, for the reason
+/// `SpectrumSource` gives: a published array at 40 Hz would invalidate every view
+/// observing this object 40 times a second. Subscribers keep the levels in their own
+/// `@State`, so only the leaf that draws bars redraws.
+@MainActor
+final class SharedSpectrum {
+    /// 24 bands is what a 2048-point FFT can actually resolve without handing two
+    /// neighbouring bars the same bin. Consumers that want fewer aggregate; nobody
+    /// should ask the engine for more.
+    static let shared = SharedSpectrum(bandCount: 24)
+
+    let bandCount: Int
+
+    private let source: SpectrumSource
+    private var subscribers: [UUID: ([Float]) -> Void] = [:]
+    private var target: String?
+    private var startedFor: String??
+    private var isPlaying = false
+
+    /// True when real audio is driving the bars, rather than nothing at all. Views use
+    /// it to fall back to their own idle treatment instead of drawing a flat line.
+    var isLive: Bool { source.isLive }
+
+    private init(bandCount: Int) {
+        self.bandCount = bandCount
+        self.source = SpectrumSource(bandCount: bandCount)
+        self.source.onBands = { [weak self] levels in
+            guard let self else { return }
+            for handler in self.subscribers.values { handler(levels) }
+        }
+    }
+
+    /// Fold the engine's bands down to however many bars a view has room for.
+    ///
+    /// By peak, not by mean: a kick that lands in one band is the whole point of the
+    /// bar it belongs to, and averaging it against three quiet neighbours is how a
+    /// spectrum ends up looking like a slow-breathing blob.
+    static func fold(_ levels: [Float], into count: Int) -> [Float] {
+        guard count > 0 else { return [] }
+        guard levels.count > count else { return levels }
+
+        return (0 ..< count).map { index in
+            let lower = index * levels.count / count
+            let upper = max(lower + 1, (index + 1) * levels.count / count)
+            return levels[lower ..< min(upper, levels.count)].max() ?? 0
+        }
+    }
+
+    func subscribe(_ handler: @escaping ([Float]) -> Void) -> UUID {
+        let token = UUID()
+        subscribers[token] = handler
+        reconcile()
+        return token
+    }
+
+    func unsubscribe(_ token: UUID) {
+        subscribers.removeValue(forKey: token)
+        reconcile()
+    }
+
+    /// Called by every subscriber as its inputs change. The tap runs only while
+    /// something is playing and somebody is drawing it, and restarts when the player
+    /// changes -- a tap follows a process, not a user.
+    func update(isPlaying: Bool, bundleIdentifier: String?) {
+        self.isPlaying = isPlaying
+        self.target = bundleIdentifier
+        reconcile()
+    }
+
+    private func reconcile() {
+        let shouldRun = isPlaying && !subscribers.isEmpty
+
+        guard shouldRun else {
+            if startedFor != nil {
+                source.stop()
+                startedFor = nil
+            }
+            return
+        }
+
+        // Already tapping this player. Note the attempt is recorded even when the tap
+        // could not be opened -- the entitlement or the permission is missing, and
+        // retrying it on every state change would spend real work to fail again.
+        guard startedFor != .some(target) else { return }
+
+        if startedFor != nil { source.stop() }
+        source.start(bundleIdentifier: target)
+        startedFor = .some(target)
     }
 }

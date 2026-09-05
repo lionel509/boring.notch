@@ -145,6 +145,9 @@ extension Defaults.Keys {
     /// that label clickable and remembers the choice, so this does too.
     static let showRemainingTime = Key<Bool>("showRemainingTime", default: true)
 
+    /// Show the current temperature under the month in the calendar panel, in place of
+    /// the year. Falls back to the year on its own when no place is set.
+    static let calendarShowsTemperature = Key<Bool>("calendarShowsTemperature", default: true)
     static let weatherPlace = Key<String>("weatherPlace", default: "")
     static let weatherResolvedPlace = Key<String>("weatherResolvedPlace", default: "")
     static let weatherLatitude = Key<Double>("weatherLatitude", default: 0)
@@ -185,6 +188,11 @@ extension Defaults.Keys {
     
     // MARK: Media playback
     static let coloredSpectrogram = Key<Bool>("coloredSpectrogram", default: true)
+
+    /// Draw the playback bar as the live spectrum of what is playing rather than as a
+    /// plain rule. The visualiser is otherwise only visible while the notch is closed,
+    /// which is the one time nobody is looking at it.
+    static let spectrumPlaybackTrack = Key<Bool>("spectrumPlaybackTrack", default: true)
     static let enableSneakPeek = Key<Bool>("enableSneakPeek", default: false)
     static let sneakPeekStyles = Key<SneakPeekStyle>("sneakPeekStyles", default: .standard)
     static let waitInterval = Key<Double>("waitInterval", default: 3)

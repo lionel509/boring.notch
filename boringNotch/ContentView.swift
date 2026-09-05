@@ -407,7 +407,7 @@ struct ContentView: View {
                                   HStack(alignment: .center) {
                                       Image(systemName: "music.note")
                                       GeometryReader { geo in
-                                          MarqueeText(.constant(musicManager.songTitle + " - " + musicManager.artistName),  textColor: Defaults[.playerColorTinting] ? Color(nsColor: musicManager.avgColor).ensureMinimumBrightness(factor: 0.6) : .gray, minDuration: 1, frameWidth: geo.size.width)
+                                          MarqueeText(.constant(musicManager.nowPlayingLine),  textColor: Defaults[.playerColorTinting] ? Color(nsColor: musicManager.avgColor).ensureMinimumBrightness(factor: 0.6) : .gray, minDuration: 1, frameWidth: geo.size.width)
                                       }
                                   }
                                   .foregroundStyle(.gray)
@@ -542,7 +542,7 @@ struct ContentView: View {
                             )
                             Spacer(minLength: vm.closedNotchSize.width)
                             // Song Artist
-                            Text(musicManager.artistName)
+                            Text(musicManager.displayArtist)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                                 .foregroundStyle(
@@ -580,7 +580,7 @@ struct ContentView: View {
                         .matchedGeometryEffect(id: "spectrum", in: albumArtNamespace)
                         .mask {
                             AudioSpectrumView(isPlaying: $musicManager.isPlaying, bundleIdentifier: musicManager.bundleIdentifier)
-                                .frame(width: 16, height: 12)
+                                .frame(width: 18, height: 12)
                         }
                 } else {
                     LottieAnimationContainer()

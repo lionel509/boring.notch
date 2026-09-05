@@ -29,11 +29,16 @@ class MusicManager: ObservableObject {
     private var activeController: (any MediaControllerProtocol)?
 
     // Published properties for UI
-    @Published var songTitle: String = "I'm Handsome"
-    @Published var artistName: String = "Me"
+    // Empty until a player says otherwise. The upstream placeholders ("I'm Handsome"
+    // by "Me", from the album "Self Love") are a joke that stops being one the fourth
+    // time a notch opens on them, and the controllers' "Unknown" was worse: both print
+    // as though they were a real track. Views ask for `displayTitle` / `displayArtist`
+    // and get one honest line, or nothing.
+    @Published var songTitle: String = ""
+    @Published var artistName: String = ""
     @Published var albumArt: NSImage = defaultImage
     @Published var isPlaying = false
-    @Published var album: String = "Self Love"
+    @Published var album: String = ""
     @Published var isPlayerIdle: Bool = true
     @Published var animations: BoringAnimations = .init()
     @Published var avgColor: NSColor = .white
@@ -54,12 +59,34 @@ class MusicManager: ObservableObject {
     @Published var canFavoriteTrack: Bool = false
     @Published var isFavoriteTrack: Bool = false
 
+    /// True once a player has actually named something. Everything the notch prints
+    /// about the current track hangs off this: with no track there is no title to show,
+    /// no artist line to leave a gap, and nothing to fetch lyrics for.
+    var hasTrack: Bool { !songTitle.isEmpty || !artistName.isEmpty }
+
+    /// One line, and only when it is true. An idle player gets a plain statement of
+    /// that rather than a fabricated song.
+    var displayTitle: String { songTitle.isEmpty ? "Nothing playing" : songTitle }
+
+    /// Empty when unknown, so the views can drop the line entirely instead of reserving
+    /// space for a word that means "we did not ask".
+    var displayArtist: String { artistName }
+
+    /// Title and artist as one line, with the separator only where there are two
+    /// things to separate. The old string was built by concatenation, so an unnamed
+    /// artist left a dangling " - " hanging off the end of every sneak peek.
+    var nowPlayingLine: String {
+        [displayTitle, displayArtist]
+            .filter { !$0.isEmpty }
+            .joined(separator: " - ")
+    }
+
     private var artworkData: Data? = nil
 
     // Store last values at the time artwork was changed
-    private var lastArtworkTitle: String = "I'm Handsome"
-    private var lastArtworkArtist: String = "Me"
-    private var lastArtworkAlbum: String = "Self Love"
+    private var lastArtworkTitle: String = ""
+    private var lastArtworkArtist: String = ""
+    private var lastArtworkAlbum: String = ""
     private var lastArtworkBundleIdentifier: String? = nil
 
     @Published var isFlipping: Bool = false

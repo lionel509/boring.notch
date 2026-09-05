@@ -77,19 +77,24 @@ struct AlbumArtView: View {
 
                 VStack(alignment: .leading, spacing: 0) {
                     MarqueeText(
-                        $musicManager.songTitle,
+                        .constant(musicManager.displayTitle),
                         font: .caption, nsFont: .caption1,
                         textColor: .white,
                         frameWidth: max(geo.size.width - 12, 30))
                     .fontWeight(.semibold)
-                    MarqueeText(
-                        $musicManager.artistName,
-                        font: .caption2, nsFont: .caption2,
-                        textColor: Defaults[.playerColorTinting]
-                            ? Color(nsColor: musicManager.avgColor)
-                                .ensureMinimumBrightness(factor: 0.85)
-                            : .white.opacity(0.72),
-                        frameWidth: max(geo.size.width - 12, 30))
+                    // Dropped rather than blanked: an empty marquee still reserves its
+                    // line, which is how the artist slot ended up looking like a bug
+                    // whenever a player named a track but not who made it.
+                    if !musicManager.displayArtist.isEmpty {
+                        MarqueeText(
+                            .constant(musicManager.displayArtist),
+                            font: .caption2, nsFont: .caption2,
+                            textColor: Defaults[.playerColorTinting]
+                                ? Color(nsColor: musicManager.avgColor)
+                                    .ensureMinimumBrightness(factor: 0.85)
+                                : .white.opacity(0.72),
+                            frameWidth: max(geo.size.width - 12, 30))
+                    }
                 }
                 .padding(.horizontal, 6)
                 .padding(.bottom, 4)
@@ -322,9 +327,7 @@ struct MusicControlsView: View {
         case .rotating:
             RotatingMusicSlot()
         case .weather:
-            slotReadout(WeatherManager.shared.conditions.map {
-                "\(Int($0.temperatureC.rounded()))°"
-            } ?? "—")
+            slotReadout(WeatherManager.shared.temperatureText ?? "—")
 
         case .shuffle:
             HoverButton(icon: "shuffle", iconColor: musicManager.isShuffled ? .red : .primary, scale: .medium) {
@@ -686,6 +689,12 @@ struct LyricScrollColumn: View, Equatable {
     }
 }
 
+/// What the playback track needs to find the audio it is drawing.
+struct SpectrumTrackSource: Equatable {
+    var isPlaying: Bool
+    var bundleIdentifier: String?
+}
+
 struct MusicSliderView: View {
     @Default(.showRemainingTime) private var showRemainingTime
     @Binding var sliderValue: Double
@@ -711,7 +720,10 @@ struct MusicSliderView: View {
                     : Defaults[.sliderColor] == SliderColorEnum.accent ? .effectiveAccent : .white,
                 dragging: $dragging,
                 lastDragged: $lastDragged,
-                onValueChange: onValueChange
+                onValueChange: onValueChange,
+                spectrum: SpectrumTrackSource(
+                    isPlaying: isPlaying,
+                    bundleIdentifier: MusicManager.shared.bundleIdentifier)
             )
             .frame(height: 10, alignment: .center)
 
@@ -763,6 +775,12 @@ struct CustomSlider: View {
     @Binding var lastDragged: Date
     var onValueChange: ((Double) -> Void)?
     var onDragChange: ((Double) -> Void)?
+    /// Set by the playback bar to draw its track as the live spectrum. Left nil by the
+    /// volume slider, which stays a plain rule -- there is nothing to visualise about a
+    /// volume level, and it is a control people aim at.
+    var spectrum: SpectrumTrackSource?
+
+    @Default(.spectrumPlaybackTrack) private var spectrumTrack
 
     var body: some View {
         GeometryReader { geometry in
@@ -774,15 +792,27 @@ struct CustomSlider: View {
             let filledTrackWidth = min(max(progress, 0), 1) * width
 
             ZStack(alignment: .leading) {
-                Rectangle()
-                    .fill(.gray.opacity(0.3))
-                    .frame(height: height)
+                if let spectrum, spectrumTrack, !dragging {
+                    SpectrumTrack(
+                        progress: min(max(progress, 0), 1),
+                        color: color,
+                        isPlaying: spectrum.isPlaying,
+                        bundleIdentifier: spectrum.bundleIdentifier,
+                        restingHeight: height
+                    )
+                    .frame(height: 10)
+                } else {
+                    Rectangle()
+                        .fill(.gray.opacity(0.3))
+                        .frame(height: height)
+                        .cornerRadius(height / 2)
 
-                Rectangle()
-                    .fill(color)
-                    .frame(width: filledTrackWidth, height: height)
+                    Rectangle()
+                        .fill(color)
+                        .frame(width: filledTrackWidth, height: height)
+                        .cornerRadius(height / 2)
+                }
             }
-            .cornerRadius(height / 2)
             .frame(height: 10)
             .contentShape(Rectangle())
             .gesture(

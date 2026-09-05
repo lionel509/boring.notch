@@ -15,7 +15,6 @@ struct Config: Equatable {
     var steps: Int = 1  // Each step is one day
     var spacing: CGFloat = 0
     var showsText: Bool = true
-    var offset: Int = 2  // Number of dates to the left of the selected date
 }
 
 struct WheelPicker: View {
@@ -26,62 +25,85 @@ struct WheelPicker: View {
     @State private var byClick: Bool = false
     let config: Config
 
+    /// How many days are on screen at once, and it has to be odd.
+    ///
+    /// The old wheel let every cell size itself, so a column was as wide as its own day
+    /// name — "Wed" is wider than "Fri" — and an even number of them fitted the strip.
+    /// Centring the selected cell in that layout put two days on one side and three on
+    /// the other, which is exactly what it looked like. Equal-width cells and an odd
+    /// count are what make "centred" and "same number either side" the same statement.
+    private static func visibleCount(for width: CGFloat) -> Int {
+        // A three-letter day name at .caption needs about 30 pt to breathe.
+        let fits = Int(width / 30)
+        let odd = fits.isMultiple(of: 2) ? fits - 1 : fits
+        return max(3, min(odd, 9))
+    }
+
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: config.spacing) {
-                let spacerNum = config.offset
-                let dateCount = totalDateItems()
-                let totalItems = dateCount + 2 * spacerNum
-                ForEach(0..<totalItems, id: \.self) { index in
-                    if index < spacerNum || index >= spacerNum + dateCount {
-                        // Leading/trailing spacers sized to match a date cell
-                        Spacer()
-                            .frame(width: 24, height: 24)
-                            .id(index)
-                    } else {
-                        let date = dateForItemIndex(index: index, spacerNum: spacerNum)
-                        let isSelected = Calendar.current.isDate(date, inSameDayAs: selectedDate)
-                        dateButton(date: date, isSelected: isSelected, id: index) {
-                            selectedDate = date
-                            byClick = true
-                            withAnimation {
-                                scrollPosition = index
+        GeometryReader { geometry in
+            let visible = Self.visibleCount(for: geometry.size.width)
+            let cellWidth = geometry.size.width / CGFloat(visible)
+            // Half a screen of blanks at each end, so the first and last real dates can
+            // still be scrolled to the middle rather than stopping short of it.
+            let spacerNum = (visible - 1) / 2
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: config.spacing) {
+                    let dateCount = totalDateItems()
+                    let totalItems = dateCount + 2 * spacerNum
+                    ForEach(0..<totalItems, id: \.self) { index in
+                        if index < spacerNum || index >= spacerNum + dateCount {
+                            Color.clear
+                                .frame(width: cellWidth, height: 24)
+                                .id(index)
+                        } else {
+                            let date = dateForItemIndex(index: index, spacerNum: spacerNum)
+                            let isSelected = Calendar.current.isDate(date, inSameDayAs: selectedDate)
+                            dateButton(date: date, isSelected: isSelected, id: index) {
+                                selectedDate = date
+                                byClick = true
+                                withAnimation {
+                                    scrollPosition = index
+                                }
+                                if Defaults[.enableHaptics] {
+                                    haptics.toggle()
+                                }
                             }
-                            if Defaults[.enableHaptics] {
-                                haptics.toggle()
-                            }
+                            .frame(width: cellWidth)
                         }
                     }
                 }
+                .frame(height: 50)
+                .scrollTargetLayout()
             }
-            .frame(height: 50)
-            .scrollTargetLayout()
-        }
-        .scrollIndicators(.never)
-        .scrollPosition(id: $scrollPosition, anchor: .center)
-        .scrollTargetBehavior(.viewAligned)  // Ensures scroll view snaps the centered view
-        .safeAreaPadding(.horizontal)
-        .sensoryFeedback(.alignment, trigger: haptics)
-        .onChange(of: scrollPosition) { oldValue, newValue in
-            if !byClick {
-                handleScrollChange(newValue: newValue, config: config)
-            } else {
-                byClick = false
+            .scrollIndicators(.never)
+            .scrollPosition(id: $scrollPosition, anchor: .center)
+            .scrollTargetBehavior(.viewAligned)  // Ensures scroll view snaps the centered view
+            .sensoryFeedback(.alignment, trigger: haptics)
+            .onChange(of: scrollPosition) { oldValue, newValue in
+                if !byClick {
+                    handleScrollChange(newValue: newValue, spacerNum: spacerNum)
+                } else {
+                    byClick = false
+                }
             }
-        }
-        .onAppear {
-            scrollToToday(config: config)
-        }
-        // When parent updates the bound selectedDate (e.g., view reopen), center the wheel on it
-        .onChange(of: selectedDate) { _, newValue in
-            let targetIndex = indexForDate(newValue)
-            if scrollPosition != targetIndex {
+            .onAppear {
                 byClick = true
-                withAnimation {
-                    scrollPosition = targetIndex
+                scrollPosition = indexForDate(Date(), spacerNum: spacerNum)
+                selectedDate = Date()
+            }
+            // When parent updates the bound selectedDate (e.g., view reopen), center the wheel on it
+            .onChange(of: selectedDate) { _, newValue in
+                let targetIndex = indexForDate(newValue, spacerNum: spacerNum)
+                if scrollPosition != targetIndex {
+                    byClick = true
+                    withAnimation {
+                        scrollPosition = targetIndex
+                    }
                 }
             }
         }
+        .frame(height: 50)
     }
 
     private func dateButton(
@@ -93,8 +115,8 @@ struct WheelPicker: View {
                 dayText(date: dateToString(for: date), isToday: isToday, isSelected: isSelected)
                 dateCircle(date: date, isToday: isToday, isSelected: isSelected)
             }
+            .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
-            .padding(.horizontal, 4)
             .background(isSelected ? Color.effectiveAccentBackground : Color.clear)
             .cornerRadius(8)
         }
@@ -124,9 +146,8 @@ struct WheelPicker: View {
         }
     }
 
-    func handleScrollChange(newValue: Int?, config: Config) {
+    func handleScrollChange(newValue: Int?, spacerNum: Int) {
         guard let newIndex = newValue else { return }
-        let spacerNum = config.offset
         let dateCount = totalDateItems()
         guard (spacerNum..<(spacerNum + dateCount)).contains(newIndex) else { return }
         let date = dateForItemIndex(index: newIndex, spacerNum: spacerNum)
@@ -138,16 +159,8 @@ struct WheelPicker: View {
         }
     }
 
-    private func scrollToToday(config: Config) {
-        let today = Date()
-        byClick = true
-        scrollPosition = indexForDate(today)
-        selectedDate = today
-    }
-
     // MARK: - Index/Date mapping with steps and spacers
-    private func indexForDate(_ date: Date) -> Int {
-        let spacerNum = config.offset
+    private func indexForDate(_ date: Date, spacerNum: Int) -> Int {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let startDate = cal.startOfDay(for: cal.date(byAdding: .day, value: -config.past, to: today) ?? today)
@@ -181,21 +194,34 @@ struct WheelPicker: View {
 struct CalendarView: View {
     @EnvironmentObject var vm: BoringViewModel
     @ObservedObject private var calendarManager = CalendarManager.shared
+    @ObservedObject private var weather = WeatherManager.shared
     @State private var selectedDate = Date()
+    @Default(.calendarShowsTemperature) private var showsTemperature
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 8) {
+                // Month over temperature. The year was the one thing on this panel
+                // nobody has ever needed to look up — the dates below it already say
+                // which month we are in, and 2026 does not change. What is outside does.
+                // Click it to put the year back.
                 VStack(alignment: .leading) {
                     Text(selectedDate.formatted(.dateTime.month(.abbreviated)))
                         .font(.title3)
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
-                    Text(selectedDate.formatted(.dateTime.year()))
+                    Text(secondLine)
                         .font(.title3)
                         .fontWeight(.light)
                         .foregroundColor(Color(white: 0.65))
+                        .contentTransition(.numericText())
                 }
+                .fixedSize(horizontal: true, vertical: false)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.smooth(duration: 0.25)) { showsTemperature.toggle() }
+                }
+                .help(showsTemperature ? weather.statusMessage : "Show the temperature")
 
                 WheelPicker(selectedDate: $selectedDate, config: Config())
                     // Masked rather than overlaid with black. The old version painted two
@@ -203,12 +229,16 @@ struct CalendarView: View {
                     // because the notch behind it was also black — over any other backdrop
                     // they read as two dark bars flanking the dates. A mask fades the
                     // content itself, so whatever is behind shows through.
+                    // A sliver, not a wash. The cells now divide the strip exactly, so
+                    // the outermost days are whole days rather than the half-cells the
+                    // old 9% fade was there to hide — fading that far in just dimmed two
+                    // legible dates.
                     .mask(
                         LinearGradient(
                             stops: [
                                 .init(color: .clear, location: 0),
-                                .init(color: .black, location: 0.09),
-                                .init(color: .black, location: 0.91),
+                                .init(color: .black, location: 0.035),
+                                .init(color: .black, location: 0.965),
                                 .init(color: .clear, location: 1),
                             ],
                             startPoint: .leading,
@@ -239,11 +269,23 @@ struct CalendarView: View {
             }
         }
         .onAppear {
+            // Cached for 15 minutes inside the manager, so an open notch costs at most
+            // four lookups an hour and usually none.
+            weather.refresh()
             Task {
                 await calendarManager.updateCurrentDate(Date.now)
                 selectedDate = Date.now
             }
         }
+    }
+
+    /// Temperature when there is one to show, the year when there is not — a place that
+    /// has never been set should not leave a dash sitting under the month.
+    private var secondLine: String {
+        if showsTemperature, let temperature = weather.temperatureText {
+            return temperature
+        }
+        return selectedDate.formatted(.dateTime.year())
     }
 }
 

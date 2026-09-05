@@ -148,6 +148,23 @@ final class WeatherManager: ObservableObject {
         return fromMoonHigh * 2 + 0.5
     }
 
+    /// Fahrenheit or Celsius, taken from the user's own locale rather than from a
+    /// setting nobody would find. Open-Meteo is asked for Celsius and converted here, so
+    /// switching regions costs no refetch.
+    var usesFahrenheit: Bool {
+        Locale.current.measurementSystem == .us
+    }
+
+    /// The current temperature as it should be shown, or nil when there is nothing
+    /// measured yet — no place set, or the first fetch still in flight.
+    var temperatureText: String? {
+        guard let conditions else { return nil }
+        let value = usesFahrenheit
+            ? conditions.temperatureC * 9 / 5 + 32
+            : conditions.temperatureC
+        return "\(Int(value.rounded()))°"
+    }
+
     func refresh() {
         guard !isFetching else { return }
         if let conditions, Date().timeIntervalSince(conditions.fetchedAt) < Self.cacheLifetime {

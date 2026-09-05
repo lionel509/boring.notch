@@ -101,9 +101,13 @@ class SpotifyController: MediaControllerProtocol {
         guard descriptor.numberOfItems >= 10 else { return }
         
         let isPlaying = descriptor.atIndex(1)?.booleanValue ?? false
-        let currentTrack = descriptor.atIndex(2)?.stringValue ?? "Unknown"
-        let currentTrackArtist = descriptor.atIndex(3)?.stringValue ?? "Unknown"
-        let currentTrackAlbum = descriptor.atIndex(4)?.stringValue ?? "Unknown"
+        // Empty, never "Unknown". A player that has not told us the title yet is not
+        // playing a track called Unknown, and the notch prints whatever lands here — so
+        // an idle Spotify used to read "Unknown — Unknown" across the whole strip. The
+        // views treat empty as "nothing to say" and leave the line out.
+        let currentTrack = descriptor.atIndex(2)?.stringValue ?? ""
+        let currentTrackArtist = descriptor.atIndex(3)?.stringValue ?? ""
+        let currentTrackAlbum = descriptor.atIndex(4)?.stringValue ?? ""
         let currentTime = descriptor.atIndex(5)?.doubleValue ?? 0
         let duration = (descriptor.atIndex(6)?.doubleValue ?? 0)/1000
         let isShuffled = descriptor.atIndex(7)?.booleanValue ?? false
@@ -190,7 +194,7 @@ class SpotifyController: MediaControllerProtocol {
                 set artworkURL to artwork url of current track
                 return {playerState, currentTrackName, currentTrackArtist, currentTrackAlbum, trackPosition, trackDuration, shuffleState, repeatState, currentVolume, artworkURL}
             on error
-                return {false, "Unknown", "Unknown", "Unknown", 0, 0, false, false, 50, ""}
+                return {false, "", "", "", 0, 0, false, false, 50, ""}
             end try
         end tell
         """
