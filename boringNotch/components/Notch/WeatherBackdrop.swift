@@ -84,12 +84,18 @@ struct WeatherBackdrop: View {
                 // glass beats a painted imitation, and it means the notch picks up whatever
                 // is behind it rather than inventing a backdrop.
                 DesktopBlur()
-                // A wash, not a coat. At 55% the sky stacked on top of the album art's own
-                // lighting effect — which already tints the whole notch from the artwork —
-                // and two tinting systems fighting over the same pixels came out muddy
-                // brown rather than like glass. The blur is the effect; the weather only
-                // colours it.
-                sky.opacity(0.18)
+                // A wash when the sky was only a gradient; a coat now that it is a
+                // place.
+                //
+                // 18% was right when this drew nothing but a colour ramp whose whole job
+                // was to tint the glass — at 55% it fought the album art's own lighting
+                // effect and came out muddy. But a scene at 18% is not a scene: with the
+                // desktop at 82%, a warm wallpaper washed straight through the sky and
+                // read as a red haze hanging over the city. Now that there is a skyline,
+                // a harbour and a light show back there, the sky has to win, and the
+                // desktop's job drops to what it was always best at — a bit of real light
+                // from behind, rather than the picture itself.
+                sky.opacity(showCity ? 0.72 : 0.18)
             } else {
                 sky
             }
