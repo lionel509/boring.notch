@@ -164,6 +164,25 @@ struct WeatherBackdrop: View {
             endPoint: .bottom)
     }
 
+    /// How far into the night it is: 0 in full daylight, 1 once the sun is properly
+    /// down, ramping continuously through dusk and dawn.
+    ///
+    /// Everything in the city used to key off `isDay`, which is a boolean — so the whole
+    /// skyline, every sign, both searchlights and the laser rig came on in the same
+    /// frame, at whatever minute the weather service decided the sun had set. Real cities
+    /// light up through dusk, and they start before sunset: lights come on when the sun
+    /// gets *low*, not when it disappears. This drives every lit thing down there.
+    private var nightfall: Double {
+        guard isDay else { return 1 }
+        // 0 at sunrise and sunset, 1 at noon.
+        let elevation = sin(min(max(sunProgress, 0), 1) * .pi)
+        // The last stretch before the horizon is the whole ramp.
+        return min(max((0.24 - elevation) / 0.24, 0), 1)
+    }
+
+    /// Opacity for anything that is only lit after dark.
+    private var litIntensity: Double { intensity * nightfall }
+
     /// Where anything that rises and sets touches down: the rooftops.
     private static func horizonY(_ size: CGSize) -> CGFloat {
         size.height * waterline - size.height * 0.22
@@ -226,14 +245,20 @@ struct WeatherBackdrop: View {
         // Sky first, and kept out of both the black top band and the rooftops -- a star
         // beside the hardware cutout, or behind a building, is the one thing that would
         // give the whole illusion away.
-        if isDay {
-            if condition == .clear || condition == .cloudy { drawSun(&context, size, time) }
-        } else {
+        if isDay, condition == .clear || condition == .cloudy {
+            drawSun(&context, size, time)
+        }
+
+        // Stars fade up through dusk rather than appearing all at once, and the moon is
+        // drawn whenever it is actually above the horizon — including in daylight, where
+        // a real one is often perfectly visible and this one used to be suppressed.
+        if nightfall > 0.02 {
             drawStars(&context, size, time,
                       from: size.height * Self.notchBlend, to: skylineTop)
-            if condition == .clear || condition == .cloudy { drawMoon(&context, size) }
-            drawShootingStar(&context, size, time)
         }
+        if condition == .clear || condition == .cloudy { drawMoon(&context, size) }
+        // A streak only reads against a dark sky.
+        if nightfall > 0.55 { drawShootingStar(&context, size, time) }
 
         // Clouds in every condition now, not only the overcast ones -- a sky with nothing
         // in it but stars reads as empty. Clear gets two high wisps, which is honest
@@ -367,10 +392,13 @@ struct WeatherBackdrop: View {
         }
         disc.closeSubpath()
 
+        // Faint but present in daylight — a daytime moon is a real thing, and hiding it
+        // was the boolean talking.
+        let daylight = 0.28 + 0.72 * nightfall
         context.fill(
             disc,
             with: .color(Color(red: 0.96, green: 0.96, blue: 0.92)
-                .opacity(0.82 * visibility * intensity)))
+                .opacity(0.82 * visibility * intensity * daylight)))
     }
 
     /// Star brightness, quantised into this many steps.
@@ -405,7 +433,7 @@ struct WeatherBackdrop: View {
 
         for (level, path) in buckets.enumerated() where !path.isEmpty {
             let brightness = (Double(level) + 0.5) / Double(Self.starLevels)
-            context.fill(path, with: .color(.white.opacity(0.9 * brightness * intensity)))
+            context.fill(path, with: .color(.white.opacity(0.9 * brightness * litIntensity)))
         }
     }
 
@@ -551,9 +579,11 @@ struct WeatherBackdrop: View {
         // The glow that makes a city read as a city at night: light thrown up into the
         // air above it, brightest right at the rooftops. Without it a dark silhouette on
         // a sky that is already black at the bottom is simply invisible.
-        let glowColor = isDay
-            ? Color(red: 0.62, green: 0.68, blue: 0.78)
-            : Color(red: 1.0, green: 0.72, blue: 0.38)
+        // Cold and dim by day, warm and strong by night, mixed continuously between.
+        let glowColor = Color(
+            red: 0.62 + 0.38 * nightfall,
+            green: 0.68 + 0.04 * nightfall,
+            blue: 0.78 - 0.40 * nightfall)
         let glowRect = CGRect(
             x: -size.width * 0.1, y: baseY - depth * 1.5,
             width: size.width * 1.2, height: depth * 3)
@@ -561,7 +591,7 @@ struct WeatherBackdrop: View {
             Path(ellipseIn: glowRect),
             with: .radialGradient(
                 Gradient(colors: [
-                    glowColor.opacity((isDay ? 0.08 : 0.20) * intensity),
+                    glowColor.opacity((0.08 + 0.12 * nightfall) * intensity),
                     .clear,
                 ]),
                 center: CGPoint(x: size.width * 0.5, y: baseY),
@@ -641,7 +671,7 @@ struct WeatherBackdrop: View {
                 path.applying(mirror),
                 with: .linearGradient(
                     Gradient(colors: [
-                        warm.opacity((0.20 + 0.12 * Double(level)) * intensity),
+                        warm.opacity((0.20 + 0.12 * Double(level)) * litIntensity),
                         .clear,
                     ]),
                     startPoint: CGPoint(x: 0, y: waterY),
@@ -657,7 +687,7 @@ struct WeatherBackdrop: View {
                 Path(smear).applying(mirror),
                 with: .linearGradient(
                     Gradient(colors: [
-                        sign.color.opacity(0.42 * sign.brightness * intensity),
+                        sign.color.opacity(0.42 * sign.brightness * litIntensity),
                         .clear,
                     ]),
                     startPoint: CGPoint(x: 0, y: waterY),
@@ -684,7 +714,7 @@ struct WeatherBackdrop: View {
         }
         context.stroke(
             ripples,
-            with: .color(.white.opacity((isDay ? 0.10 : 0.07) * intensity)),
+            with: .color(.white.opacity((0.10 - 0.03 * nightfall) * intensity)),
             style: StrokeStyle(lineWidth: 0.7, lineCap: .round))
 
         // A bright line right at the waterline, where the city's light meets the water.
@@ -694,7 +724,7 @@ struct WeatherBackdrop: View {
         context.stroke(
             edge,
             with: .color(Color(red: 1.0, green: 0.78, blue: 0.48)
-                .opacity((isDay ? 0.10 : 0.18) * intensity)),
+                .opacity((0.10 + 0.08 * nightfall) * intensity)),
             style: StrokeStyle(lineWidth: 0.8))
     }
 
@@ -739,15 +769,15 @@ struct WeatherBackdrop: View {
         let warm = Color(red: 1.0, green: 0.84, blue: 0.55)
         for (level, path) in paths.enumerated() where !path.isEmpty {
             let brightness = 0.30 + 0.28 * Double(level)
-            context.fill(path, with: .color(warm.opacity(brightness * intensity)))
+            context.fill(path, with: .color(warm.opacity(brightness * litIntensity)))
         }
     }
 
     /// Built once and used twice — once for the windows and once for their reflection.
     private func windowPaths(buildings: [CGRect], time: Double) -> [Path] {
-        // Daylight leaves windows unlit: at noon a lit office window is invisible anyway,
-        // and drawing them is work for nothing.
-        guard !isDay else { return [] }
+        // Full daylight leaves windows unlit: at noon a lit office window is invisible
+        // anyway, and drawing them is work for nothing. They come up through dusk.
+        guard nightfall > 0.05 else { return [] }
 
         let cell: CGFloat = 4.2
         let pane = CGSize(width: 1.6, height: 2.1)
@@ -797,7 +827,9 @@ struct WeatherBackdrop: View {
         _ context: inout GraphicsContext, _ size: CGSize, _ time: Double,
         roofs: [CGRect], ceiling: CGFloat
     ) {
-        guard !isDay else { return }
+        // A beam needs a dark sky to be a beam. In half-light it is a smudge, so these
+        // wait for most of the way into the night rather than coming on at dusk.
+        guard nightfall > 0.6 else { return }
 
         for index in 0..<3 {
             let seed = Double(index) * 9.13
@@ -842,8 +874,8 @@ struct WeatherBackdrop: View {
                 wedge,
                 with: .linearGradient(
                     Gradient(colors: [
-                        Color.white.opacity(0.20 * intensity),
-                        tint.opacity(0.10 * intensity),
+                        Color.white.opacity(0.20 * litIntensity),
+                        tint.opacity(0.10 * litIntensity),
                         .clear,
                     ]),
                     startPoint: origin, endPoint: tip))
@@ -860,7 +892,8 @@ struct WeatherBackdrop: View {
     private func drawPromenade(
         _ context: inout GraphicsContext, _ size: CGSize, _ time: Double, waterY: CGFloat
     ) {
-        guard !isDay else { return }
+        // Streetlights come on first of anything here, which is true of streetlights.
+        guard nightfall > 0.02 else { return }
         let palette = neonPalette
 
         var x: CGFloat = -6
@@ -881,12 +914,12 @@ struct WeatherBackdrop: View {
             context.fill(
                 Path(ellipseIn: bar.insetBy(dx: -width * 0.18, dy: -3.4)),
                 with: .radialGradient(
-                    Gradient(colors: [color.opacity(0.22 * flicker * intensity), .clear]),
+                    Gradient(colors: [color.opacity(0.22 * flicker * litIntensity), .clear]),
                     center: CGPoint(x: bar.midX, y: bar.midY),
                     startRadius: 0, endRadius: width * 0.7))
             context.fill(
                 Path(roundedRect: bar, cornerRadius: 0.8),
-                with: .color(color.opacity(0.72 * flicker * intensity)))
+                with: .color(color.opacity(0.72 * flicker * litIntensity)))
 
             x += width + gap
             index += 1
@@ -906,7 +939,7 @@ struct WeatherBackdrop: View {
         _ context: inout GraphicsContext, _ size: CGSize, _ time: Double,
         roofs: [CGRect], ceiling: CGFloat
     ) {
-        guard !isDay else { return }
+        guard nightfall > 0.7 else { return }
 
         // On for a while, off for longer. A rig that never stops is wallpaper.
         let period = 26.0
@@ -941,8 +974,8 @@ struct WeatherBackdrop: View {
                 beam,
                 with: .linearGradient(
                     Gradient(colors: [
-                        color.opacity(0.55 * envelope * intensity),
-                        color.opacity(0.16 * envelope * intensity),
+                        color.opacity(0.55 * envelope * litIntensity),
+                        color.opacity(0.16 * envelope * litIntensity),
                         .clear,
                     ]),
                     startPoint: origin, endPoint: tip),
@@ -1006,14 +1039,16 @@ struct WeatherBackdrop: View {
                 Path(ellipseIn: CGRect(
                     x: lightPoint.x - 1.1 * scale, y: lightPoint.y - 1.1 * scale,
                     width: 2.2 * scale, height: 2.2 * scale)),
-                with: .color(Color(red: 1.0, green: 0.86, blue: 0.6).opacity(0.9 * fade)))
+                with: .color(Color(red: 1.0, green: 0.86, blue: 0.6)
+                    .opacity(0.9 * fade * (0.2 + 0.8 * nightfall))))
             context.fill(
                 Path(CGRect(
                     x: lightPoint.x - 0.7 * scale, y: y,
                     width: 1.4 * scale, height: depth * 0.3)),
                 with: .linearGradient(
                     Gradient(colors: [
-                        Color(red: 1.0, green: 0.82, blue: 0.55).opacity(0.34 * fade),
+                        Color(red: 1.0, green: 0.82, blue: 0.55)
+                            .opacity(0.34 * fade * (0.15 + 0.85 * nightfall)),
                         .clear,
                     ]),
                     startPoint: CGPoint(x: 0, y: y),
@@ -1103,7 +1138,9 @@ struct WeatherBackdrop: View {
     /// out — brief, irregular, and only on the ones whose hash says so, because a whole
     /// skyline flickering in unison reads as a rendering fault rather than as a city.
     private func neonSigns(buildings: [CGRect], time: Double) -> [NeonSign] {
-        guard !isDay else { return [] }
+        // Signs go on before the windows do — a bar's sign is lit while it is still
+        // light out, which is exactly what makes early evening look like early evening.
+        guard nightfall > 0.02 else { return [] }
         var signs: [NeonSign] = []
 
         for (index, building) in buildings.enumerated() {
@@ -1185,7 +1222,7 @@ struct WeatherBackdrop: View {
                 Path(ellipseIn: bloom),
                 with: .radialGradient(
                     Gradient(colors: [
-                        sign.color.opacity(0.32 * sign.brightness * intensity),
+                        sign.color.opacity(0.32 * sign.brightness * litIntensity),
                         .clear,
                     ]),
                     center: CGPoint(x: bloom.midX, y: bloom.midY),
@@ -1194,7 +1231,7 @@ struct WeatherBackdrop: View {
 
             context.fill(
                 Path(roundedRect: sign.rect, cornerRadius: 1.3),
-                with: .color(sign.color.opacity(0.92 * sign.brightness * intensity)))
+                with: .color(sign.color.opacity(0.92 * sign.brightness * litIntensity)))
 
             // A billboard is bolted to something. Two thin legs down to the roof is the
             // whole difference between a sign standing on a building and one floating
