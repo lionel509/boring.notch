@@ -66,8 +66,10 @@ class AudioSpectrum: NSView {
         guard animationTimer == nil else { return }
         // The decorative fallback, used when no tap is running. It used to step every
         // 0.3 s and autoreverse, so each bar spent 0.6 s on one excursion and the strip
-        // swayed rather than moved. Nine bars at 8 Hz reads as a signal instead.
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
+        // swayed rather than moved. 5 Hz reads as a signal without the churn of building
+        // seven animation objects eight times a second for something that is, after all,
+        // not data.
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             self?.updateBars()
         }
     }
@@ -117,7 +119,7 @@ class AudioSpectrum: NSView {
             let animation = CABasicAnimation(keyPath: "transform.scale.y")
             animation.fromValue = currentScale
             animation.toValue = targetScale
-            animation.duration = 0.12
+            animation.duration = 0.2
             animation.fillMode = .forwards
             animation.isRemovedOnCompletion = false
             if #available(macOS 13.0, *) {

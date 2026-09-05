@@ -17,6 +17,7 @@
 import Accelerate
 import AppKit
 import AudioToolbox
+import AppKit
 import CoreAudio
 import Foundation
 import OSLog
@@ -550,6 +551,7 @@ final class SharedSpectrum {
     private var target: String?
     private var startedFor: String??
     private var isPlaying = false
+    private var screensAsleep = false
 
     /// True when real audio is driving the bars, rather than nothing at all. Views use
     /// it to fall back to their own idle treatment instead of drawing a flat line.
@@ -561,6 +563,24 @@ final class SharedSpectrum {
         self.source.onBands = { [weak self] levels in
             guard let self else { return }
             for handler in self.subscribers.values { handler(levels) }
+        }
+
+        // A dark screen is the one case where every other condition still says yes and
+        // the work is certainly wasted: music playing, bars subscribed, nobody able to
+        // see them. Closing the lid on a playing album otherwise left a process tap, an
+        // aggregate device and thirty FFTs a second running for an audience of nobody.
+        let workspace = NSWorkspace.shared.notificationCenter
+        for (name, asleep) in [
+            (NSWorkspace.screensDidSleepNotification, true),
+            (NSWorkspace.screensDidWakeNotification, false),
+        ] {
+            workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.screensAsleep = asleep
+                    self.reconcile()
+                }
+            }
         }
     }
 
@@ -602,7 +622,7 @@ final class SharedSpectrum {
     }
 
     private func reconcile() {
-        let shouldRun = isPlaying && !subscribers.isEmpty
+        let shouldRun = isPlaying && !subscribers.isEmpty && !screensAsleep
 
         guard shouldRun else {
             if startedFor != nil {
