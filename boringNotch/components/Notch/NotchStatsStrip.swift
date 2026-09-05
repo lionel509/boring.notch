@@ -178,6 +178,25 @@ struct NotchStatsStrip: View {
                 removal: .move(edge: .top).combined(with: .opacity)))
         .frame(height: statsStripRowHeight)
         .clipped()
+        // Its own scrim, because this row sits exactly where the backdrop is busiest.
+        //
+        // The city's promenade, the lit windows and the water all land in the bottom
+        // band of the panel, and so does this — grey 6.5 pt labels over a lit skyline are
+        // not labels. Fixing it by darkening the whole backdrop was tried and it worked
+        // by turning the scene off, which is the wrong trade. A band behind this row
+        // alone costs the scene nothing above it, and it fades out at the top rather than
+        // drawing an edge across the notch.
+        .background {
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(0), location: 0),
+                    .init(color: .black.opacity(0.55), location: 0.35),
+                    .init(color: .black.opacity(0.68), location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom)
+                .allowsHitTesting(false)
+        }
         // Clears the player badge hanging off the album art's corner.
         .padding(.top, statsStripTopGap)
         .contentShape(Rectangle())
@@ -229,7 +248,9 @@ struct NotchStatsStrip: View {
         Text(text)
             .font(.system(size: 7, weight: .bold))
             .tracking(0.7)
-            .foregroundStyle(.tertiary.opacity(0.7))
+            // Was .tertiary at 70%, which is about 25% white — invisible over anything
+            // that is not flat black.
+            .foregroundStyle(.white.opacity(0.55))
             .fixedSize()
         Divider().frame(height: 10)
     }
@@ -362,7 +383,7 @@ struct NotchStatsStrip: View {
             Text(label)
                 .font(.system(size: 6.5, weight: .semibold))
                 .tracking(0.4)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.white.opacity(0.6))
 
             HStack(spacing: 4) {
                 Text(widest)
@@ -373,7 +394,8 @@ struct NotchStatsStrip: View {
                             .font(Self.valueFont)
                             .foregroundStyle(
                                 useColor && alarming
-                                    ? AnyShapeStyle(accent) : AnyShapeStyle(.secondary))
+                                    ? AnyShapeStyle(accent)
+                                    : AnyShapeStyle(Color.white.opacity(0.92)))
                             // Rolls the digits over rather than swapping them.
                             .contentTransition(.numericText())
                             .animation(.smooth(duration: 0.35), value: value)
