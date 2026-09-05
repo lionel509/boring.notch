@@ -134,12 +134,18 @@ struct WeatherBackdrop: View {
             // timestamps and the stats row — which are grey on purpose and stopped being
             // legible the moment a lit skyline appeared behind them. A flat scrim heavy
             // enough to fix that would have taken the sky out with it.
+            //
+            // Halved after the sky went opaque. These numbers were set while the desktop
+            // was still supplying 82% of every pixel — a bright wallpaper behind grey
+            // text needed a heavy coat. The sky at 72% is already dark, so the same scrim
+            // on top of it stacked into a night with the lights turned down: two fixes,
+            // each right on its own, crushing the city between them.
             LinearGradient(
                 stops: [
-                    .init(color: .black.opacity(useDesktopBlur ? 0.20 : 0.16), location: 0),
-                    .init(color: .black.opacity(useDesktopBlur ? 0.24 : 0.20), location: 0.45),
-                    .init(color: .black.opacity(useDesktopBlur ? 0.46 : 0.42), location: 0.78),
-                    .init(color: .black.opacity(useDesktopBlur ? 0.54 : 0.50), location: 1),
+                    .init(color: .black.opacity(0.10), location: 0),
+                    .init(color: .black.opacity(0.13), location: 0.45),
+                    .init(color: .black.opacity(0.24), location: 0.78),
+                    .init(color: .black.opacity(0.28), location: 1),
                 ],
                 startPoint: .top,
                 endPoint: .bottom)
@@ -222,7 +228,7 @@ struct WeatherBackdrop: View {
             switch condition {
             case .storm: return [Color(red: 0.05, green: 0.05, blue: 0.10), .black]
             case .fog: return [Color(red: 0.09, green: 0.09, blue: 0.11), .black]
-            default: return [Color(red: 0.03, green: 0.05, blue: 0.14), .black]
+            default: return [Color(red: 0.05, green: 0.09, blue: 0.24), Color(red: 0.02, green: 0.03, blue: 0.09)]
             }
         }
         switch condition {
@@ -597,7 +603,7 @@ struct WeatherBackdrop: View {
             Path(ellipseIn: glowRect),
             with: .radialGradient(
                 Gradient(colors: [
-                    glowColor.opacity((0.08 + 0.12 * nightfall) * intensity),
+                    glowColor.opacity((0.10 + 0.20 * nightfall) * intensity),
                     .clear,
                 ]),
                 center: CGPoint(x: size.width * 0.5, y: baseY),
@@ -774,7 +780,7 @@ struct WeatherBackdrop: View {
         // Warm, and never white: a white window in a black notch reads as a dead pixel.
         let warm = Color(red: 1.0, green: 0.84, blue: 0.55)
         for (level, path) in paths.enumerated() where !path.isEmpty {
-            let brightness = 0.30 + 0.28 * Double(level)
+            let brightness = 0.42 + 0.30 * Double(level)
             context.fill(path, with: .color(warm.opacity(brightness * litIntensity)))
         }
     }
