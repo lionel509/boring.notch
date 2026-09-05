@@ -36,8 +36,29 @@ struct BoringHeader: View {
             .zIndex(2)
 
             if vm.notchState == .open {
+                // Continues the physical notch down into the panel. It used to be solid
+                // black, which was invisible only because the panel behind it was also
+                // black — over the frosted backdrop it reads as a slab dropped into the
+                // middle of the header. The hardware notch itself is genuinely black and
+                // nothing can be drawn there, so the trick is to start black at the top,
+                // where it meets the real thing, and fade out into whatever is behind by
+                // the bottom. With no backdrop this is black over black and looks exactly
+                // as it always did.
                 Rectangle()
-                    .fill(NSScreen.screen(withUUID: coordinator.selectedScreenUUID)?.safeAreaInsets.top ?? 0 > 0 ? .black : .clear)
+                    .fill(
+                        (NSScreen.screen(withUUID: coordinator.selectedScreenUUID)?
+                            .safeAreaInsets.top ?? 0) > 0
+                            ? AnyShapeStyle(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .black, location: 0),
+                                        .init(color: .black, location: 0.45),
+                                        .init(color: .black.opacity(0.35), location: 0.78),
+                                        .init(color: .clear, location: 1),
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom))
+                            : AnyShapeStyle(Color.clear))
                     .frame(width: vm.closedNotchSize.width)
                     .mask {
                         NotchShape()
