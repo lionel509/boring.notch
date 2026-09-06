@@ -382,14 +382,19 @@ struct NotchStatsStrip: View {
         // that answers "what is draining my battery" while the percentage is still 90%.
         if stats.batteryWatts != 0 {
             let charging = stats.batteryWatts > 0
-            // One label, and the sign carries the direction. It was `POWER IN` / `POWER OUT`,
-            // which meant the cell renamed itself depending on whether a cable was plugged in
-            // -- and "where is POWER IN" is the reasonable question that gets you, because a
-            // label that only exists half the time reads as a missing feature rather than as
-            // a state. `-13.3 W` and `+45.0 W` are the same cell saying two things.
+            // One label, and an arrow carries the direction.
+            //
+            // Two earlier attempts were both wrong in the same way. `POWER IN` / `POWER OUT`
+            // renamed the cell depending on whether a cable was plugged in, so "where is
+            // POWER IN" reads as a missing feature rather than as a state. Replacing that
+            // with a signed figure fixed the label and introduced a minus sign sitting in
+            // the row all day, which is just as irritating and less legible at 10pt.
+            //
+            // An arrow says the same thing without either problem: the cell keeps one name,
+            // the direction is visible at a glance, and the number is only ever a number.
             gauge("POWER",
-                  String(format: "%+.1f W", stats.batteryWatts),
-                  widest: "-99.9 W",
+                  String(format: "%@ %.1f W", charging ? "↑" : "↓", abs(stats.batteryWatts)),
+                  widest: "↓ 99.9 W",
                   tint: charging ? .effectiveAccent : StatsPalette.severity(abs(stats.batteryWatts) / 40),
                   trend: stats.powerHistory,
                   alarming: !charging && abs(stats.batteryWatts) >= 35)
