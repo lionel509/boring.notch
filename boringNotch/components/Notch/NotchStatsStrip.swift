@@ -178,7 +178,11 @@ struct NotchStatsStrip: View {
             case .limits: row { caption("PLAN LIMITS"); limitCells }
             case .power: row { caption("POWER"); powerCells }
             case .system: row { caption("SYSTEM"); systemCells }
-            case .network: row { caption("NETWORK"); networkCells }
+            // Captioned by the network itself. An SSID can be long, and a caption is
+            // `fixedSize` while a gauge reserves a fixed width -- so the name belongs here,
+            // where its length costs nothing, rather than in a cell that would have to
+            // reserve room for the longest name imaginable.
+            case .network: row { caption(stats.wifiSSID?.uppercased() ?? "NETWORK"); networkCells }
             case .none: Color.clear
             }
         }
@@ -481,6 +485,21 @@ struct NotchStatsStrip: View {
 
     @ViewBuilder
     private var networkCells: some View {
+        // Signal first: it is the one that explains the others when they are bad.
+        if stats.wifiRSSI != 0 {
+            // −30 is excellent, −90 is unusable; the ramp is inverted so worse reads hotter.
+            let quality = min(max(Double(-stats.wifiRSSI - 30) / 60, 0), 1)
+            gauge("SIGNAL", "\(stats.wifiRSSI) dBm",
+                  widest: "-99 dBm",
+                  tint: StatsPalette.severity(quality),
+                  alarming: stats.wifiRSSI <= -75)
+        }
+        if stats.wifiRate > 0 {
+            gauge("LINK", "\(Int(stats.wifiRate.rounded())) Mbps", widest: "9999 Mbps")
+        }
+        if let ip = stats.localIP {
+            gauge("IP", ip, widest: "255.255.255.255")
+        }
         if showNetwork {
             gauge("DOWN", Self.rate(stats.networkDownBytesPerSec), widest: "999 KB/s",
                   trend: stats.networkDownHistory)

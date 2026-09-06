@@ -8,6 +8,7 @@
 import Combine
 import Darwin
 import Defaults
+import CoreWLAN
 import Foundation
 
 /// Samples aggregate system load, cheaply, and only while something is watching.
@@ -59,6 +60,14 @@ final class SystemStatsManager: ObservableObject {
     private static let wattCeiling: Double = 60
 
     private var diskTickCounter = 0
+
+    /// The network the row is describing, and how good it is. All three come straight off
+    /// `CWInterface`, which is cheap -- but the SSID needs the Location grant, so it is
+    /// optional by design rather than by accident.
+    @Published private(set) var wifiSSID: String?
+    @Published private(set) var wifiRSSI: Int = 0
+    @Published private(set) var wifiRate: Double = 0
+    @Published private(set) var localIP: String?
 
     let memoryTotalBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
 
@@ -135,6 +144,8 @@ final class SystemStatsManager: ObservableObject {
         sampleThermal()
         samplePower()
         if diskTickCounter % 10 == 0 { sampleDisk() }
+        // Once every five seconds. None of these move at 1 Hz, and `getifaddrs` walks a list.
+        if diskTickCounter % 5 == 0 { sampleNetworkIdentity() }
         diskTickCounter += 1
         recordHistory()
     }
@@ -174,6 +185,36 @@ final class SystemStatsManager: ObservableObject {
 
         let watts = (Double(amperage) / 1000) * (Double(voltage) / 1000)
         if abs(watts - batteryWatts) > 0.05 { batteryWatts = watts }
+    }
+
+    private func sampleNetworkIdentity() {
+        if let interface = CWWiFiClient.shared().interface() {
+            let ssid = interface.ssid()
+            if ssid != wifiSSID { wifiSSID = ssid }
+            let rssi = interface.rssiValue()
+            if rssi != wifiRSSI { wifiRSSI = rssi }
+            let rate = interface.transmitRate()
+            if rate != wifiRate { wifiRate = rate }
+        }
+
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0 else { return }
+        defer { freeifaddrs(head) }
+        var found: String?
+        var pointer = head
+        while let current = pointer {
+            defer { pointer = current.pointee.ifa_next }
+            guard let address = current.pointee.ifa_addr,
+                  address.pointee.sa_family == UInt8(AF_INET),
+                  String(cString: current.pointee.ifa_name) == "en0"
+            else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(address, socklen_t(address.pointee.sa_len),
+                              &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0
+            else { continue }
+            found = String(cString: host)
+        }
+        if found != localIP { localIP = found }
     }
 
     private func sampleThermal() {

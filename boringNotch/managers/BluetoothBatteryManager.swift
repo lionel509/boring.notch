@@ -48,7 +48,7 @@ private let logger = Logger(subsystem: "theboringteam.boringnotch", category: "B
 ///
 /// Names are written; this file lives inside the app's own container and is never
 /// transmitted. It is capped so it cannot grow without bound.
-private func btTrace(_ line: String) {
+func btTrace(_ line: String) {
     guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
     else { return }
     let url = dir.appendingPathComponent("bt-trace.log")

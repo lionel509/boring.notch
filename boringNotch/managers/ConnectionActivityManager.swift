@@ -60,6 +60,10 @@ final class ConnectionActivityManager: NSObject {
         wasOnWiFi = interface?.ssid() != nil || (interface?.rssiValue() ?? 0) != 0
         lastSSID = interface?.ssid()
         logger.notice("watching wifi, authorised \(self.location.authorizationStatus.rawValue, privacy: .public)")
+        // Whether the SSID actually resolves, which is the only question that matters and
+        // the one thing an authorisation status does not answer on its own. The *name* is
+        // deliberately not written down -- only whether there is one.
+        btTrace("wifi auth \(location.authorizationStatus.rawValue), ssid \(interface?.ssid() == nil ? "nil" : "available"), rate \(Int(interface?.transmitRate() ?? 0))")
     }
 
     /// Every link and SSID event lands here, and none of them announce anything directly.
