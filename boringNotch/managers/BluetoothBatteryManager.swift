@@ -1,0 +1,212 @@
+//
+//  BluetoothBatteryManager.swift
+//  boringNotch
+//
+//  Battery levels for connected Bluetooth devices.
+//
+//  Read over the **standard GATT Battery Service** (`0x180F`, characteristic `0x2A19`)
+//  through CoreBluetooth, which is public API and works on every device that implements
+//  the spec.
+//
+//  This is deliberately *not* the approach upstream's PR #1376 takes, and the difference
+//  was measured rather than assumed. That PR reads undocumented `BatteryPercent*` keys from
+//  `AppleDeviceManagementHIDEventService` and watches classic-Bluetooth connect
+//  notifications via `IOBluetoothDevice`. With an MX Master 3S connected on this machine,
+//  the whole IOKit path returns nothing: no `BatteryPercent` key exists anywhere in the
+//  registry, and the mouse does not appear in the registry at all. The reason is in
+//  `system_profiler`: `device_services = 0x400000 < BLE >`. It is a Low Energy device, and
+//  both halves of that approach are classic-Bluetooth only.
+//
+//  CoreBluetooth read the same mouse at 55% first try.
+//
+//  The trade is that `0x2A19` is a single byte, so it cannot express the left / right / case
+//  split that AirPods report. Those three values are Apple-proprietary and do come from the
+//  IOKit registry -- so that path is still worth adding later as an *enrichment* for Apple
+//  devices, layered on top of this. It is not the foundation.
+//
+
+import Combine
+import CoreBluetooth
+import Foundation
+
+@MainActor
+final class BluetoothBatteryManager: NSObject, ObservableObject {
+    struct Device: Identifiable, Equatable {
+        let id: UUID
+        let name: String
+        let percent: Int
+    }
+
+    static let shared = BluetoothBatteryManager()
+
+    /// Sorted by name so the row does not reshuffle itself between refreshes. Published,
+    /// unlike the spectrum's levels: a battery changes a few times an hour, so there is no
+    /// 30 Hz invalidation problem to design around here.
+    @Published private(set) var devices: [Device] = []
+
+    /// Whether Bluetooth is available and permitted at all. The strip uses it to leave the
+    /// page out entirely rather than draw an empty row.
+    @Published private(set) var isAvailable = false
+
+    private static let batteryService = CBUUID(string: "180F")
+    private static let batteryLevel = CBUUID(string: "2A19")
+
+    /// Battery moves slowly. A minute is frequent enough to be current and rare enough that
+    /// the radio work is invisible.
+    private static let refreshInterval: TimeInterval = 60
+
+    private var central: CBCentralManager?
+    private var refreshTimer: Timer?
+
+    /// Peripherals are held only for the duration of a read. CoreBluetooth does not retain
+    /// them for you -- a `CBPeripheral` that goes out of scope mid-connect simply never
+    /// calls back -- but holding them *past* the read would keep a link open for nothing.
+    private var reading: [UUID: CBPeripheral] = [:]
+    private var collected: [UUID: Device] = [:]
+
+    /// Same discipline as every other timer in this app: the strip is the only consumer, it
+    /// exists only while the notch is open, and a closed notch must cost nothing. Reference
+    /// counted because two views may subscribe at once.
+    private var subscribers = 0
+
+    private override init() { super.init() }
+
+    func start() {
+        subscribers += 1
+        guard subscribers == 1 else { return }
+
+        // Created lazily: constructing a CBCentralManager is what triggers the Bluetooth
+        // permission prompt, and asking on launch for a page the user may never open is
+        // the kind of thing that gets an app denied by reflex.
+        if central == nil {
+            central = CBCentralManager(delegate: self, queue: nil)
+        } else {
+            refresh()
+        }
+
+        let timer = Timer(timeInterval: Self.refreshInterval, repeats: true) { _ in
+            Task { @MainActor [weak self] in self?.refresh() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
+    }
+
+    func stop() {
+        subscribers = max(0, subscribers - 1)
+        guard subscribers == 0 else { return }
+
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+
+        // Drop anything still mid-read, or a connection outlives the page that wanted it.
+        for peripheral in reading.values {
+            central?.cancelPeripheralConnection(peripheral)
+        }
+        reading.removeAll()
+    }
+
+    private func refresh() {
+        guard let central, central.state == .poweredOn else { return }
+
+        // Only devices the *system* already has connected, and only those advertising the
+        // battery service. This is a lookup, not a scan: no discovery, no radio sweep, and
+        // nothing that could interfere with an audio link.
+        for peripheral in central.retrieveConnectedPeripherals(withServices: [Self.batteryService]) {
+            guard reading[peripheral.identifier] == nil else { continue }
+            reading[peripheral.identifier] = peripheral
+            peripheral.delegate = self
+            central.connect(peripheral, options: nil)
+        }
+    }
+
+    /// Publish once a read finishes, and drop the link immediately.
+    private func finish(_ peripheral: CBPeripheral, percent: Int?) {
+        if let percent, let name = peripheral.name, !name.isEmpty {
+            collected[peripheral.identifier] = Device(
+                id: peripheral.identifier, name: name, percent: percent)
+        }
+        central?.cancelPeripheralConnection(peripheral)
+        reading.removeValue(forKey: peripheral.identifier)
+
+        let next = collected.values.sorted { $0.name < $1.name }
+        if next != devices { devices = next }
+    }
+}
+
+// MARK: - CBCentralManagerDelegate
+
+extension BluetoothBatteryManager: CBCentralManagerDelegate {
+    nonisolated func centralManagerDidUpdateState(_ manager: CBCentralManager) {
+        MainActor.assumeIsolated {
+            isAvailable = manager.state == .poweredOn
+            guard manager.state == .poweredOn else {
+                // Powered off, unauthorised or unsupported. Forget what we had rather than
+                // show a number that has stopped being true.
+                collected.removeAll()
+                reading.removeAll()
+                if !devices.isEmpty { devices = [] }
+                return
+            }
+            refresh()
+        }
+    }
+
+    nonisolated func centralManager(_ manager: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        peripheral.discoverServices([Self.batteryService])
+    }
+
+    nonisolated func centralManager(
+        _ manager: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?
+    ) {
+        MainActor.assumeIsolated { finish(peripheral, percent: nil) }
+    }
+
+    nonisolated func centralManager(
+        _ manager: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?
+    ) {
+        MainActor.assumeIsolated {
+            reading.removeValue(forKey: peripheral.identifier)
+            // A device that has gone away must leave the row. Otherwise a pocketed mouse
+            // sits there at its last value for the rest of the session.
+            if collected.removeValue(forKey: peripheral.identifier) != nil {
+                devices = collected.values.sorted { $0.name < $1.name }
+            }
+        }
+    }
+}
+
+// MARK: - CBPeripheralDelegate
+
+extension BluetoothBatteryManager: CBPeripheralDelegate {
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard error == nil, let services = peripheral.services, !services.isEmpty else {
+            MainActor.assumeIsolated { finish(peripheral, percent: nil) }
+            return
+        }
+        for service in services where service.uuid == Self.batteryService {
+            peripheral.discoverCharacteristics([Self.batteryLevel], for: service)
+        }
+    }
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?
+    ) {
+        guard error == nil, let characteristics = service.characteristics else {
+            MainActor.assumeIsolated { finish(peripheral, percent: nil) }
+            return
+        }
+        for characteristic in characteristics where characteristic.uuid == Self.batteryLevel {
+            peripheral.readValue(for: characteristic)
+        }
+    }
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?
+    ) {
+        // One unsigned byte, 0...100 by the spec. Clamped anyway -- this is a number from
+        // someone else's firmware, and a 255 would otherwise draw a gauge off the end of
+        // the row.
+        let percent = characteristic.value?.first.map { Int(min($0, 100)) }
+        MainActor.assumeIsolated { finish(peripheral, percent: error == nil ? percent : nil) }
+    }
+}

@@ -91,6 +91,7 @@ struct NotchStatsStrip: View {
     @ObservedObject private var stats = SystemStatsManager.shared
     @ObservedObject private var usage = RouterUsageManager.shared
     @ObservedObject private var battery = BatteryStatusViewModel.shared
+    @ObservedObject private var bluetooth = BluetoothBatteryManager.shared
 
     @Default(.statsStripShowUsage) private var showUsage
     @Default(.statsStripShowSystem) private var showSystem
@@ -105,7 +106,10 @@ struct NotchStatsStrip: View {
     /// frame makes it read as pasted on. It settles in just behind the expansion instead.
     @State private var settled = false
 
-    private enum Page: Hashable { case usage, providers, limits, system }
+    /// Grouped by subject rather than by which manager the numbers came from. `system`
+    /// used to carry battery, CPU, memory and both network figures -- three unrelated
+    /// questions sharing a row because they arrived together.
+    private enum Page: Hashable { case usage, providers, limits, power, system, network }
 
     @State private var pageIndex = 0
     @State private var isHeld = false
@@ -121,7 +125,14 @@ struct NotchStatsStrip: View {
             if usage.byUpstream(for: .week).count > 1 { pages.append(.providers) }
             if usage.limits != nil { pages.append(.limits) }
         }
-        if showSystem { pages.append(.system) }
+        if showSystem {
+            // A page has to earn its slot. Six pages at the current flip interval is most
+            // of a minute for a full cycle, so a page with nothing to say is not a page --
+            // the same rule the usage pages above already follow.
+            if showBattery || !bluetooth.devices.isEmpty { pages.append(.power) }
+            if showCPU || showMemory { pages.append(.system) }
+            if showNetwork { pages.append(.network) }
+        }
         return pages
     }
 
@@ -166,7 +177,9 @@ struct NotchStatsStrip: View {
             case .usage: row { caption("TOKENS USED"); usageCells }
             case .providers: row { caption("BY PROVIDER · 7 DAYS"); providerCells }
             case .limits: row { caption("PLAN LIMITS"); limitCells }
+            case .power: row { caption("POWER"); powerCells }
             case .system: row { caption("SYSTEM"); systemCells }
+            case .network: row { caption("NETWORK"); networkCells }
             case .none: Color.clear
             }
         }
@@ -191,6 +204,7 @@ struct NotchStatsStrip: View {
         .offset(y: settled ? 0 : 7)
         .onAppear {
             stats.start()
+            bluetooth.start()
             usage.refresh()
             startFlipping()
             withAnimation(.smooth(duration: 0.3).delay(0.14)) { settled = true }
@@ -198,8 +212,10 @@ struct NotchStatsStrip: View {
         .onDisappear {
             settled = false
             stopFlipping()
-            // Sampling exists only while this row does. A closed notch costs nothing.
+            // Sampling exists only while this row does. A closed notch costs nothing --
+            // no CPU sampling, and no Bluetooth radio work either.
             stats.stop()
+            bluetooth.stop()
         }
     }
 
@@ -312,8 +328,9 @@ struct NotchStatsStrip: View {
         }
     }
 
+    /// This Mac's battery, then every Bluetooth device that reports one.
     @ViewBuilder
-    private var systemCells: some View {
+    private var powerCells: some View {
         if showBattery {
             // Severity runs the other way here: a battery is worrying when it is low, so
             // the fraction is inverted before it hits the same ramp.
@@ -326,6 +343,19 @@ struct NotchStatsStrip: View {
                   trend: stats.batteryHistory,
                   alarming: !battery.isCharging && battery.levelBattery <= 10)
         }
+        // One gauge per device, named by the device. No trend line: these are polled once
+        // a minute, so a sparkline would be four points pretending to be a curve.
+        ForEach(bluetooth.devices) { device in
+            gauge(device.name.uppercased(),
+                  "\(device.percent)%",
+                  widest: "100%",
+                  tint: StatsPalette.severity(1 - Double(device.percent) / 100),
+                  alarming: device.percent <= 10)
+        }
+    }
+
+    @ViewBuilder
+    private var systemCells: some View {
         if showCPU {
             gauge("CPU", "\(Int((stats.cpuUsage * 100).rounded()))%",
                   widest: "100%",
@@ -340,6 +370,10 @@ struct NotchStatsStrip: View {
                   trend: stats.memoryHistory,
                   alarming: stats.memoryFraction >= 0.9)
         }
+    }
+
+    @ViewBuilder
+    private var networkCells: some View {
         if showNetwork {
             gauge("DOWN", Self.rate(stats.networkDownBytesPerSec), widest: "999 KB/s",
                   trend: stats.networkDownHistory)

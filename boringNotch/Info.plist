@@ -2,13 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSAudioCaptureUsageDescription</key>
-	<string>boringNotch reads the audio of the app you are playing so the notch visualiser can follow the music.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>boringNotch reads the audio of the app you are playing so the notch visualiser can follow the music.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Reads the battery level of your connected Bluetooth devices, so the notch can show it. Nothing is transmitted.</string>
 	<key>SUEnableDownloaderService</key>
 	<true/>
 	<key>SUEnableInstallerLauncherService</key>
