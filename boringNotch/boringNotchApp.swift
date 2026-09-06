@@ -285,11 +285,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // nobody has asked to see.
         if Defaults[.showDictationActivity] {
             DictationManager.shared.start()
-            // Cheap and always on: an NWPathMonitor costs no permission and no polling,
-            // and a connection event is only worth showing at the moment it happens.
-            ConnectionActivityManager.shared.start()
-            BluetoothBatteryManager.shared.beginWatching()
         }
+
+        // Outside that check on purpose. Both of these were briefly nested inside it, which
+        // silently made two features depend on the dictation indicator being switched on --
+        // and it is off by default, so neither ever ran.
+        //
+        // An NWPathMonitor costs no permission and no polling, and the Bluetooth watch is a
+        // query against state CoreBluetooth already holds. A connection is only worth
+        // announcing at the moment it happens, so both have to be running before it does.
+        ConnectionActivityManager.shared.start()
+        BluetoothBatteryManager.shared.beginWatching()
 
         // Scan once at launch so the first time the notch opens the figures are already
         // there, rather than appearing a beat later.
