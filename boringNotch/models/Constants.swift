@@ -280,3 +280,30 @@ extension Defaults.Keys {
 
     static let didClearLegacyURLCacheV1 = Key<Bool>("didClearLegacyURLCache_v1", default: false)
 }
+
+// MARK: - Debug-only logging
+
+/// Debug-only logging, replacing bare `NSLog` throughout the app.
+///
+/// `NSLog` writes to the *unified system log*: persisted to disk, and readable by any process
+/// that can run `log show`. Thirty-eight call sites here interpolated values into it -- display
+/// names, the selected camera, playback state -- and not one was behind `#if DEBUG`, so they
+/// all ran in the Release build that ships to other people.
+///
+/// There are two problems there, and the second is the worse one: `NSLog(someInterpolatedString)`
+/// passes that string as the **format string**. A track title, display name or Bluetooth device
+/// name containing `%@` or `%n` is then read as a format specifier -- garbage output at best, a
+/// crash or an out-of-bounds read at worst, from text the user does not control. Routing the
+/// message through `%@` fixes that half.
+///
+/// Taking the message as an `@autoclosure` means the string is not constructed at all outside a
+/// debug build, so the interpolation costs nothing in Release.
+///
+/// It lives here rather than in `utils/Logger.swift` because that file is **not a member of any
+/// target** -- it has never been compiled, and neither has anything in `utils/`.
+@inline(__always)
+func debugLog(_ message: @autoclosure () -> String) {
+    #if DEBUG
+    NSLog("%@", message())
+    #endif
+}

@@ -41,19 +41,24 @@ not contact an update server or report its version anywhere.
 
 ## What is written to the system log
 
-This is the honest weak spot, and it is in our own code rather than a dependency.
+**Fixed 2026-09-06.** Previously all 38 `NSLog` calls in the app ran in Release, and `NSLog`
+writes to the unified system log — persisted, and readable by any process that can run
+`log show`. The values included display names, the selected camera's name, and playback state.
 
-- **19 `NSLog` calls interpolate a value.** `NSLog` writes to the unified system log, which is
-  persisted and readable by any process that can run `log show`. The values include display
-  names, the selected camera's name, and playback state.
-- **66 `print` calls interpolate a value.** For an app launched by Finder these go to a stdout
-  that is discarded, so they are not a disclosure — but they are not free either.
-- **Zero of these are behind `#if DEBUG`.** They all run in the Release build.
+They now route through a `debugLog` shim that compiles to nothing outside a debug build.
+Verified in the shipped binary rather than assumed: the literal `Playback state changed:` is
+present in the previous Release build and **absent** from the current one.
 
-**Recommended before the next release handed to anyone:** gate the `NSLog` calls behind
-`#if DEBUG`, or move them to `Logger` with the default privacy (OSLog redacts interpolated
-values as `<private>` unless explicitly marked `.public` — nothing in this tree marks anything
-`.public`).
+The shim also closes a second, quieter bug: `NSLog(someInterpolatedString)` passes that string
+as the **format string**, so a track title, display name or Bluetooth device name containing
+`%@` or `%n` was read as a format specifier — garbage output at best, a crash or an
+out-of-bounds read at worst, from text the user does not control. Messages now go through `%@`.
+
+66 `print` calls remain. For an app launched by Finder these write to a stdout that is
+discarded, so they are noise rather than disclosure, and they are left alone.
+
+Note for anyone reading the tree: `boringNotch/utils/Logger.swift` is **not a member of any
+target** and has never been compiled. Nothing in `utils/` is.
 
 ## Subprocesses
 

@@ -85,16 +85,16 @@ class CalendarManager: ObservableObject {
                     calendars: selectedCalendars.map { $0.id })
             }
         case .restricted, .denied:
-            NSLog("Calendar access denied or restricted")
+            debugLog("Calendar access denied or restricted")
         case .fullAccess:
-            NSLog("Full access")
+            debugLog("Full access")
             await reloadCalendarAndReminderLists()
             events = await calendarService.events(
                 from: currentWeekStartDate,
                 to: Calendar.current.date(byAdding: .day, value: 1, to: currentWeekStartDate)!,
                 calendars: selectedCalendars.map { $0.id })
         case .writeOnly:
-            NSLog("Write only")
+            debugLog("Write only")
         @unknown default:
             print("Unknown authorization status")
         }
@@ -118,12 +118,12 @@ class CalendarManager: ObservableObject {
                 await reloadCalendarAndReminderLists()
             }
         case .restricted, .denied:
-            NSLog("Reminder access denied or restricted")
+            debugLog("Reminder access denied or restricted")
         case .fullAccess:
-            NSLog("Full access")
+            debugLog("Full access")
             await reloadCalendarAndReminderLists()
         case .writeOnly:
-            NSLog("Write only")
+            debugLog("Write only")
         @unknown default:
             print("Unknown authorization status")
         }

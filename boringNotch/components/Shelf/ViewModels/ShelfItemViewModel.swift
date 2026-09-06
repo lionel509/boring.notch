@@ -528,7 +528,7 @@ final class ShelfItemViewModel: ObservableObject {
                     if !fileURLs.isEmpty {
                         // Start security-scoped access for all URLs and keep them active
                         ShelfItemViewModel.copiedURLs = fileURLs.filter { $0.startAccessingSecurityScopedResource() }
-                        NSLog("🔐 Started security-scoped access for \(ShelfItemViewModel.copiedURLs.count) copied files")
+                        debugLog("🔐 Started security-scoped access for \(ShelfItemViewModel.copiedURLs.count) copied files")
                         
                         // Write to pasteboard
                         pb.writeObjects(fileURLs as [NSURL])
@@ -767,7 +767,7 @@ final class ShelfItemViewModel: ObservableObject {
                         if response == .OK, let newURL = savePanel.url {
                             Task {
                                 do {
-                                    NSLog("🔐 Rename: moving from \(fileURL.path) to \(newURL.path) (securityScope=\(didStart))")
+                                    debugLog("🔐 Rename: moving from \(fileURL.path) to \(newURL.path) (securityScope=\(didStart))")
 
                                     try FileManager.default.moveItem(at: fileURL, to: newURL)
 

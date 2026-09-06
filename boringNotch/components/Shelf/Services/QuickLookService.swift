@@ -62,7 +62,7 @@ final class QuickLookService: ObservableObject {
     }
     
     private func stopAccessingCurrentURLs() {
-        NSLog("Stopping access to \(accessingURLs.count) URLs")
+        debugLog("Stopping access to \(accessingURLs.count) URLs")
         for url in accessingURLs where url.isFileURL {
             url.stopAccessingSecurityScopedResource()
         }

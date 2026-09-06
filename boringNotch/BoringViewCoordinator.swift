@@ -108,11 +108,11 @@ class BoringViewCoordinator: ObservableObject {
             if let screen = NSScreen.screens.first(where: { $0.localizedName == legacyName }),
                let uuid = screen.displayUUID {
                 preferredScreenUUID = uuid
-                NSLog("✅ Migrated display preference from name '\(legacyName)' to UUID '\(uuid)'")
+                debugLog("✅ Migrated display preference from name '\(legacyName)' to UUID '\(uuid)'")
             } else {
                 // Fallback to main screen if legacy screen not found
                 preferredScreenUUID = NSScreen.main?.displayUUID
-                NSLog("⚠️ Could not find display named '\(legacyName)', falling back to main screen")
+                debugLog("⚠️ Could not find display named '\(legacyName)', falling back to main screen")
             }
             // Clear legacy value after migration
             legacyPreferredScreenName = nil
