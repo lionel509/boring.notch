@@ -159,6 +159,68 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         }
     }
 
+    /// The process drawing the most power, named and measured: `Python 26.2 W`.
+    ///
+    /// `ri_energy_nj` and `ri_penergy_nj` are the kernel's own per-process energy accounting in
+    /// nanojoules, split across E-cores and P-cores. They are counters since the process
+    /// started, so like CPU time a single reading only says which process has existed longest.
+    /// Two readings differenced by a wall clock give watts, and the units cancel exactly:
+    /// nanojoules over nanoseconds *is* watts, with no scale factor to get wrong. That is the
+    /// one pleasant difference from `busiestProcess`, which needs the mach timebase.
+    ///
+    /// This is the only attribution that still works on mains power. `drain` reads the
+    /// battery and therefore has nothing to say with the cable in, but "why is the fan loud"
+    /// is the same question, and the answer is in the same counter.
+    @objc func topPowerProcess(with reply: @escaping (String?) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            reply(Self.hungriestProcess())
+        }
+    }
+
+    private static func hungriestProcess(over interval: TimeInterval = 0.3) -> String? {
+        let names = processTable()
+        guard !names.isEmpty else { return nil }
+
+        let pids = Array(names.keys)
+        let first = energyNanojoules(of: pids)
+        guard !first.isEmpty else { return nil }
+
+        let started = DispatchTime.now().uptimeNanoseconds
+        Thread.sleep(forTimeInterval: interval)
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started)
+        guard elapsed > 0 else { return nil }
+
+        var hungriest: pid_t = 0
+        var watts = 0.0
+        for (pid, after) in energyNanojoules(of: pids) {
+            guard let before = first[pid], after > before else { continue }
+            let draw = Double(after - before) / elapsed
+            if draw > watts { watts = draw; hungriest = pid }
+        }
+        // Half a watt. Measured on this machine at rest the whole user session attributes
+        // about 1.5 W across a hundred processes, so anything under this is the noise floor
+        // and naming the largest grain of it would be a confident wrong answer.
+        guard watts >= 0.5, let name = names[hungriest] else { return nil }
+        return String(format: "%@ %.1f W", name, watts)
+    }
+
+    /// Nanojoules burned per process, for the ones that will say. `&+` because these are two
+    /// independent free-running counters and a wrap must not trap the helper.
+    private static func energyNanojoules(of pids: [pid_t]) -> [pid_t: UInt64] {
+        var energy: [pid_t: UInt64] = [:]
+        for pid in pids {
+            var info = rusage_info_current()
+            let result = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
+                    proc_pid_rusage(pid, RUSAGE_INFO_CURRENT, $0)
+                }
+            }
+            guard result == 0 else { continue }
+            energy[pid] = info.ri_energy_nj &+ info.ri_penergy_nj
+        }
+        return energy
+    }
+
     @objc func requestAccessibilityAuthorization() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)

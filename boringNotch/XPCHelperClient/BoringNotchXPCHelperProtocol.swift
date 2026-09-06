@@ -24,5 +24,6 @@ import Foundation
     // cannot see one, and this service is not.
     func topProcessName(with reply: @escaping (String?) -> Void)
     func topMemoryProcess(with reply: @escaping (String?) -> Void)
+    func topPowerProcess(with reply: @escaping (String?) -> Void)
 }
 

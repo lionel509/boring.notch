@@ -17,6 +17,9 @@ struct InlineHUD: View {
     @Binding var detailSecondary: String
     /// Set by the caller when `type` alone cannot say what the left word is.
     @Binding var label: String
+    /// The icon's colour. White for everything that predates this, so the only things that
+    /// gain colour are the ones that asked for it.
+    @Binding var tint: Color
     @Binding var hoverAnimation: Bool
     @Binding var gestureProgress: CGFloat
     @State private var showSecondary = false
@@ -68,7 +71,11 @@ struct InlineHUD: View {
                             EmptyView()
                     }
                 }
-                .foregroundStyle(.white)
+                // Was hardcoded white, which is why the notch read as grey-on-black no
+                // matter what it was telling you. The icon is the one element that can carry
+                // colour without costing legibility, so it is the only one that does: the
+                // text stays white and keeps its contrast.
+                .foregroundStyle(tint)
                 .symbolVariant(.fill)
                 
                 Text(leftLabel)
@@ -219,7 +226,7 @@ struct InlineHUD: View {
 }
 
 #Preview {
-    InlineHUD(type: .constant(.brightness), value: .constant(0.4), icon: .constant(""), detail: .constant(""), detailSecondary: .constant(""), label: .constant(""), hoverAnimation: .constant(false), gestureProgress: .constant(0))
+    InlineHUD(type: .constant(.brightness), value: .constant(0.4), icon: .constant(""), detail: .constant(""), detailSecondary: .constant(""), label: .constant(""), tint: .constant(.white), hoverAnimation: .constant(false), gestureProgress: .constant(0))
         .padding(.horizontal, 8)
         .background(Color.black)
         .padding()

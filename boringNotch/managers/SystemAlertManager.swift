@@ -8,6 +8,7 @@
 import Defaults
 import Foundation
 import OSLog
+import SwiftUI
 
 // MARK: - What a rule found when it looked
 
@@ -39,6 +40,9 @@ enum AlertTrigger {
     /// Gained more than `gaining` within the last `within` samples, measured from the window's
     /// floor. The absolute level is not consulted at all.
     case surge(gaining: Double, within: Int)
+    /// Not measured at all. Something outside the app decided this happened and said so, and
+    /// the rule exists only to carry the label, the icon and the settings switch. Never polled.
+    case event
 }
 
 /// Everything a rule is allowed to read.
@@ -91,13 +95,18 @@ struct AlertRule: Identifiable {
     /// path. `nil` here, or a `nil` result, simply leaves `context` as `read` left it.
     let attribute: (@Sendable () async -> String?)?
 
+    /// The icon's colour, from the same three steps the stats strip uses. Red for a machine
+    /// in trouble, orange for something worth a look, green for a result.
+    let tint: Color
+
     /// Derived from the id so that adding a rule cannot forget to add its switch.
     let enabled: Defaults.Key<Bool>
 
     init(
         id: String, label: String, icon: String, title: String,
         trigger: AlertTrigger,
-        read: @escaping @MainActor (AlertSources) -> AlertReading?,
+        tint: Color = StatsPalette.critical,
+        read: @escaping @MainActor (AlertSources) -> AlertReading? = { _ in nil },
         format: @escaping @Sendable (Double) -> String = { String(Int($0)) },
         attribute: (@Sendable () async -> String?)? = nil
     ) {
@@ -106,6 +115,7 @@ struct AlertRule: Identifiable {
         self.icon = icon
         self.title = title
         self.trigger = trigger
+        self.tint = tint
         self.format = format
         self.read = read
         self.attribute = attribute
@@ -124,7 +134,10 @@ extension AlertRule {
     /// all already sampled and are each one literal away -- they are left out today because
     /// four interruptions is enough to find out whether the cadence is right, and getting
     /// that wrong is what makes someone switch the whole feature off.
-    static let all: [AlertRule] = [.cpu, .memory, .memorySurge, .drain, .tokens]
+    static let all: [AlertRule] = [
+        .cpu, .memory, .memorySurge, .drain, .tokens,
+        .claudeDone, .claudeWaiting, .claudeStalled, .claudeStarted,
+    ]
 
     static let cpu = AlertRule(
         id: "cpu",
@@ -172,6 +185,7 @@ extension AlertRule {
         icon: "arrow.up.forward.circle",
         title: "Sudden memory jumps",
         trigger: .surge(gaining: 1.5 * 1_073_741_824, within: 60),
+        tint: StatsPalette.serious,
         read: { sources in AlertReading(value: Double(sources.stats.memoryUsedBytes)) },
         format: { "+\(Units.bytes(UInt64(max($0, 0))))" },
         attribute: { await XPCHelperClient.shared.topMemoryProcess() })
@@ -182,6 +196,7 @@ extension AlertRule {
         icon: "battery.25",
         title: "Battery drain",
         trigger: .level(above: 35, rearmBelow: 20, sustained: 30),
+        tint: StatsPalette.serious,
         read: { sources in
             // Charging is not a quiet kind of draining, it is the other thing entirely.
             // Returning nil rather than zero keeps a cable going in from re-arming a rule
@@ -192,7 +207,11 @@ extension AlertRule {
                 value: watts,
                 detail: String(format: "%.0f W", watts),
                 context: "\(Int(sources.battery.levelBattery.rounded()))% left")
-        })
+        },
+        // Was the one rule that fired a number and named nobody: `Draining - 48 W` is a fact
+        // you can do nothing with. Percentage left is the weakest thing it could say second,
+        // since the same figure is already three inches away in the menu bar.
+        attribute: { await XPCHelperClient.shared.topPowerProcess() })
 
     static let tokens = AlertRule(
         id: "tokens",
@@ -203,6 +222,7 @@ extension AlertRule {
         // number that cannot move is waiting for nothing.
         title: "Plan limits",
         trigger: .level(above: 90, rearmBelow: 75, sustained: 3),
+        tint: StatsPalette.serious,
         read: { sources in
             // Both percentages default to zero when their key is missing, so a partial or
             // abandoned file reads as *plenty of quota left* rather than as no information.
@@ -220,6 +240,48 @@ extension AlertRule {
                 detail: "\(onFiveHour ? "5-hour" : "7-day") \(Int(worst.rounded()))%",
                 context: resets.map { "resets \(Self.clock.string(from: $0))" })
         })
+
+    /// A tab finished, is blocked, went quiet, or just started. Four rules rather than one
+    /// because each gets its own switch: `Started` is the noisiest of them and the first
+    /// anyone will want to turn off, and that has to be possible without losing `Done`.
+    ///
+    /// None of them are measured. The event has already happened by the time anything hears
+    /// about it, so these carry only presentation. Fired by `SystemAlertManager.fire`.
+    static let claudeDone = AlertRule(
+        id: "claudeDone",
+        label: "Claude",
+        icon: "checkmark.circle",
+        title: "Claude Code finished",
+        trigger: .event,
+        tint: StatsPalette.good)
+
+    /// Blocked on a permission prompt. Worth more than `Done`: a tab that stopped to ask
+    /// something is burning wall-clock doing nothing, and it is the state least likely to be
+    /// noticed, because nothing about it looks unfinished.
+    static let claudeWaiting = AlertRule(
+        id: "claudeWaiting",
+        label: "Claude",
+        icon: "hand.raised",
+        title: "Claude Code needs you",
+        trigger: .event,
+        tint: StatsPalette.critical)
+
+    /// Idle, waiting for input long enough that macOS raised it.
+    static let claudeStalled = AlertRule(
+        id: "claudeStalled",
+        label: "Claude",
+        icon: "hourglass",
+        title: "Claude Code went quiet",
+        trigger: .event,
+        tint: StatsPalette.serious)
+
+    static let claudeStarted = AlertRule(
+        id: "claudeStarted",
+        label: "Claude",
+        icon: "play.circle",
+        title: "Claude Code started",
+        trigger: .event,
+        tint: .effectiveAccent)
 
     private static let clock: DateFormatter = {
         let formatter = DateFormatter()
@@ -241,6 +303,10 @@ final class SystemAlertManager {
     private var started = false
     private var latches: [String: Latch] = [:]
     private var usageTimer: Timer?
+
+    /// When each distinct event was last announced, keyed by rule *and* subject. Only used to
+    /// swallow a genuine duplicate; see `fire`.
+    private var eventSeen: [String: Date] = [:]
 
     /// `sampleCPU` leaves `cpuUsage` at its previous value on the first tick after any
     /// `start()`, because a rate needs two readings of a monotonic counter before it exists.
@@ -283,8 +349,36 @@ final class SystemAlertManager {
         guard sawFirstSample else { sawFirstSample = true; return }
 
         for rule in AlertRule.all where Defaults[rule.enabled] {
+            // An event rule has no reading to take. Skipping it here rather than letting it
+            // return nil keeps the sampling path honest about what it actually costs.
+            if case .event = rule.trigger { continue }
             evaluate(rule)
         }
+    }
+
+    /// Announce something that has already happened. No threshold, no sustain, no cooldown:
+    /// an event arrives already decided, and the only judgement left is whether this is the
+    /// same one twice.
+    ///
+    /// Deliberately not the ten-minute cooldown the threshold rules use. That window exists to
+    /// stop one continuous condition being reported over and over; three tabs finishing inside
+    /// a minute are three separate facts, and swallowing the second and third would defeat the
+    /// entire point of the feature. So the key includes the subject, and the window is five
+    /// seconds -- long enough for a duplicated hook, short enough to never merge two tabs.
+    func fire(_ id: String, detail: String, context: String?) {
+        guard started, Defaults[.systemAlerts] else { return }
+        guard let rule = AlertRule.all.first(where: { $0.id == id }),
+              Defaults[rule.enabled]
+        else { return }
+
+        let now = Date()
+        let key = "\(id)|\(detail)"
+        if let last = eventSeen[key], now.timeIntervalSince(last) < 5 { return }
+        eventSeen = eventSeen.filter { now.timeIntervalSince($0.value) < 60 }
+        eventSeen[key] = now
+
+        logger.notice("\(id, privacy: .public) event: \(detail, privacy: .public)")
+        show(rule, detail: detail, context: context)
     }
 
     private func evaluate(_ rule: AlertRule) {
@@ -319,6 +413,10 @@ final class SystemAlertManager {
             rearmAt = gaining / 2
             // A jump is one event. There is nothing to sustain.
             needed = 1
+
+        case .event:
+            return  // Unreachable: `check` filters these out. Here so adding a trigger kind
+                    // is a compile error rather than a rule that silently never fires.
         }
 
         if signal < rearmAt {
@@ -372,6 +470,7 @@ final class SystemAlertManager {
             icon: rule.icon,
             detail: detail,
             detailSecondary: context ?? "",
-            label: rule.label)
+            label: rule.label,
+            tint: rule.tint)
     }
 }

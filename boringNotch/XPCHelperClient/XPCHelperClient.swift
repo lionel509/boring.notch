@@ -129,6 +129,22 @@ final class XPCHelperClient: NSObject {
         }
     }
 
+    /// What is drawing power, for a drain alert. `nil` when nothing clears the floor or the
+    /// helper is unreachable -- the caller omits the name either way.
+    nonisolated func topPowerProcess() async -> String? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let result: String? = try await service.withContinuation { service, continuation in
+                service.topPowerProcess { name in
+                    continuation.resume(returning: name)
+                }
+            }
+            return result
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Accessibility
     
     nonisolated func requestAccessibilityAuthorization() {

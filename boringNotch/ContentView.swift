@@ -369,7 +369,8 @@ struct ContentView: View {
                         }
                         .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
                       } else if coordinator.sneakPeek.show && (Defaults[.inlineHUD] || coordinator.sneakPeek.type.isAnnouncement) && (coordinator.sneakPeek.type != .music) && (coordinator.sneakPeek.type != .battery) && vm.notchState == .closed {
-                          InlineHUD(type: $coordinator.sneakPeek.type, value: $coordinator.sneakPeek.value, icon: $coordinator.sneakPeek.icon, detail: $coordinator.sneakPeek.detail, detailSecondary: $coordinator.sneakPeek.detailSecondary, label: $coordinator.sneakPeek.label, hoverAnimation: $isHovering, gestureProgress: $gestureProgress)
+                          InlineHUD(type: $coordinator.sneakPeek.type, value: $coordinator.sneakPeek.value, icon: $coordinator.sneakPeek.icon, detail: $coordinator.sneakPeek.detail, detailSecondary: $coordinator.sneakPeek.detailSecondary, label: $coordinator.sneakPeek.label,
+                            tint: $coordinator.sneakPeek.tint, hoverAnimation: $isHovering, gestureProgress: $gestureProgress)
                               .transition(.opacity)
                       } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music) && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle) && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed {
                           MusicLiveActivity()

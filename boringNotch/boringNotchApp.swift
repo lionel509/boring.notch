@@ -68,6 +68,65 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowScreenDidChangeObserver: Any?
     private var dragDetectors: [String: DragDetector] = [:] // UUID -> DragDetector
 
+    // MARK: - External events
+
+    /// `boringnotch://claude?event=done&project=BoringNotch`, sent by a Claude Code hook.
+    ///
+    /// A URL scheme is the cheapest way for a shell script to reach a sandboxed app -- no
+    /// port, no file in the container, no entitlement -- but it is also an open door: any
+    /// process running as this user can send one, and whatever arrives gets drawn in the
+    /// notch. So nothing here is trusted. The event name must match a known case exactly, and
+    /// the free text is capped and stripped of anything unprintable, which leaves the worst
+    /// available outcome at *a short wrong word appears for four seconds*.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard url.scheme == "boringnotch", url.host == "claude",
+                  let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            else { continue }
+
+            let query = components.queryItems ?? []
+            let event = query.first { $0.name == "event" }?.value
+            let subject = Self.displayable(query.first { $0.name == "project" }?.value)
+
+            Task { @MainActor in
+                switch event {
+                case "done":
+                    SystemAlertManager.shared.fire(
+                        "claudeDone", detail: subject, context: "Done")
+                case "waiting":
+                    SystemAlertManager.shared.fire(
+                        "claudeWaiting", detail: subject, context: "Needs you")
+                case "stalled":
+                    SystemAlertManager.shared.fire(
+                        "claudeStalled", detail: subject, context: "Waiting")
+                case "started":
+                    SystemAlertManager.shared.fire(
+                        "claudeStarted", detail: subject, context: "Started")
+                default:
+                    break  // Unknown verb from an untrusted sender: drop it silently.
+                }
+            }
+        }
+    }
+
+    /// The cap is here to bound what an arbitrary sender can hand the view, not to fit the
+    /// layout -- the label scales itself down. Cutting at 24 was cutting mid-word, which reads
+    /// as a glitch rather than as an abbreviation, so this cuts on a space and says so.
+    private static func displayable(_ raw: String?) -> String {
+        guard let raw else { return "session" }
+        let clean = String(raw.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0)
+        }).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return "session" }
+        guard clean.count > 42 else { return clean }
+
+        let head = String(clean.prefix(42))
+        guard let space = head.lastIndex(of: " "), head.distance(
+            from: head.startIndex, to: space) >= 16
+        else { return head }
+        return head[..<space].trimmingCharacters(in: .whitespaces) + "..."
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
     }

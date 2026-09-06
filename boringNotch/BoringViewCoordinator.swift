@@ -58,6 +58,9 @@ struct sneakPeek {
     /// the name of the thing it happened to needs its own beat, because both do not fit and
     /// truncating the name is exactly what made the first version useless.
     var detailSecondary: String = ""
+    /// The icon's colour. Defaults to white, so every existing caller keeps the look it had
+    /// and only the callers that opt in gain a colour.
+    var tint: Color = .white
     /// The left word, when the caller has to choose it. A connection event derives its own
     /// from `type` and `value`; a system alert cannot, because "CPU high" and "Draining"
     /// arrive under the same type.
@@ -244,7 +247,8 @@ class BoringViewCoordinator: ObservableObject {
 
     func toggleSneakPeek(
         status: Bool, type: SneakContentType, duration: TimeInterval = 1.5, value: CGFloat = 0,
-        icon: String = "", detail: String = "", detailSecondary: String = "", label: String = ""
+        icon: String = "", detail: String = "", detailSecondary: String = "", label: String = "",
+        tint: Color = .white
     ) {
         sneakPeekDuration = duration
         // `hudReplacement` is a promise about volume and brightness -- that the notch will
@@ -265,6 +269,7 @@ class BoringViewCoordinator: ObservableObject {
                 self.sneakPeek.detail = detail
                 self.sneakPeek.detailSecondary = detailSecondary
                 self.sneakPeek.label = label
+                self.sneakPeek.tint = tint
             }
         }
 
