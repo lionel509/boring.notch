@@ -171,6 +171,14 @@ extension Defaults.Keys {
     static let statsStripShowNetwork = Key<Bool>("statsStripShowNetwork", default: true)
     static let statsStripSparklines = Key<Bool>("statsStripSparklines", default: true)
     static let statsStripColor = Key<Bool>("statsStripColor", default: true)
+    /// Threshold alerts -- see `SystemAlertManager`. Per-rule switches are not declared
+    /// here: a rule builds its own key from its id (`systemAlert.cpu`), so adding a rule
+    /// cannot forget to add the switch that turns it off.
+    static let systemAlerts = Key<Bool>("systemAlerts", default: true)
+    /// Minutes of quiet after a rule fires. Ten, because the thing being reported is
+    /// usually a build or a training run: it will still be true in thirty seconds, and
+    /// saying so again is how a useful alert turns into one that gets switched off.
+    static let systemAlertCooldown = Key<Double>("systemAlertCooldown", default: 10)
     static let routerLogPath = Key<String>(
         "routerLogPath", default: "~/.local/share/claude-router/requests.log")
     /// Security-scoped bookmark for the request log. The app is sandboxed, so a plain

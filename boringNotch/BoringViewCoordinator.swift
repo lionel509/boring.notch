@@ -22,12 +22,27 @@ enum SneakContentType {
     /// so they are not gated on `hudReplacement`.
     case wifi
     case bluetooth
+    /// A threshold crossing worth interrupting for -- see `SystemAlertManager`. Same
+    /// category as the connection events: it reports something that just happened, rather
+    /// than mirroring a control the user is currently holding.
+    case systemAlert
 }
 
 extension SneakContentType {
-    /// A connection event announces something that happened; the HUD types report a value
-    /// the user is currently changing. They earn their way onto the notch differently.
-    var isConnectionEvent: Bool { self == .wifi || self == .bluetooth }
+    /// An announcement reports something that happened; the HUD types report a value the
+    /// user is currently changing. They earn their way onto the notch differently, and an
+    /// announcement is not gated on `hudReplacement` because it is not standing in for a
+    /// system HUD in the first place.
+    ///
+    /// Named for the reason rather than for the membership. This was `isConnectionEvent`
+    /// until system alerts joined, at which point the name had stopped describing why any
+    /// of them were in the set.
+    var isAnnouncement: Bool {
+        switch self {
+        case .wifi, .bluetooth, .systemAlert: true
+        default: false
+        }
+    }
 }
 
 struct sneakPeek {
@@ -43,6 +58,10 @@ struct sneakPeek {
     /// the name of the thing it happened to needs its own beat, because both do not fit and
     /// truncating the name is exactly what made the first version useless.
     var detailSecondary: String = ""
+    /// The left word, when the caller has to choose it. A connection event derives its own
+    /// from `type` and `value`; a system alert cannot, because "CPU high" and "Draining"
+    /// arrive under the same type.
+    var label: String = ""
 }
 
 struct SharedSneakPeek: Codable {
@@ -225,13 +244,13 @@ class BoringViewCoordinator: ObservableObject {
 
     func toggleSneakPeek(
         status: Bool, type: SneakContentType, duration: TimeInterval = 1.5, value: CGFloat = 0,
-        icon: String = "", detail: String = "", detailSecondary: String = ""
+        icon: String = "", detail: String = "", detailSecondary: String = "", label: String = ""
     ) {
         sneakPeekDuration = duration
         // `hudReplacement` is a promise about volume and brightness -- that the notch will
         // stand in for the system HUD. A Wi-Fi or Bluetooth event replaces no HUD at all, so
         // gating it on that setting would hide the feature behind an unrelated switch.
-        if type != .music, !type.isConnectionEvent {
+        if type != .music, !type.isAnnouncement {
             // close()
             if !Defaults[.hudReplacement] {
                 return
@@ -245,6 +264,7 @@ class BoringViewCoordinator: ObservableObject {
                 self.sneakPeek.icon = icon
                 self.sneakPeek.detail = detail
                 self.sneakPeek.detailSecondary = detailSecondary
+                self.sneakPeek.label = label
             }
         }
 

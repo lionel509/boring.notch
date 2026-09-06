@@ -15,6 +15,8 @@ struct InlineHUD: View {
     @Binding var icon: String
     @Binding var detail: String
     @Binding var detailSecondary: String
+    /// Set by the caller when `type` alone cannot say what the left word is.
+    @Binding var label: String
     @Binding var hoverAnimation: Bool
     @Binding var gestureProgress: CGFloat
     @State private var showSecondary = false
@@ -52,6 +54,10 @@ struct InlineHUD: View {
                             Image(systemName: icon.isEmpty ? "dot.radiowaves.right" : icon)
                                 .contentTransition(.interpolate)
                                 .frame(width: 20, height: 15, alignment: .center)
+                        case .systemAlert:
+                            Image(systemName: icon.isEmpty ? "exclamationmark.triangle" : icon)
+                                .contentTransition(.interpolate)
+                                .frame(width: 20, height: 15, alignment: .center)
                         case .mic:
                             Image(systemName: "mic")
                                 .symbolRenderingMode(.hierarchical)
@@ -83,7 +89,7 @@ struct InlineHUD: View {
                 .frame(width: vm.closedNotchSize.width - 20)
             
             HStack {
-                if type.isConnectionEvent {
+                if type.isAnnouncement {
                     // The whole point of the layout: what happened on the left of the
                     // notch, which thing it happened to on the right -- and the right side
                     // gets two beats, because "connected" and "which network" both want the
@@ -185,6 +191,9 @@ struct InlineHUD: View {
         switch type {
         case .bluetooth: value == 1 ? "Connected" : "Disconnected"
         case .wifi: value == 1 ? "Wi-Fi" : "Wi-Fi lost"
+        // The rule picks its own word -- "CPU high" and "Draining" arrive under one type,
+        // so there is nothing here that could derive it.
+        case .systemAlert: label.isEmpty ? "System" : label
         default: Type2Name(type)
         }
     }
@@ -210,7 +219,7 @@ struct InlineHUD: View {
 }
 
 #Preview {
-    InlineHUD(type: .constant(.brightness), value: .constant(0.4), icon: .constant(""), detail: .constant(""), detailSecondary: .constant(""), hoverAnimation: .constant(false), gestureProgress: .constant(0))
+    InlineHUD(type: .constant(.brightness), value: .constant(0.4), icon: .constant(""), detail: .constant(""), detailSecondary: .constant(""), label: .constant(""), hoverAnimation: .constant(false), gestureProgress: .constant(0))
         .padding(.horizontal, 8)
         .background(Color.black)
         .padding()

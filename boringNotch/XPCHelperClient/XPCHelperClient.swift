@@ -95,6 +95,24 @@ final class XPCHelperClient: NSObject {
         return monitoringTask != nil
     }
     
+    // MARK: - System
+
+    /// The process behind a CPU alert. `nil` when nothing stands out, or when the helper is
+    /// unreachable -- the caller treats both the same way and simply omits the name.
+    nonisolated func topProcessName() async -> String? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let result: String? = try await service.withContinuation { service, continuation in
+                service.topProcessName { name in
+                    continuation.resume(returning: name)
+                }
+            }
+            return result
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Accessibility
     
     nonisolated func requestAccessibilityAuthorization() {

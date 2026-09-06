@@ -218,8 +218,21 @@ final class RouterUsageManager: ObservableObject {
         else { return nil }
 
         let iso = ISO8601DateFormatter()
+        // Two shapes in the same file, which is why this is not a one-liner. `ts` is ISO 8601;
+        // the two reset fields are Unix seconds -- and they arrive quoted, so neither a date
+        // parser nor a numeric cast finds them on its own. Parsed as ISO 8601 only, both reset
+        // fields came back nil and the strip's RESETS IN gauge could never have read anything
+        // but an em dash.
         func date(_ key: String) -> Date? {
-            (object[key] as? String).flatMap(iso.date(from:))
+            switch object[key] {
+            case let text as String:
+                if let parsed = iso.date(from: text) { return parsed }
+                return TimeInterval(text).map(Date.init(timeIntervalSince1970:))
+            case let seconds as TimeInterval:
+                return Date(timeIntervalSince1970: seconds)
+            default:
+                return nil
+            }
         }
 
         return SubscriptionLimits(

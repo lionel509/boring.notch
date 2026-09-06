@@ -20,6 +20,9 @@ import Foundation
     func isScreenBrightnessAvailable(with reply: @escaping (Bool) -> Void)
     func currentScreenBrightness(with reply: @escaping (NSNumber?) -> Void)
     func setScreenBrightness(_ value: Float, with reply: @escaping (Bool) -> Void)
+    // Which process is burning the CPU. Asked of the helper because the app is sandboxed and
+    // cannot see one, and this service is not.
+    func topProcessName(with reply: @escaping (String?) -> Void)
 }
 
 /*

@@ -297,6 +297,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ConnectionActivityManager.shared.start()
         BluetoothBatteryManager.shared.beginWatching()
 
+        // Takes its own permanent claim on the stats sampler. That claim is the feature:
+        // sampling is reference counted off the stats strip appearing, so until now the
+        // machine was only measured while the notch was open -- which is the one moment an
+        // alert has nothing left to tell you.
+        SystemAlertManager.shared.start()
+
         // Scan once at launch so the first time the notch opens the figures are already
         // there, rather than appearing a beat later.
         Task { @MainActor in RouterUsageManager.shared.refresh() }

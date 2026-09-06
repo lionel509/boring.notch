@@ -148,6 +148,9 @@ final class SystemStatsManager: ObservableObject {
         if diskTickCounter % 5 == 0 { sampleNetworkIdentity() }
         diskTickCounter += 1
         recordHistory()
+        // Last, with every figure fresh and already on this actor. The alert manager reads
+        // and never writes, so nothing above it can be affected by what it decides.
+        SystemAlertManager.shared.check()
     }
 
     /// `vm.swapusage` via sysctl -- one call, a fixed-size struct, no process list.

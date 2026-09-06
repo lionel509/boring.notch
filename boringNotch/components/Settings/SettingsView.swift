@@ -1841,6 +1841,8 @@ struct StatsSettings: View {
     @Default(.statsStripShowSystem) var showSystem
     @Default(.routerLogPath) var routerLogPath
     @Default(.statsStripFlipInterval) var flipInterval
+    @Default(.systemAlerts) var systemAlerts
+    @Default(.systemAlertCooldown) var alertCooldown
     @Default(.showWeatherBackdrop) var showWeatherBackdrop
     @Default(.weatherBackdropIntensity) var weatherIntensity
     @Default(.weatherPlace) var weatherPlace
@@ -1915,6 +1917,31 @@ struct StatsSettings: View {
                     .foregroundStyle(.secondary)
             }
             .disabled(!showStatsStrip)
+
+            Section {
+                Defaults.Toggle(key: .systemAlerts) {
+                    Text("Speak up when something crosses a line")
+                }
+                Group {
+                    // Driven off the registry rather than listed by hand. A new rule brings
+                    // its own row, and cannot ship without the switch that turns it off.
+                    ForEach(AlertRule.all) { rule in
+                        Defaults.Toggle(key: rule.enabled) { Text(rule.title) }
+                    }
+                    Picker("Then stay quiet for", selection: $alertCooldown) {
+                        Text("3 minutes").tag(3.0)
+                        Text("10 minutes").tag(10.0)
+                        Text("30 minutes").tag(30.0)
+                    }
+                }
+                .disabled(!systemAlerts)
+            } header: {
+                Text("Alerts")
+            } footer: {
+                Text("The strip is something you go and look at; these are the cases where it should have interrupted you instead. A rule waits thirty seconds over its threshold before saying anything, stays quiet for the span above once it has, and re-arms only after the figure has come back down — a build that pins the CPU for five minutes says so once. Recovery is never announced: knowing the CPU is fine again is not worth looking away from what you were doing. A CPU alert names the process responsible when the sandbox will say who it is. Alerts run whether or not the strip itself is switched on.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
 
             Section {
                 Defaults.Toggle(key: .showWeatherBackdrop) {
