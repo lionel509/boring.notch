@@ -46,9 +46,9 @@ final class ConnectionActivityManager {
 
         logger.notice("wifi \(onWiFi ? "up" : "down", privacy: .public)")
         BoringViewCoordinator.shared.toggleSneakPeek(
-            status: true, type: .wifi, duration: 2.5,
+            status: true, type: .wifi, duration: 2.5, value: onWiFi ? 1 : 0,
             icon: onWiFi ? "wifi" : "wifi.slash",
-            detail: onWiFi ? Self.wifiDetail() : "disconnected")
+            detail: onWiFi ? Self.wifiDetail() : "no network")
     }
 
     /// What the right-hand side can say without asking for anything.
@@ -78,15 +78,12 @@ final class ConnectionActivityManager {
     /// always-on central, which means asking for Bluetooth permission at launch for a page
     /// the user may never open.
     func announceBluetooth(name: String, percent: Int?, connected: Bool) {
-        let detail: String
-        if connected {
-            detail = percent.map { "\(name) · \($0)%" } ?? name
-        } else {
-            detail = "\(name) · disconnected"
-        }
+        // The right side is *which device*, nothing else. The word for what happened is on
+        // the left, where there is room for it.
+        let detail = connected ? (percent.map { "\(name) · \($0)%" } ?? name) : name
         logger.notice("bluetooth device \(connected ? "connected" : "disconnected", privacy: .public)")
         BoringViewCoordinator.shared.toggleSneakPeek(
-            status: true, type: .bluetooth, duration: 2.5,
+            status: true, type: .bluetooth, duration: 2.5, value: connected ? 1 : 0,
             icon: connected ? "dot.radiowaves.right" : "xmark.circle", detail: detail)
     }
 }

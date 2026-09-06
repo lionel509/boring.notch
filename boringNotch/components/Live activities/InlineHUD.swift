@@ -63,7 +63,7 @@ struct InlineHUD: View {
                 .foregroundStyle(.white)
                 .symbolVariant(.fill)
                 
-                Text(Type2Name(type))
+                Text(leftLabel)
                     .font(.subheadline)
                     .fontWeight(.medium)
                     .lineLimit(1)
@@ -83,6 +83,7 @@ struct InlineHUD: View {
                     Text(detail)
                         .foregroundStyle(.gray)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                         .truncationMode(.tail)
                         .allowsTightening(true)
                         .multilineTextAlignment(.trailing)
@@ -157,6 +158,19 @@ struct InlineHUD: View {
         }
     }
     
+    /// The word on the left of the notch.
+    ///
+    /// For a connection event this is the *event*, not the subsystem: "Disconnected" beside
+    /// the device's name says something, whereas "Bluetooth" beside "Bluetooth device ..."
+    /// said the same word twice and truncated the half that mattered.
+    private var leftLabel: String {
+        switch type {
+        case .bluetooth: value == 1 ? "Connected" : "Disconnected"
+        case .wifi: value == 1 ? "Wi-Fi" : "Wi-Fi lost"
+        default: Type2Name(type)
+        }
+    }
+
     func Type2Name(_ type: SneakContentType) -> String {
         switch(type) {
             case .volume:

@@ -127,6 +127,11 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
     /// "we have not looked", which an empty set alone cannot.
     private var adopted = false
 
+    /// Names outlive readings on purpose. `collected` is pruned the moment a device drops,
+    /// which is the same moment the disconnect needs its name -- and falling back to
+    /// "Bluetooth device" produced an activity that said "Bluetooth" twice and truncated.
+    private var names: [UUID: String] = [:]
+
     /// Same discipline as every other timer in this app: the strip is the only consumer, it
     /// exists only while the notch is open, and a closed notch must cost nothing. Reference
     /// counted because two views may subscribe at once.
@@ -162,6 +167,9 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         guard let central, central.state == .poweredOn else { return }
         let connected = central.retrieveConnectedPeripherals(withServices: [Self.batteryService])
         let ids = Set(connected.map(\.identifier))
+        for peripheral in connected {
+            if let name = peripheral.name { names[peripheral.identifier] = name }
+        }
 
         if !adopted {
             // First look of the session: take what is already connected without announcing
@@ -170,13 +178,14 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         } else {
             for peripheral in connected where !announced.contains(peripheral.identifier) {
                 btTrace("connected: \(peripheral.name ?? "unnamed")")
+                if let name = peripheral.name { names[peripheral.identifier] = name }
                 ConnectionActivityManager.shared.announceBluetooth(
                     name: peripheral.name ?? "Bluetooth device",
                     percent: collected[peripheral.identifier]?.percent,
                     connected: true)
             }
             for gone in announced.subtracting(ids) {
-                let name = collected[gone]?.name ?? "Bluetooth device"
+                let name = collected[gone]?.name ?? names[gone] ?? "Bluetooth device"
                 btTrace("disconnected: \(name)")
                 ConnectionActivityManager.shared.announceBluetooth(
                     name: name, percent: nil, connected: false)
