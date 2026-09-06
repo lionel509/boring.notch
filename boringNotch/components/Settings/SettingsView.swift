@@ -498,13 +498,22 @@ struct HUD: View {
                 
                 if !accessibilityAuthorized {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Accessibility access is required to replace the system HUD.")
+                        Text("Accessibility access is required to replace the system HUD. macOS only shows its prompt once — if it has already been refused, the switch has to be turned back on by hand.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
                         HStack(spacing: 12) {
-                            Button("Request Accessibility") {
+                            // Both, in that order, and the second is the one that actually
+                            // works most of the time. `AXIsProcessTrustedWithOptions` only
+                            // raises a prompt while TCC holds no decision for this app; once
+                            // there is a row saying denied it returns silently and the button
+                            // looks broken. Opening the pane is the only route back from that.
+                            Button("Open Accessibility Settings") {
                                 XPCHelperClient.shared.requestAccessibilityAuthorization()
+                                if let url = URL(string:
+                                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                                    NSWorkspace.shared.open(url)
+                                }
                             }
                             .buttonStyle(.borderedProminent)
                         }
