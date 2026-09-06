@@ -49,6 +49,13 @@ private let logger = Logger(subsystem: "theboringteam.boringnotch", category: "B
 /// Names are written; this file lives inside the app's own container and is never
 /// transmitted. It is capped so it cannot grow without bound.
 func btTrace(_ line: String) {
+    // Debug builds only. This was the instrument that found both bugs -- `log show` returns
+    // nothing whatsoever for this process, so a file in the container was the only channel
+    // that worked -- but it writes Bluetooth device *names* to disk, and a shipping build
+    // has no business doing that for a problem that is now fixed. Same rule as `debugLog`.
+    #if !DEBUG
+    return
+    #else
     guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
     else { return }
     let url = dir.appendingPathComponent("bt-trace.log")
@@ -63,6 +70,7 @@ func btTrace(_ line: String) {
     } else {
         try? data.write(to: url)
     }
+    #endif
 }
 
 @MainActor

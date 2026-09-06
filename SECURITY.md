@@ -57,6 +57,10 @@ out-of-bounds read at worst, from text the user does not control. Messages now g
 66 `print` calls remain. For an app launched by Finder these write to a stdout that is
 discarded, so they are noise rather than disclosure, and they are left alone.
 
+A `btTrace` helper in `BluetoothBatteryManager` writes a Bluetooth diagnostic file into the
+app's own container. It is compiled out of Release builds by the same `#if DEBUG` rule and
+writes nothing in a shipping build.
+
 Note for anyone reading the tree: `boringNotch/utils/Logger.swift` is **not a member of any
 target** and has never been compiled. Nothing in `utils/` is.
 
