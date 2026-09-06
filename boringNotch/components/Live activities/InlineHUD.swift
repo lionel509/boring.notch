@@ -14,8 +14,10 @@ struct InlineHUD: View {
     @Binding var value: CGFloat
     @Binding var icon: String
     @Binding var detail: String
+    @Binding var detailSecondary: String
     @Binding var hoverAnimation: Bool
     @Binding var gestureProgress: CGFloat
+    @State private var showSecondary = false
     var body: some View {
         HStack {
             HStack(spacing: 5) {
@@ -79,8 +81,14 @@ struct InlineHUD: View {
             HStack {
                 if type.isConnectionEvent {
                     // The whole point of the layout: what happened on the left of the
-                    // notch, which thing it happened to on the right.
-                    Text(detail)
+                    // notch, which thing it happened to on the right -- and the right side
+                    // gets two beats, because "connected" and "which network" both want the
+                    // same few characters and the name is the half worth waiting for.
+                    Text(showSecondary && !detailSecondary.isEmpty ? detailSecondary : detail)
+                        .id(showSecondary && !detailSecondary.isEmpty)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .bottom).combined(with: .opacity),
+                            removal: .move(edge: .top).combined(with: .opacity)))
                         .foregroundStyle(.gray)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
@@ -88,7 +96,13 @@ struct InlineHUD: View {
                         .allowsTightening(true)
                         .multilineTextAlignment(.trailing)
                         .frame(maxWidth: .infinity, alignment: .trailing)
-                        .contentTransition(.interpolate)
+                        .onAppear {
+                            showSecondary = false
+                            Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(1100))
+                                withAnimation(.snappy(duration: 0.28)) { showSecondary = true }
+                            }
+                        }
                 } else if (type == .mic) {
                     Text(value.isZero ? "muted" : "unmuted")
                         .foregroundStyle(.gray)
@@ -192,7 +206,7 @@ struct InlineHUD: View {
 }
 
 #Preview {
-    InlineHUD(type: .constant(.brightness), value: .constant(0.4), icon: .constant(""), detail: .constant(""), hoverAnimation: .constant(false), gestureProgress: .constant(0))
+    InlineHUD(type: .constant(.brightness), value: .constant(0.4), icon: .constant(""), detail: .constant(""), detailSecondary: .constant(""), hoverAnimation: .constant(false), gestureProgress: .constant(0))
         .padding(.horizontal, 8)
         .background(Color.black)
         .padding()

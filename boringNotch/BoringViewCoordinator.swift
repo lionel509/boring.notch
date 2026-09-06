@@ -39,6 +39,10 @@ struct sneakPeek {
     /// a device's name and charge. `.mic` already established that the right slot can hold
     /// a word instead of a slider.
     var detail: String = ""
+    /// What the right slot slides to a moment later. "connected" answers *what happened*;
+    /// the name of the thing it happened to needs its own beat, because both do not fit and
+    /// truncating the name is exactly what made the first version useless.
+    var detailSecondary: String = ""
 }
 
 struct SharedSneakPeek: Codable {
@@ -221,7 +225,7 @@ class BoringViewCoordinator: ObservableObject {
 
     func toggleSneakPeek(
         status: Bool, type: SneakContentType, duration: TimeInterval = 1.5, value: CGFloat = 0,
-        icon: String = "", detail: String = ""
+        icon: String = "", detail: String = "", detailSecondary: String = ""
     ) {
         sneakPeekDuration = duration
         // `hudReplacement` is a promise about volume and brightness -- that the notch will
@@ -240,6 +244,7 @@ class BoringViewCoordinator: ObservableObject {
                 self.sneakPeek.value = value
                 self.sneakPeek.icon = icon
                 self.sneakPeek.detail = detail
+                self.sneakPeek.detailSecondary = detailSecondary
             }
         }
 

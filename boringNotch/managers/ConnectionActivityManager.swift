@@ -5,6 +5,7 @@
 //  "Wi-Fi connected" on the left of the notch, which network on the right.
 //
 
+import CoreLocation
 import CoreWLAN
 import Foundation
 import Network
@@ -12,55 +13,80 @@ import OSLog
 
 private let logger = Logger(subsystem: "theboringteam.boringnotch", category: "ConnectionActivity")
 
-/// Announces network and Bluetooth connections as a closed-notch activity.
-///
-/// Wi-Fi is watched with `NWPathMonitor`, which is free, always on, and needs no permission
-/// of any kind. That last part is the whole reason the right-hand side says what it says.
 @MainActor
-final class ConnectionActivityManager {
+final class ConnectionActivityManager: NSObject {
     static let shared = ConnectionActivityManager()
 
-    private let monitor = NWPathMonitor()
+    private let location = CLLocationManager()
     private var started = false
 
-    /// `nil` until the first path arrives, so launching while already on Wi-Fi does not
-    /// announce a connection that happened before the app existed.
+    /// Last network seen, so a *change* of network announces itself too -- not just a join
+    /// from nothing. Hopping between two access points never crosses an up/down edge.
+    private var lastSSID: String?
     private var wasOnWiFi: Bool?
 
-    private init() {}
+    private override init() { super.init() }
 
     func start() {
         guard !started else { return }
         started = true
-        monitor.pathUpdateHandler = { path in
-            Task { @MainActor [weak self] in self?.handle(path) }
+
+        // The SSID costs a Location grant and nothing else does. Measured: with authorisation
+        // `notDetermined`, `ssid()` and `bssid()` return nil while link rate, signal and
+        // security all come back fine. Apple gates the *name* because a list of networks is a
+        // location history. Asked for once, here, because a Wi-Fi activity that cannot say
+        // which Wi-Fi is not worth showing.
+        location.delegate = self
+        if location.authorizationStatus == .notDetermined {
+            location.requestWhenInUseAuthorization()
         }
-        monitor.start(queue: DispatchQueue(label: "theboringteam.boringnotch.path"))
+
+        // CoreWLAN's own events, not NWPathMonitor.
+        //
+        // The path monitor reports how traffic is *routed*, and with a VPN up the default
+        // path stops being `.wifi` even though the Mac is still perfectly well associated to
+        // an access point. That is why a disconnect was announced and the rejoin never was:
+        // NordVPN, not Wi-Fi, was what the monitor was watching. `CWWiFiClient` reports the
+        // radio link itself, which is the thing actually being asked about.
+        CWWiFiClient.shared().delegate = self
+        try? CWWiFiClient.shared().startMonitoringEvent(with: .linkDidChange)
+        try? CWWiFiClient.shared().startMonitoringEvent(with: .ssidDidChange)
+
+        let interface = CWWiFiClient.shared().interface()
+        wasOnWiFi = interface?.ssid() != nil || (interface?.rssiValue() ?? 0) != 0
+        lastSSID = interface?.ssid()
+        logger.notice("watching wifi, authorised \(self.location.authorizationStatus.rawValue, privacy: .public)")
     }
 
-    private func handle(_ path: NWPath) {
-        let onWiFi = path.status == .satisfied && path.usesInterfaceType(.wifi)
-        defer { wasOnWiFi = onWiFi }
-        guard let previously = wasOnWiFi else { return }
-        guard onWiFi != previously else { return }
+    fileprivate func wifiChanged() {
+        let interface = CWWiFiClient.shared().interface()
+        let ssid = interface?.ssid()
+        let associated = ssid != nil || (interface?.rssiValue() ?? 0) != 0
 
-        logger.notice("wifi \(onWiFi ? "up" : "down", privacy: .public)")
+        defer { wasOnWiFi = associated; lastSSID = ssid }
+        guard wasOnWiFi != nil else { return }
+
+        // Something worth saying: joined, left, or moved to a different network.
+        let joined = associated && wasOnWiFi != true
+        let left = !associated && wasOnWiFi == true
+        let switched = associated && wasOnWiFi == true && ssid != lastSSID && ssid != nil
+        guard joined || left || switched else { return }
+
+        logger.notice("wifi \(associated ? "up" : "down", privacy: .public)")
         BoringViewCoordinator.shared.toggleSneakPeek(
-            status: true, type: .wifi, duration: 2.5, value: onWiFi ? 1 : 0,
-            icon: onWiFi ? "wifi" : "wifi.slash",
-            detail: onWiFi ? Self.wifiDetail() : "no network")
+            status: true, type: .wifi, duration: 4, value: associated ? 1 : 0,
+            icon: associated ? "wifi" : "wifi.slash",
+            detail: associated ? (switched ? "switched" : "connected") : "disconnected",
+            detailSecondary: associated ? Self.networkDetail(interface) : (lastSSID ?? "no network"))
     }
 
-    /// What the right-hand side can say without asking for anything.
+    /// The network's name when macOS will give it, and the link when it will not.
     ///
-    /// Deliberately **not** the network's name. Since macOS 14 `ssid()` and `bssid()` return
-    /// `nil` unless the app holds a granted Location Services authorisation — measured on this
-    /// machine, where `ipconfig` reports the SSID as `<redacted>` while link rate and signal
-    /// come back fine. A notch app asking for your location to name a Wi-Fi network is a bad
-    /// trade, so it reports the link instead, which needs no permission and arguably says
-    /// more. If the name is ever wanted, that is an opt-in with its own explanation.
-    private static func wifiDetail() -> String {
-        guard let interface = CWWiFiClient.shared().interface() else { return "connected" }
+    /// Falls back rather than nagging: if Location is refused the activity still says
+    /// something true and useful instead of disappearing.
+    private static func networkDetail(_ interface: CWInterface?) -> String {
+        guard let interface else { return "connected" }
+        if let ssid = interface.ssid(), !ssid.isEmpty { return ssid }
         var parts: [String] = []
         let rate = interface.transmitRate()
         if rate > 0 { parts.append("\(Int(rate.rounded())) Mbps") }
@@ -71,19 +97,29 @@ final class ConnectionActivityManager {
 
     /// Announced by `BluetoothBatteryManager` when a device appears or goes away.
     ///
-    /// Honest limitation, written down rather than hidden: that manager only runs while the
-    /// notch is open, because a battery page has no business holding the radio awake. So a
-    /// device connecting while the notch is closed is announced the next time the notch is
-    /// opened, not at the moment it connects. Announcing at the true moment needs an
-    /// always-on central, which means asking for Bluetooth permission at launch for a page
-    /// the user may never open.
+    /// Honest limitation: the *battery* is only read while the notch is open, so a device
+    /// connecting when it has never been read announces its name without a charge.
     func announceBluetooth(name: String, percent: Int?, connected: Bool) {
-        // The right side is *which device*, nothing else. The word for what happened is on
-        // the left, where there is room for it.
-        let detail = connected ? (percent.map { "\(name) · \($0)%" } ?? name) : name
-        logger.notice("bluetooth device \(connected ? "connected" : "disconnected", privacy: .public)")
+        logger.notice("bluetooth \(connected ? "connected" : "disconnected", privacy: .public)")
         BoringViewCoordinator.shared.toggleSneakPeek(
-            status: true, type: .bluetooth, duration: 2.5, value: connected ? 1 : 0,
-            icon: connected ? "dot.radiowaves.right" : "xmark.circle", detail: detail)
+            status: true, type: .bluetooth, duration: 4, value: connected ? 1 : 0,
+            icon: connected ? "dot.radiowaves.right" : "xmark.circle",
+            detail: connected ? "connected" : "disconnected",
+            detailSecondary: percent.map { "\(name) · \($0)%" } ?? name)
+    }
+}
+
+extension ConnectionActivityManager: CWEventDelegate {
+    nonisolated func linkDidChangeForWiFiInterface(withName interfaceName: String) {
+        Task { @MainActor in ConnectionActivityManager.shared.wifiChanged() }
+    }
+    nonisolated func ssidDidChangeForWiFiInterface(withName interfaceName: String) {
+        Task { @MainActor in ConnectionActivityManager.shared.wifiChanged() }
+    }
+}
+
+extension ConnectionActivityManager: CLLocationManagerDelegate {
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        logger.notice("location authorisation \(manager.authorizationStatus.rawValue, privacy: .public)")
     }
 }

@@ -11,6 +11,8 @@
 	<string>boringNotch reads the audio of the app you are playing so the notch visualiser can follow the music.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Reads the battery level of your connected Bluetooth devices, so the notch can show it. Nothing is transmitted.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>macOS only reveals the name of the Wi-Fi network you are on to apps with location access. The notch uses it to show which network you just joined. Your location is never read, stored, or sent anywhere.</string>
 	<key>SUEnableDownloaderService</key>
 	<true/>
 	<key>SUEnableInstallerLauncherService</key>
