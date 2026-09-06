@@ -69,6 +69,10 @@ struct InlineHUD: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                     .lineLimit(1)
+                    // The slot is a fixed ~88pt and "Disconnected" is wider than that, so it
+                    // came out as "Disconne...". Shrinking a long word to fit keeps the whole
+                    // word; truncating it loses the only thing the left side is for.
+                    .minimumScaleFactor(0.7)
                     .allowsTightening(true)
                     .contentTransition(.numericText())
             }

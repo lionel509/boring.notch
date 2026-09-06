@@ -73,26 +73,36 @@ final class ConnectionActivityManager: NSObject {
         guard joined || left || switched else { return }
 
         logger.notice("wifi \(associated ? "up" : "down", privacy: .public)")
+        // The left already says what happened. Repeating "disconnected" on the right spent
+        // the whole slot saying it twice and left no room for the network's name -- which is
+        // the only thing the right side is there for.
         BoringViewCoordinator.shared.toggleSneakPeek(
             status: true, type: .wifi, duration: 4, value: associated ? 1 : 0,
             icon: associated ? "wifi" : "wifi.slash",
-            detail: associated ? (switched ? "switched" : "connected") : "disconnected",
-            detailSecondary: associated ? Self.networkDetail(interface) : (lastSSID ?? "no network"))
+            detail: associated ? Self.networkName(interface) : (lastSSID ?? "no network"),
+            detailSecondary: associated ? Self.linkDetail(interface) : "")
     }
 
-    /// The network's name when macOS will give it, and the link when it will not.
+    /// The network's name, when macOS will give it.
     ///
-    /// Falls back rather than nagging: if Location is refused the activity still says
-    /// something true and useful instead of disappearing.
-    private static func networkDetail(_ interface: CWInterface?) -> String {
+    /// Falls back to the link rather than nagging: if Location is refused the activity still
+    /// says something true instead of disappearing or begging.
+    private static func networkName(_ interface: CWInterface?) -> String {
         guard let interface else { return "connected" }
         if let ssid = interface.ssid(), !ssid.isEmpty { return ssid }
+        return linkDetail(interface).isEmpty ? "connected" : linkDetail(interface)
+    }
+
+    /// The second beat: how good the link is, once the name has had its moment.
+    private static func linkDetail(_ interface: CWInterface?) -> String {
+        guard let interface else { return "" }
         var parts: [String] = []
         let rate = interface.transmitRate()
         if rate > 0 { parts.append("\(Int(rate.rounded())) Mbps") }
         let rssi = interface.rssiValue()
         if rssi != 0 { parts.append("\(rssi) dBm") }
-        return parts.isEmpty ? "connected" : parts.joined(separator: " · ")
+        // Nothing to slide to if the name *was* the link figures.
+        return parts.count > 1 ? parts.joined(separator: " · ") : ""
     }
 
     /// Announced by `BluetoothBatteryManager` when a device appears or goes away.
@@ -104,8 +114,8 @@ final class ConnectionActivityManager: NSObject {
         BoringViewCoordinator.shared.toggleSneakPeek(
             status: true, type: .bluetooth, duration: 4, value: connected ? 1 : 0,
             icon: connected ? "dot.radiowaves.right" : "xmark.circle",
-            detail: connected ? "connected" : "disconnected",
-            detailSecondary: percent.map { "\(name) · \($0)%" } ?? name)
+            detail: name,
+            detailSecondary: connected ? (percent.map { "\($0)% charged" } ?? "") : "")
     }
 }
 
