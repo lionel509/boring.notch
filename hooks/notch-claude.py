@@ -18,6 +18,12 @@ try:
 except Exception:
     payload = {}
 
+# A nested session is not one of your tabs. Subagents and any `claude -p` spawned from
+# inside another session set this, and each one firing Started/Done turns a feature about
+# three terminals into a feature about every internal call any of them makes.
+if os.environ.get("CLAUDE_CODE_CHILD_SESSION") == "1":
+    sys.exit(0)
+
 # Don't resurrect a notch that was quit on purpose: `open` on a URL would launch it.
 if subprocess.run(["pgrep", "-x", "boringNotch"], capture_output=True).returncode != 0:
     sys.exit(0)
