@@ -125,6 +125,40 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         return times
     }
 
+    /// The largest resident process, named and sized: `Obsidian 2.4 GB`.
+    ///
+    /// Deliberately the biggest consumer rather than whoever grew most in the last second. A
+    /// surge of a couple of gigabytes takes longer than any sampling window worth waiting on,
+    /// and by the time the alert fires the growth is usually over -- differencing two readings
+    /// would then name nobody at all. The biggest process is the honest answer to "what should
+    /// I look at first", and the notch is not claiming it caused the jump.
+    @objc func topMemoryProcess(with reply: @escaping (String?) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let names = Self.processTable()
+            var heaviest: pid_t = 0
+            var footprint: UInt64 = 0
+            for pid in names.keys {
+                var info = rusage_info_current()
+                let result = withUnsafeMutablePointer(to: &info) {
+                    $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
+                        proc_pid_rusage(pid, RUSAGE_INFO_CURRENT, $0)
+                    }
+                }
+                guard result == 0, info.ri_phys_footprint > footprint else { continue }
+                footprint = info.ri_phys_footprint
+                heaviest = pid
+            }
+            // Under a gigabyte nothing is worth naming: whatever moved memory by that much was
+            // not this process.
+            guard footprint >= 1_073_741_824, let name = names[heaviest] else {
+                reply(nil)
+                return
+            }
+            let gigabytes = Double(footprint) / 1_073_741_824
+            reply(String(format: "%@ %.1f GB", name, gigabytes))
+        }
+    }
+
     @objc func requestAccessibilityAuthorization() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)

@@ -12,14 +12,33 @@ import OSLog
 // MARK: - What a rule found when it looked
 
 struct AlertReading {
-    /// In the rule's own units -- percent, watts -- not a normalised fraction. A threshold
-    /// written as `35` next to a comment saying watts is readable; `0.583` is not.
+    /// In the rule's own units -- percent, watts, bytes -- not a normalised fraction. A
+    /// threshold written as `35` next to a comment saying watts is readable; `0.583` is not.
     let value: Double
-    /// The first beat on the right of the notch: `94%`.
-    let detail: String
+    /// The first beat on the right of the notch: `94%`. Left `nil` when what should be shown
+    /// is not the reading but what the trigger made of it -- a surge shows what was *gained*,
+    /// which the rule cannot know at read time.
+    var detail: String?
     /// The second beat, a moment later: `Python`, `8.2 GB swap`. `nil` leaves the right side
     /// on `detail` for the whole four seconds.
     var context: String?
+}
+
+/// What makes a reading worth interrupting for.
+///
+/// Two kinds, and the second is not a variation on the first. A **level** answers *are you
+/// nearly out* -- it is the right question for a disk or a quota. A **surge** answers
+/// *did something just start eating* -- and no level can ask it: Obsidian taking 2 GB moves
+/// memory from 40% to 52%, which is nowhere near any sensible limit and is exactly the moment
+/// worth knowing about. Shipping only levels meant the alert that mattered most never fired.
+enum AlertTrigger {
+    /// Above `above` for `sustained` consecutive samples. Silent again below `rearmBelow` --
+    /// deliberately not the same number, because a figure sitting on one line crosses it
+    /// dozens of times a minute.
+    case level(above: Double, rearmBelow: Double, sustained: Int)
+    /// Gained more than `gaining` within the last `within` samples, measured from the window's
+    /// floor. The absolute level is not consulted at all.
+    case surge(gaining: Double, within: Int)
 }
 
 /// Everything a rule is allowed to read.
@@ -56,17 +75,12 @@ struct AlertRule: Identifiable {
     /// The settings row.
     let title: String
 
-    /// Announce above this, in the units `read` returns.
-    let threshold: Double
+    /// What counts as worth saying: a level held, or a jump.
+    let trigger: AlertTrigger
 
-    /// Go quiet again below this. Deliberately not the same number: a value sitting exactly
-    /// on one line crosses it dozens of times a minute. 75 is `StatsPalette`'s own boundary
-    /// between normal and worth-a-look, so the gap reuses a judgement the project already
-    /// made rather than inventing a second one.
-    let rearm: Double
-
-    /// Consecutive samples over the line before it counts. At 1 Hz this is seconds.
-    let sustained: Int
+    /// Renders whatever the trigger measured, for rules whose `read` leaves `detail` nil.
+    /// A surge passes the amount gained, not the level it reached.
+    let format: @Sendable (Double) -> String
 
     /// `nil` means *cannot say* -- charging, no usage file yet, a figure not sampled. That is
     /// not the same as *below the line*, and the difference matters: `nil` leaves the latch
@@ -82,17 +96,17 @@ struct AlertRule: Identifiable {
 
     init(
         id: String, label: String, icon: String, title: String,
-        threshold: Double, rearm: Double, sustained: Int,
+        trigger: AlertTrigger,
         read: @escaping @MainActor (AlertSources) -> AlertReading?,
+        format: @escaping @Sendable (Double) -> String = { String(Int($0)) },
         attribute: (@Sendable () async -> String?)? = nil
     ) {
         self.id = id
         self.label = label
         self.icon = icon
         self.title = title
-        self.threshold = threshold
-        self.rearm = rearm
-        self.sustained = sustained
+        self.trigger = trigger
+        self.format = format
         self.read = read
         self.attribute = attribute
         self.enabled = Defaults.Key("systemAlert.\(id)", default: true)
@@ -110,14 +124,14 @@ extension AlertRule {
     /// all already sampled and are each one literal away -- they are left out today because
     /// four interruptions is enough to find out whether the cadence is right, and getting
     /// that wrong is what makes someone switch the whole feature off.
-    static let all: [AlertRule] = [.cpu, .memory, .drain, .tokens]
+    static let all: [AlertRule] = [.cpu, .memory, .memorySurge, .drain, .tokens]
 
     static let cpu = AlertRule(
         id: "cpu",
         label: "CPU high",
         icon: "cpu",
         title: "CPU",
-        threshold: 90, rearm: 75, sustained: 30,
+        trigger: .level(above: 90, rearmBelow: 75, sustained: 30),
         read: { sources in
             let percent = sources.stats.cpuUsage * 100
             return AlertReading(value: percent, detail: "\(Int(percent.rounded()))%")
@@ -133,7 +147,7 @@ extension AlertRule {
         label: "Memory",
         icon: "memorychip",
         title: "Memory",
-        threshold: 90, rearm: 75, sustained: 30,
+        trigger: .level(above: 90, rearmBelow: 75, sustained: 30),
         read: { sources in
             let percent = sources.stats.memoryFraction * 100
             // Swap is the half that explains the percentage. A machine at 96% with no swap is
@@ -146,12 +160,28 @@ extension AlertRule {
                 context: swap >= 1_073_741_824 ? "\(Units.bytes(swap)) swap" : nil)
         })
 
+    /// The one a threshold cannot catch.
+    ///
+    /// Opening a 2 GB vault in Obsidian takes memory from roughly 40% to 52% -- a jump worth
+    /// knowing about that never comes near the 90% the level rule waits for. Measured against
+    /// the floor of the last minute rather than the reading exactly a minute ago, so a figure
+    /// that dipped and then climbed still counts as having climbed.
+    static let memorySurge = AlertRule(
+        id: "memorySurge",
+        label: "Memory",
+        icon: "arrow.up.forward.circle",
+        title: "Sudden memory jumps",
+        trigger: .surge(gaining: 1.5 * 1_073_741_824, within: 60),
+        read: { sources in AlertReading(value: Double(sources.stats.memoryUsedBytes)) },
+        format: { "+\(Units.bytes(UInt64(max($0, 0))))" },
+        attribute: { await XPCHelperClient.shared.topMemoryProcess() })
+
     static let drain = AlertRule(
         id: "drain",
         label: "Draining",
         icon: "battery.25",
         title: "Battery drain",
-        threshold: 35, rearm: 20, sustained: 30,
+        trigger: .level(above: 35, rearmBelow: 20, sustained: 30),
         read: { sources in
             // Charging is not a quiet kind of draining, it is the other thing entirely.
             // Returning nil rather than zero keeps a cable going in from re-arming a rule
@@ -172,7 +202,7 @@ extension AlertRule {
         // changes when the file is re-read once a minute -- waiting half a minute for a
         // number that cannot move is waiting for nothing.
         title: "Plan limits",
-        threshold: 90, rearm: 75, sustained: 3,
+        trigger: .level(above: 90, rearmBelow: 75, sustained: 3),
         read: { sources in
             // Both percentages default to zero when their key is missing, so a partial or
             // abandoned file reads as *plenty of quota left* rather than as no information.
@@ -221,6 +251,8 @@ final class SystemAlertManager {
         var isAbove = false
         var samples = 0
         var firedAt: Date?
+        /// Recent readings, for surge rules only. A level rule needs no memory of its past.
+        var window: [Double] = []
     }
 
     func start() {
@@ -261,12 +293,40 @@ final class SystemAlertManager {
 
         guard let reading = rule.read(sources) else { return }
 
-        if reading.value < rule.rearm {
+        // Both kinds of trigger collapse to the same three numbers, so the latch below does
+        // not need to know which kind it is holding.
+        let signal: Double, fireAt: Double, rearmAt: Double, needed: Int
+        switch rule.trigger {
+        case .level(let above, let rearmBelow, let sustained):
+            signal = reading.value
+            fireAt = above
+            rearmAt = rearmBelow
+            needed = sustained
+
+        case .surge(let gaining, let within):
+            latch.window.append(reading.value)
+            if latch.window.count > within {
+                latch.window.removeFirst(latch.window.count - within)
+            }
+            // Against the window's floor, not against the reading exactly `within` ago: a
+            // figure that dipped and then climbed has still climbed, and the dip is no reason
+            // to miss it.
+            signal = reading.value - (latch.window.min() ?? reading.value)
+            fireAt = gaining
+            // Half the jump. Nothing else to reuse here -- a surge has no natural "normal" the
+            // way a percentage does, and the window rolling forward re-arms it anyway once the
+            // new plateau becomes the floor.
+            rearmAt = gaining / 2
+            // A jump is one event. There is nothing to sustain.
+            needed = 1
+        }
+
+        if signal < rearmAt {
             latch.isAbove = false
             latch.samples = 0
             return
         }
-        guard reading.value >= rule.threshold else {
+        guard signal >= fireAt else {
             // In the gap between re-arming and firing: not worth announcing, not yet worth
             // forgetting. Having two numbers instead of one is the entire point of the gap.
             latch.samples = 0
@@ -274,7 +334,7 @@ final class SystemAlertManager {
         }
 
         latch.samples += 1
-        guard !latch.isAbove, latch.samples >= rule.sustained else { return }
+        guard !latch.isAbove, latch.samples >= needed else { return }
 
         // Latch on the crossing whether or not it gets announced. Inside the quiet window the
         // alert is dropped rather than deferred: the next one should wait for the figure to
@@ -285,14 +345,14 @@ final class SystemAlertManager {
             return
         }
         latch.firedAt = Date()
-        announce(rule, reading)
+        announce(rule, detail: reading.detail ?? rule.format(signal), context: reading.context)
     }
 
-    private func announce(_ rule: AlertRule, _ reading: AlertReading) {
-        logger.notice("\(rule.id, privacy: .public) at \(Int(reading.value), privacy: .public)")
+    private func announce(_ rule: AlertRule, detail: String, context: String?) {
+        logger.notice("\(rule.id, privacy: .public) fired: \(detail, privacy: .public)")
 
         guard let attribute = rule.attribute else {
-            show(rule, reading)
+            show(rule, detail: detail, context: context)
             return
         }
         // The one expensive thing here, and deliberately not on the sampling path: walking
@@ -300,20 +360,18 @@ final class SystemAlertManager {
         // `cpuUsage`. It runs once, after a rule has already spent thirty seconds deciding it
         // has something to say, and the extra wait is about 300 ms.
         Task { @MainActor in
-            var enriched = reading
             let found = await attribute()
-            if let found { enriched.context = found }
             logger.notice("\(rule.id, privacy: .public) blamed \(found ?? "nobody", privacy: .public)")
-            show(rule, enriched)
+            show(rule, detail: detail, context: found ?? context)
         }
     }
 
-    private func show(_ rule: AlertRule, _ reading: AlertReading) {
+    private func show(_ rule: AlertRule, detail: String, context: String?) {
         BoringViewCoordinator.shared.toggleSneakPeek(
             status: true, type: .systemAlert, duration: 4, value: 1,
             icon: rule.icon,
-            detail: reading.detail,
-            detailSecondary: reading.context ?? "",
+            detail: detail,
+            detailSecondary: context ?? "",
             label: rule.label)
     }
 }

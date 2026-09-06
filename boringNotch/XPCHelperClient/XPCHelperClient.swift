@@ -113,6 +113,22 @@ final class XPCHelperClient: NSObject {
         }
     }
 
+    /// The largest resident process, for a memory surge. `nil` when nothing is big enough to
+    /// be worth naming, or when the helper is unreachable.
+    nonisolated func topMemoryProcess() async -> String? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let result: String? = try await service.withContinuation { service, continuation in
+                service.topMemoryProcess { name in
+                    continuation.resume(returning: name)
+                }
+            }
+            return result
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Accessibility
     
     nonisolated func requestAccessibilityAuthorization() {

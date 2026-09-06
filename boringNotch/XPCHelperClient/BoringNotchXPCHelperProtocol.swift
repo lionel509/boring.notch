@@ -23,5 +23,6 @@ import Foundation
     // Which process is burning the CPU. Asked of the helper because the app is sandboxed and
     // cannot see one, and this service is not.
     func topProcessName(with reply: @escaping (String?) -> Void)
+    func topMemoryProcess(with reply: @escaping (String?) -> Void)
 }
 
