@@ -109,7 +109,7 @@ struct NotchStatsStrip: View {
     /// Grouped by subject rather than by which manager the numbers came from. `system`
     /// used to carry battery, CPU, memory and both network figures -- three unrelated
     /// questions sharing a row because they arrived together.
-    private enum Page: Hashable { case usage, providers, limits, power, system, network }
+    private enum Page: Hashable { case usage, limits, power, system, network }
 
     @State private var pageIndex = 0
     @State private var isHeld = false
@@ -121,8 +121,6 @@ struct NotchStatsStrip: View {
         var pages: [Page] = []
         if showUsage {
             pages.append(.usage)
-            // Only worth a page when there is actually a split to show.
-            if usage.byUpstream(for: .week).count > 1 { pages.append(.providers) }
             if usage.limits != nil { pages.append(.limits) }
         }
         if showSystem {
@@ -174,8 +172,17 @@ struct NotchStatsStrip: View {
     var body: some View {
         ZStack {
             switch currentPage {
-            case .usage: row { caption("TOKENS USED"); usageCells }
-            case .providers: row { caption("BY PROVIDER · 7 DAYS"); providerCells }
+            // One page, not two. The totals and the split answer the same question, and
+            // separating them meant waiting a whole flip to find out who spent it.
+            case .usage:
+                row {
+                    caption("TOKENS USED")
+                    usageCells
+                    if usage.byUpstream(for: .week).count > 1 {
+                        caption("BY PROVIDER · 7 DAYS")
+                        providerCells
+                    }
+                }
             case .limits: row { caption("PLAN LIMITS"); limitCells }
             case .power: row { caption("POWER"); powerCells }
             case .system: row { caption("SYSTEM"); systemCells }
@@ -343,13 +350,16 @@ struct NotchStatsStrip: View {
                   trend: stats.batteryHistory,
                   alarming: !battery.isCharging && battery.levelBattery <= 10)
         }
-        // One gauge per device, named by the device. No trend line: these are polled once
-        // a minute, so a sparkline would be four points pretending to be a curve.
+        // One gauge per device, named by the device, with the same sparkline everything
+        // else on the row carries. It is polled once a minute rather than once a second, so
+        // it fills in over a session instead of arriving complete -- which is honest for a
+        // quantity that moves that slowly.
         ForEach(bluetooth.devices) { device in
             gauge(device.name.uppercased(),
                   "\(device.percent)%",
                   widest: "100%",
                   tint: StatsPalette.severity(1 - Double(device.percent) / 100),
+                  trend: device.history,
                   alarming: device.percent <= 10)
         }
     }
@@ -376,12 +386,14 @@ struct NotchStatsStrip: View {
             gauge("SWAP", Self.gigabytes(stats.swapUsedBytes),
                   widest: "99.9 GB",
                   tint: StatsPalette.severity(stats.swapFraction),
+                  trend: stats.swapHistory,
                   alarming: stats.swapFraction >= 0.5)
         }
         if stats.diskTotalBytes > 0 {
             gauge("DISK FREE", Self.gigabytes(UInt64(max(stats.diskFreeBytes, 0))),
                   widest: "999.9 GB",
                   tint: StatsPalette.severity(stats.diskFraction),
+                  trend: stats.diskHistory,
                   alarming: stats.diskFraction >= 0.9)
         }
         // Only when it has something to say. A cell that permanently reads OK is a cell

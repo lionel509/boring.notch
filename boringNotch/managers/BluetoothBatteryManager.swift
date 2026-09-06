@@ -41,6 +41,9 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         let id: UUID
         let name: String
         let percent: Int
+        /// Charge over the session, oldest first, as a 0...1 fraction. Polled once a minute,
+        /// so this fills in slowly and honestly rather than being interpolated into a curve.
+        var history: [Double] = []
     }
 
     static let shared = BluetoothBatteryManager()
@@ -69,6 +72,9 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
     /// calls back -- but holding them *past* the read would keep a link open for nothing.
     private var reading: [UUID: CBPeripheral] = [:]
     private var collected: [UUID: Device] = [:]
+
+    /// Devices already announced this session, so a reconnect is news and a refresh is not.
+    private var announced: Set<UUID> = []
 
     /// Same discipline as every other timer in this app: the strip is the only consumer, it
     /// exists only while the notch is open, and a closed notch must cost nothing. Reference
@@ -137,14 +143,28 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
     /// Publish once a read finishes, and drop the link immediately.
     private func finish(_ peripheral: CBPeripheral, percent: Int?) {
         if let percent, let name = peripheral.name, !name.isEmpty {
+            var history = collected[peripheral.identifier]?.history ?? []
+            history.append(Double(percent) / 100)
+            if history.count > 60 { history.removeFirst(history.count - 60) }
             collected[peripheral.identifier] = Device(
-                id: peripheral.identifier, name: name, percent: percent)
+                id: peripheral.identifier, name: name, percent: percent, history: history)
         }
         central?.cancelPeripheralConnection(peripheral)
         reading.removeValue(forKey: peripheral.identifier)
 
         let next = collected.values.sorted { $0.name < $1.name }
         logger.info("read finished, percent \(percent ?? -1, privacy: .public), devices now \(next.count, privacy: .public)")
+
+        // Announce a device the notch has not seen before -- but never on the very first
+        // read of a session, or opening the notch would fire one activity per device that
+        // was already connected before the app started.
+        if announced.isEmpty {
+            announced = Set(next.map(\.id))
+        } else if let fresh = next.first(where: { !announced.contains($0.id) }) {
+            announced.insert(fresh.id)
+            ConnectionActivityManager.shared.announceBluetooth(name: fresh.name, percent: fresh.percent)
+        }
+
         if next != devices { devices = next }
     }
 }

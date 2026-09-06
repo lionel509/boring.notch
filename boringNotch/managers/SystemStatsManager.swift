@@ -58,6 +58,8 @@ final class SystemStatsManager: ObservableObject {
     @Published private(set) var memoryHistory: [Double] = []
     @Published private(set) var networkDownHistory: [Double] = []
     @Published private(set) var networkUpHistory: [Double] = []
+    @Published private(set) var swapHistory: [Double] = []
+    @Published private(set) var diskHistory: [Double] = []
 
     /// Battery moves far too slowly for a 12-second window to say anything, so it keeps a
     /// coarse trace instead — a point a minute, persisted, so it survives the notch closing
@@ -171,6 +173,8 @@ final class SystemStatsManager: ObservableObject {
 
         push(cpuUsage, into: &cpuHistory)
         push(memoryFraction, into: &memoryHistory)
+        push(swapFraction, into: &swapHistory)
+        push(diskFraction, into: &diskHistory)
 
         // Down and up share one ceiling. They are small multiples of the same measure, so
         // giving each its own scale would draw a trickle of upload at the same height as a

@@ -18,6 +18,16 @@ enum SneakContentType {
     case mic
     case battery
     case download
+    /// Connection events. Unlike the HUD types above these are not replacing a system HUD,
+    /// so they are not gated on `hudReplacement`.
+    case wifi
+    case bluetooth
+}
+
+extension SneakContentType {
+    /// A connection event announces something that happened; the HUD types report a value
+    /// the user is currently changing. They earn their way onto the notch differently.
+    var isConnectionEvent: Bool { self == .wifi || self == .bluetooth }
 }
 
 struct sneakPeek {
@@ -25,6 +35,10 @@ struct sneakPeek {
     var type: SneakContentType = .music
     var value: CGFloat = 0
     var icon: String = ""
+    /// The right-hand side, when it is a phrase rather than a bar -- a network's link rate,
+    /// a device's name and charge. `.mic` already established that the right slot can hold
+    /// a word instead of a slider.
+    var detail: String = ""
 }
 
 struct SharedSneakPeek: Codable {
@@ -207,10 +221,13 @@ class BoringViewCoordinator: ObservableObject {
 
     func toggleSneakPeek(
         status: Bool, type: SneakContentType, duration: TimeInterval = 1.5, value: CGFloat = 0,
-        icon: String = ""
+        icon: String = "", detail: String = ""
     ) {
         sneakPeekDuration = duration
-        if type != .music {
+        // `hudReplacement` is a promise about volume and brightness -- that the notch will
+        // stand in for the system HUD. A Wi-Fi or Bluetooth event replaces no HUD at all, so
+        // gating it on that setting would hide the feature behind an unrelated switch.
+        if type != .music, !type.isConnectionEvent {
             // close()
             if !Defaults[.hudReplacement] {
                 return
@@ -222,6 +239,7 @@ class BoringViewCoordinator: ObservableObject {
                 self.sneakPeek.type = type
                 self.sneakPeek.value = value
                 self.sneakPeek.icon = icon
+                self.sneakPeek.detail = detail
             }
         }
 

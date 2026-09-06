@@ -13,6 +13,7 @@ struct InlineHUD: View {
     @Binding var type: SneakContentType
     @Binding var value: CGFloat
     @Binding var icon: String
+    @Binding var detail: String
     @Binding var hoverAnimation: Bool
     @Binding var gestureProgress: CGFloat
     var body: some View {
@@ -39,6 +40,14 @@ struct InlineHUD: View {
                                 .frame(width: 20, height: 15, alignment: .center)
                         case .backlight:
                             Image(systemName: value > 0.5 ? "light.max" : "light.min")
+                                .contentTransition(.interpolate)
+                                .frame(width: 20, height: 15, alignment: .center)
+                        case .wifi:
+                            Image(systemName: "wifi")
+                                .contentTransition(.interpolate)
+                                .frame(width: 20, height: 15, alignment: .center)
+                        case .bluetooth:
+                            Image(systemName: icon.isEmpty ? "dot.radiowaves.right" : icon)
                                 .contentTransition(.interpolate)
                                 .frame(width: 20, height: 15, alignment: .center)
                         case .mic:
@@ -68,7 +77,18 @@ struct InlineHUD: View {
                 .frame(width: vm.closedNotchSize.width - 20)
             
             HStack {
-                if (type == .mic) {
+                if type.isConnectionEvent {
+                    // The whole point of the layout: what happened on the left of the
+                    // notch, which thing it happened to on the right.
+                    Text(detail)
+                        .foregroundStyle(.gray)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .allowsTightening(true)
+                        .multilineTextAlignment(.trailing)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .contentTransition(.interpolate)
+                } else if (type == .mic) {
                     Text(value.isZero ? "muted" : "unmuted")
                         .foregroundStyle(.gray)
                         .lineLimit(1)
@@ -147,6 +167,10 @@ struct InlineHUD: View {
                 return "Backlight"
             case .mic:
                 return "Mic"
+            case .wifi:
+                return "Wi-Fi"
+            case .bluetooth:
+                return "Connected"
             default:
                 return ""
         }
@@ -154,7 +178,7 @@ struct InlineHUD: View {
 }
 
 #Preview {
-    InlineHUD(type: .constant(.brightness), value: .constant(0.4), icon: .constant(""), hoverAnimation: .constant(false), gestureProgress: .constant(0))
+    InlineHUD(type: .constant(.brightness), value: .constant(0.4), icon: .constant(""), detail: .constant(""), hoverAnimation: .constant(false), gestureProgress: .constant(0))
         .padding(.horizontal, 8)
         .background(Color.black)
         .padding()

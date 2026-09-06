@@ -285,6 +285,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // nobody has asked to see.
         if Defaults[.showDictationActivity] {
             DictationManager.shared.start()
+            // Cheap and always on: an NWPathMonitor costs no permission and no polling,
+            // and a connection event is only worth showing at the moment it happens.
+            ConnectionActivityManager.shared.start()
         }
 
         // Scan once at launch so the first time the notch opens the figures are already
