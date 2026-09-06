@@ -56,7 +56,7 @@ class BatteryStatusViewModel: ObservableObject {
             print("🔌 Power source: \(isPluggedIn ? "Connected" : "Disconnected")")
             withAnimation {
                 self.isPluggedIn = isPluggedIn
-                self.statusText = isPluggedIn ? "Plugged In" : "Unplugged"
+                self.statusText = self.settledStatusText
                 self.notifyImportanChangeStatus()
             }
 
@@ -78,14 +78,14 @@ class BatteryStatusViewModel: ObservableObject {
             print("🔌 Charging: \(isCharging ? "Yes" : "No")")
             print("maxCapacity: \(self.maxCapacity)")
             print("levelBattery: \(self.levelBattery)")
-            self.notifyImportanChangeStatus()
+            // State first, then announce. The notify is debounced, so it reads the phrase
+            // after everything has settled -- but ordering it this way means the phrase is
+            // right even if the delay is ever shortened.
             withAnimation {
                 self.isCharging = isCharging
-                self.statusText =
-                    isCharging
-                    ? "Charging battery"
-                    : (self.levelBattery < self.maxCapacity ? "Not charging" : "Full charge")
+                self.statusText = self.settledStatusText
             }
+            self.notifyImportanChangeStatus()
 
         case .timeToFullChargeChanged(let time):
             print("🕒 Time to full charge: \(time) minutes")
@@ -114,16 +114,48 @@ class BatteryStatusViewModel: ObservableObject {
             self.isInLowPowerMode = batteryInfo.isInLowPowerMode
             self.timeToFullCharge = batteryInfo.timeToFullCharge
             self.maxCapacity = batteryInfo.maxCapacity
-            self.statusText = batteryInfo.isPluggedIn ? "Plugged In" : "Unplugged"
+            self.statusText = self.settledStatusText
         }
     }
 
-    /// Notifies important changes in the battery status with an optional delay
-    /// - Parameter delay: The delay before notifying the change, default is 0.0
+    /// What the charger is actually doing, in one phrase.
+    ///
+    /// Plugging in is not one event: the power source changes, and then charging starts a
+    /// moment later. Deriving the phrase from the *current* state rather than from whichever
+    /// event just arrived is what stops it announcing "Plugged In" and then "Charging" for
+    /// one action.
+    ///
+    /// The interesting case is the third one. With adaptive charging on, macOS deliberately
+    /// stops around 80% and holds there — the charger is connected, the battery is not full,
+    /// and nothing is charging. Without a word for that state it reads as a fault, which is
+    /// exactly what it looked like.
+    private var settledStatusText: String {
+        guard isPluggedIn else { return "Unplugged" }
+        if isCharging { return "Charging" }
+        let level = Int(levelBattery.rounded())
+        if level >= 95 { return "Charged" }
+        // Held rather than broken. Above ~75% this is adaptive charging doing its job;
+        // below it the charger has been inhibited for some other reason, usually heat.
+        return level >= 75 ? "Holding \(level)%" : "Paused \(level)%"
+    }
+
+    /// Coalesces a burst of changes into one activity.
+    ///
+    /// Plug in and three events arrive within a second or so. Each used to raise its own
+    /// activity, so the notch said the same thing twice with a jump between them -- which is
+    /// what read as an unsmooth animation. One announcement, once the state has stopped
+    /// moving.
+    private var notifyTask: Task<Void, Never>?
+
     private func notifyImportanChangeStatus(delay: Double = 0.0) {
-        Task {
-            try? await Task.sleep(for: .seconds(delay))
-            self.coordinator.toggleExpandingView(status: true, type: .battery)
+        notifyTask?.cancel()
+        notifyTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(delay, 0.9)))
+            guard !Task.isCancelled, let self else { return }
+            await MainActor.run {
+                self.statusText = self.settledStatusText
+                self.coordinator.toggleExpandingView(status: true, type: .battery)
+            }
         }
     }
 
