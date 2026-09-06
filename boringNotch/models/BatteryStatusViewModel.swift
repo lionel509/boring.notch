@@ -120,22 +120,51 @@ class BatteryStatusViewModel: ObservableObject {
 
     /// What the charger is actually doing, in one phrase.
     ///
-    /// Plugging in is not one event: the power source changes, and then charging starts a
-    /// moment later. Deriving the phrase from the *current* state rather than from whichever
-    /// event just arrived is what stops it announcing "Plugged In" and then "Charging" for
-    /// one action.
+    /// Read straight from `AppleSmartBattery` rather than from the event-updated flags.
+    /// Plugging in is not one event -- the power source changes, then charging starts a
+    /// moment later -- so a phrase derived from whichever flag had been set by then said
+    /// "Plugged In" and then "Charging" for one action, and could be a whole state behind.
     ///
-    /// The interesting case is the third one. With adaptive charging on, macOS deliberately
-    /// stops around 80% and holds there — the charger is connected, the battery is not full,
-    /// and nothing is charging. Without a word for that state it reads as a fault, which is
-    /// exactly what it looked like.
+    /// The important part is `NotChargingReason` / `ChargerInhibitReason`. **Only a non-zero
+    /// reason means the charger is being held back.** The first version inferred a hold from
+    /// "plugged in but the charging flag is not set yet", which is the absence of evidence
+    /// rather than evidence -- and it announced `Paused 29%` on a machine that was charging
+    /// perfectly happily at 29%, because the flag simply had not arrived.
     private var settledStatusText: String {
-        guard isPluggedIn else { return "Unplugged" }
-        if isCharging { return "Charging" }
-        let level = Int(levelBattery.rounded())
-        if level >= 95 { return "Charged" }
-        // Held rather than broken. Above ~75% this is adaptive charging doing its job;
-        // below it the charger has been inhibited for some other reason, usually heat.
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(
+            kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"), &iterator
+        ) == KERN_SUCCESS else { return isPluggedIn ? "Plugged In" : "Unplugged" }
+        defer { IOObjectRelease(iterator) }
+
+        let entry = IOIteratorNext(iterator)
+        guard entry != 0 else { return isPluggedIn ? "Plugged In" : "Unplugged" }
+        defer { IOObjectRelease(entry) }
+
+        func value(_ key: String) -> NSNumber? {
+            IORegistryEntryCreateCFProperty(entry, key as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? NSNumber
+        }
+        func flag(_ key: String) -> Bool {
+            (IORegistryEntryCreateCFProperty(entry, key as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? Bool) ?? false
+        }
+
+        guard flag("ExternalConnected") else { return "Unplugged" }
+        if flag("IsCharging") { return "Charging" }
+        if flag("FullyCharged") { return "Charged" }
+
+        let level = value("CurrentCapacity")?.intValue ?? Int(levelBattery.rounded())
+        let inhibited = (value("NotChargingReason")?.intValue ?? 0) != 0
+            || (value("ChargerInhibitReason")?.intValue ?? 0) != 0
+        guard inhibited else {
+            // Connected, not charging, and nothing is holding it back -- which is what a
+            // machine looks like in the moment between the two events. Say the plain true
+            // thing rather than inventing a reason.
+            return "Plugged In"
+        }
+        // Above ~75% this is adaptive charging doing its job; below it the charger has been
+        // inhibited for some other reason, usually heat.
         return level >= 75 ? "Holding \(level)%" : "Paused \(level)%"
     }
 
