@@ -18,10 +18,17 @@ try:
 except Exception:
     payload = {}
 
-# A nested session is not one of your tabs. Subagents and any `claude -p` spawned from
-# inside another session set this, and each one firing Started/Done turns a feature about
-# three terminals into a feature about every internal call any of them makes.
-if os.environ.get("CLAUDE_CODE_CHILD_SESSION") == "1":
+# Only announce real interactive tabs. CLAUDE_CODE_ENTRYPOINT is "cli" for a terminal
+# session and "sdk-cli" for a headless `claude -p`, including every one a session spawns
+# internally -- without this, a feature about three terminals becomes a feature about every
+# internal call any of them makes.
+#
+# It is emphatically NOT the same as CLAUDE_CODE_CHILD_SESSION, which was tried first and
+# was wrong: that is set on every *child process* Claude Code spawns, and a hook is one of
+# those, so it reads as 1 even in the main session and silenced everything. The test that
+# missed it asked whether a nested session was suppressed -- which it was, along with all
+# the others. Suppression is not selectivity.
+if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "cli") != "cli":
     sys.exit(0)
 
 # Don't resurrect a notch that was quit on purpose: `open` on a URL would launch it.
