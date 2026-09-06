@@ -69,7 +69,7 @@ final class ConnectionActivityManager {
         return parts.isEmpty ? "connected" : parts.joined(separator: " · ")
     }
 
-    /// Announced by `BluetoothBatteryManager` when a device it had not seen turns up.
+    /// Announced by `BluetoothBatteryManager` when a device appears or goes away.
     ///
     /// Honest limitation, written down rather than hidden: that manager only runs while the
     /// notch is open, because a battery page has no business holding the radio awake. So a
@@ -77,11 +77,16 @@ final class ConnectionActivityManager {
     /// opened, not at the moment it connects. Announcing at the true moment needs an
     /// always-on central, which means asking for Bluetooth permission at launch for a page
     /// the user may never open.
-    func announceBluetooth(name: String, percent: Int?) {
-        let detail = percent.map { "\(name) · \($0)%" } ?? name
-        logger.notice("bluetooth device appeared")
+    func announceBluetooth(name: String, percent: Int?, connected: Bool) {
+        let detail: String
+        if connected {
+            detail = percent.map { "\(name) · \($0)%" } ?? name
+        } else {
+            detail = "\(name) · disconnected"
+        }
+        logger.notice("bluetooth device \(connected ? "connected" : "disconnected", privacy: .public)")
         BoringViewCoordinator.shared.toggleSneakPeek(
             status: true, type: .bluetooth, duration: 2.5,
-            icon: "dot.radiowaves.right", detail: detail)
+            icon: connected ? "dot.radiowaves.right" : "xmark.circle", detail: detail)
     }
 }

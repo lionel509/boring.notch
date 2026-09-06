@@ -288,6 +288,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Cheap and always on: an NWPathMonitor costs no permission and no polling,
             // and a connection event is only worth showing at the moment it happens.
             ConnectionActivityManager.shared.start()
+            BluetoothBatteryManager.shared.beginWatching()
         }
 
         // Scan once at launch so the first time the notch opens the figures are already

@@ -39,6 +39,32 @@ import OSLog
 /// diagnostics in a Release build is lost.
 private let logger = Logger(subsystem: "theboringteam.boringnotch", category: "BluetoothBattery")
 
+/// A trace that can actually be read back.
+///
+/// `log show` returns nothing whatsoever for this process -- not for `.notice`, not during a
+/// launch crash, not for any predicate -- so two rounds of "the log is empty, therefore the
+/// code never ran" were conclusions drawn from a broken instrument. A file in the sandbox
+/// container cannot fail that way.
+///
+/// Names are written; this file lives inside the app's own container and is never
+/// transmitted. It is capped so it cannot grow without bound.
+private func btTrace(_ line: String) {
+    guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    else { return }
+    let url = dir.appendingPathComponent("bt-trace.log")
+    let stamped = ISO8601DateFormatter().string(from: Date()) + "  " + line + "\n"
+    guard let data = stamped.data(using: .utf8) else { return }
+    if let handle = try? FileHandle(forWritingTo: url) {
+        defer { try? handle.close() }
+        if (try? handle.seekToEnd()).map({ $0 > 64_000 }) == true {
+            try? handle.truncate(atOffset: 0)
+        }
+        try? handle.write(contentsOf: data)
+    } else {
+        try? data.write(to: url)
+    }
+}
+
 @MainActor
 final class BluetoothBatteryManager: NSObject, ObservableObject {
     struct Device: Identifiable, Equatable {
@@ -48,6 +74,24 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         /// Charge over the session, oldest first, as a 0...1 fraction. Polled once a minute,
         /// so this fills in slowly and honestly rather than being interpolated into a curve.
         var history: [Double] = []
+
+        /// Where this device's charge was when it was first seen, and when that was.
+        var firstPercent: Int = 0
+        var firstSeen: Date = .now
+
+        /// Percentage points per hour, negative while draining.
+        ///
+        /// `nil` until there is enough elapsed time to mean anything. GATT gives a level and
+        /// nothing else -- there is no wattage to read from a mouse -- so a rate can only be
+        /// measured by watching, and fifteen minutes is the earliest a one-point-per-minute
+        /// integer reading says more than rounding does.
+        var drainPerHour: Double? {
+            let hours = Date.now.timeIntervalSince(firstSeen) / 3600
+            guard hours >= 0.25 else { return nil }
+            let delta = Double(percent - firstPercent)
+            guard delta != 0 else { return nil }
+            return delta / hours
+        }
     }
 
     static let shared = BluetoothBatteryManager()
@@ -77,15 +121,79 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
     private var reading: [UUID: CBPeripheral] = [:]
     private var collected: [UUID: Device] = [:]
 
-    /// Devices already announced this session, so a reconnect is news and a refresh is not.
+    /// What was connected at the last poll, so appearing and disappearing are both news.
     private var announced: Set<UUID> = []
+    /// Set once the first poll has taken stock. Distinguishes "nothing connected yet" from
+    /// "we have not looked", which an empty set alone cannot.
+    private var adopted = false
 
     /// Same discipline as every other timer in this app: the strip is the only consumer, it
     /// exists only while the notch is open, and a closed notch must cost nothing. Reference
     /// counted because two views may subscribe at once.
     private var subscribers = 0
 
+    /// The always-on half. Announcing "a device connected" only while the notch happens to be
+    /// open is not announcing it, so knowing *which* devices are connected runs all the time
+    /// -- it is a lookup against state CoreBluetooth already holds, with no scanning and no
+    /// GATT traffic. The expensive half, reading each battery, still runs only while the
+    /// strip is on screen.
+    private var watchTimer: Timer?
+    private static let watchInterval: TimeInterval = 5
+
     private override init() { super.init() }
+
+    /// Called once at launch. Safe to do here because Bluetooth permission has already been
+    /// granted by this point in the app's life for anyone who uses the feature; the first
+    /// launch after installing still only prompts once.
+    func beginWatching() {
+        guard watchTimer == nil else { return }
+        btTrace("beginWatching")
+        if central == nil { central = CBCentralManager(delegate: self, queue: nil) }
+        let timer = Timer(timeInterval: Self.watchInterval, repeats: true) { _ in
+            Task { @MainActor [weak self] in self?.poll() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watchTimer = timer
+    }
+
+    /// Which devices are connected right now, and announce anything new. No connecting, no
+    /// reading -- this is a query against CoreBluetooth's own bookkeeping.
+    private func poll() {
+        guard let central, central.state == .poweredOn else { return }
+        let connected = central.retrieveConnectedPeripherals(withServices: [Self.batteryService])
+        let ids = Set(connected.map(\.identifier))
+
+        if !adopted {
+            // First look of the session: take what is already connected without announcing
+            // it, or launching the app would announce every device already in use.
+            adopted = true
+        } else {
+            for peripheral in connected where !announced.contains(peripheral.identifier) {
+                btTrace("connected: \(peripheral.name ?? "unnamed")")
+                ConnectionActivityManager.shared.announceBluetooth(
+                    name: peripheral.name ?? "Bluetooth device",
+                    percent: collected[peripheral.identifier]?.percent,
+                    connected: true)
+            }
+            for gone in announced.subtracting(ids) {
+                let name = collected[gone]?.name ?? "Bluetooth device"
+                btTrace("disconnected: \(name)")
+                ConnectionActivityManager.shared.announceBluetooth(
+                    name: name, percent: nil, connected: false)
+            }
+        }
+        announced = ids
+
+        // A device that is genuinely gone leaves the row -- decided here, against the
+        // system's own list, rather than off the back of our own post-read disconnect.
+        let stale = Set(collected.keys).subtracting(ids)
+        if !stale.isEmpty {
+            for id in stale { collected.removeValue(forKey: id) }
+            devices = collected.values.sorted { $0.name < $1.name }
+        }
+
+        if subscribers > 0 { refresh() }
+    }
 
     func start() {
         subscribers += 1
@@ -93,6 +201,7 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         // Created lazily: constructing a CBCentralManager is what triggers the Bluetooth
         // permission prompt, and asking on launch for a page the user may never open is
         // the kind of thing that gets an app denied by reflex.
+        btTrace("start, subscribers now \(subscribers)")
         if central == nil {
             logger.notice("creating central manager")
             central = CBCentralManager(delegate: self, queue: nil)
@@ -128,6 +237,7 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         guard let central else { return }
         guard central.state == .poweredOn else {
             logger.notice("refresh skipped, central state \(central.state.rawValue, privacy: .public)")
+            btTrace("refresh skipped, central state \(central.state.rawValue)")
             return
         }
 
@@ -136,6 +246,7 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         // nothing that could interfere with an audio link.
         let connected = central.retrieveConnectedPeripherals(withServices: [Self.batteryService])
         logger.notice("retrieveConnectedPeripherals returned \(connected.count, privacy: .public)")
+        btTrace("retrieveConnectedPeripherals -> \(connected.count): \(connected.map { $0.name ?? "?" }.joined(separator: ", "))")
         for peripheral in connected {
             guard reading[peripheral.identifier] == nil else { continue }
             reading[peripheral.identifier] = peripheral
@@ -147,27 +258,21 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
     /// Publish once a read finishes, and drop the link immediately.
     private func finish(_ peripheral: CBPeripheral, percent: Int?) {
         if let percent, let name = peripheral.name, !name.isEmpty {
-            var history = collected[peripheral.identifier]?.history ?? []
+            let existing = collected[peripheral.identifier]
+            var history = existing?.history ?? []
             history.append(Double(percent) / 100)
             if history.count > 60 { history.removeFirst(history.count - 60) }
             collected[peripheral.identifier] = Device(
-                id: peripheral.identifier, name: name, percent: percent, history: history)
+                id: peripheral.identifier, name: name, percent: percent, history: history,
+                firstPercent: existing?.firstPercent ?? percent,
+                firstSeen: existing?.firstSeen ?? .now)
         }
         central?.cancelPeripheralConnection(peripheral)
         reading.removeValue(forKey: peripheral.identifier)
 
         let next = collected.values.sorted { $0.name < $1.name }
         logger.notice("read finished, percent \(percent ?? -1, privacy: .public), devices now \(next.count, privacy: .public)")
-
-        // Announce a device the notch has not seen before -- but never on the very first
-        // read of a session, or opening the notch would fire one activity per device that
-        // was already connected before the app started.
-        if announced.isEmpty {
-            announced = Set(next.map(\.id))
-        } else if let fresh = next.first(where: { !announced.contains($0.id) }) {
-            announced.insert(fresh.id)
-            ConnectionActivityManager.shared.announceBluetooth(name: fresh.name, percent: fresh.percent)
-        }
+        btTrace("read \(peripheral.name ?? "?") -> \(percent.map(String.init) ?? "nil"), devices now \(next.count)")
 
         if next != devices { devices = next }
     }
@@ -180,6 +285,7 @@ extension BluetoothBatteryManager: CBCentralManagerDelegate {
         MainActor.assumeIsolated {
             isAvailable = manager.state == .poweredOn
             logger.notice("central state \(manager.state.rawValue, privacy: .public)")
+            btTrace("central state \(manager.state.rawValue) (5 == poweredOn, 3 == unauthorized)")
             guard manager.state == .poweredOn else {
                 // Powered off, unauthorised or unsupported. Forget what we had rather than
                 // show a number that has stopped being true.
@@ -210,11 +316,16 @@ extension BluetoothBatteryManager: CBCentralManagerDelegate {
     ) {
         MainActor.assumeIsolated {
             reading.removeValue(forKey: peripheral.identifier)
-            // A device that has gone away must leave the row. Otherwise a pocketed mouse
-            // sits there at its last value for the rest of the session.
-            if collected.removeValue(forKey: peripheral.identifier) != nil {
-                devices = collected.values.sorted { $0.name < $1.name }
-            }
+            // Deliberately does *not* drop the reading.
+            //
+            // This is the bug that made the page look empty. `finish` reads the battery and
+            // then calls `cancelPeripheralConnection`, which lands right here -- so every
+            // successful read immediately deleted itself, and the trace showed two devices
+            // read and "devices now 1" both times. A GATT read that has completed is not a
+            // device going away; it is the read working exactly as designed.
+            //
+            // Whether a device is still *connected* is now decided in `poll`, against
+            // CoreBluetooth's own list, which is the only thing that actually knows.
         }
     }
 }

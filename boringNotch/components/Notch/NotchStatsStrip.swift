@@ -377,6 +377,24 @@ struct NotchStatsStrip: View {
                   trend: stats.batteryHistory,
                   alarming: !battery.isCharging && battery.levelBattery <= 10)
         }
+        // Which way the power is actually flowing, and how hard. The percentage says how
+        // much is left; this says what is happening to it right now -- and it is the number
+        // that answers "what is draining my battery" while the percentage is still 90%.
+        if stats.batteryWatts != 0 {
+            let charging = stats.batteryWatts > 0
+            gauge(charging ? "POWER IN" : "POWER OUT",
+                  String(format: "%.1f W", abs(stats.batteryWatts)),
+                  widest: "99.9 W",
+                  tint: charging ? .effectiveAccent : StatsPalette.severity(abs(stats.batteryWatts) / 40),
+                  trend: stats.powerHistory,
+                  alarming: !charging && abs(stats.batteryWatts) >= 35)
+        }
+        // Two sides to this page: this Mac, then everything else, split by a rule. They are
+        // the same question asked of different hardware, and they do not belong in one
+        // undifferentiated run of cells.
+        if !bluetooth.devices.isEmpty {
+            Divider().frame(height: 10)
+        }
         // One gauge per device, named by the device, with the same sparkline everything
         // else on the row carries. It is polled once a minute rather than once a second, so
         // it fills in over a session instead of arriving complete -- which is honest for a
@@ -388,6 +406,14 @@ struct NotchStatsStrip: View {
                   tint: StatsPalette.severity(1 - Double(device.percent) / 100),
                   trend: device.history,
                   alarming: device.percent <= 10)
+            // The equivalent of POWER OUT for something that will not tell us its wattage.
+            // Appears once it has been watched long enough to be a measurement rather than
+            // a rounding artefact.
+            if let rate = device.drainPerHour {
+                gauge("RATE", String(format: "%+.1f %%/h", rate),
+                      widest: "+99.9 %/h",
+                      tint: rate < 0 ? StatsPalette.severity(min(abs(rate) / 20, 1)) : .effectiveAccent)
+            }
         }
     }
 

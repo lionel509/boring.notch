@@ -170,7 +170,7 @@ struct InlineHUD: View {
             case .wifi:
                 return "Wi-Fi"
             case .bluetooth:
-                return "Connected"
+                return "Bluetooth"
             default:
                 return ""
         }

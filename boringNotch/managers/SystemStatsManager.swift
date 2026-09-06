@@ -47,6 +47,17 @@ final class SystemStatsManager: ObservableObject {
     /// Free to read, and the honest answer to "why are the fans on".
     @Published private(set) var thermalState: ProcessInfo.ThermalState = .nominal
 
+    /// Battery power flow in watts, **signed**: positive is charging, negative is draining.
+    /// Voltage times current, both straight off the battery controller, so it is the real
+    /// figure rather than an estimate from the percentage moving.
+    @Published private(set) var batteryWatts: Double = 0
+    @Published private(set) var powerHistory: [Double] = []
+
+    /// The scale a sparkline is drawn against. A laptop rarely exceeds this either way, and
+    /// a fixed ceiling means the trace is comparable between glances instead of silently
+    /// rescaling itself every time the peak changes.
+    private static let wattCeiling: Double = 60
+
     private var diskTickCounter = 0
 
     let memoryTotalBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
@@ -122,6 +133,7 @@ final class SystemStatsManager: ObservableObject {
         sampleNetwork()
         sampleSwap()
         sampleThermal()
+        samplePower()
         if diskTickCounter % 10 == 0 { sampleDisk() }
         diskTickCounter += 1
         recordHistory()
@@ -134,6 +146,34 @@ final class SystemStatsManager: ObservableObject {
         guard sysctlbyname("vm.swapusage", &usage, &size, nil, 0) == 0 else { return }
         if usage.xsu_used != swapUsedBytes { swapUsedBytes = usage.xsu_used }
         if usage.xsu_total != swapTotalBytes { swapTotalBytes = usage.xsu_total }
+    }
+
+    /// `AppleSmartBattery` in the IO registry. Two properties, no process list, no polling
+    /// of anything expensive.
+    private func samplePower() {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(
+            kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"), &iterator
+        ) == KERN_SUCCESS else { return }
+        defer { IOObjectRelease(iterator) }
+
+        let entry = IOIteratorNext(iterator)
+        guard entry != 0 else { return }
+        defer { IOObjectRelease(entry) }
+
+        func number(_ key: String) -> NSNumber? {
+            IORegistryEntryCreateCFProperty(entry, key as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? NSNumber
+        }
+        // `Amperage` is signed but arrives as a 64-bit unsigned, so a discharging machine
+        // reads as 1.8e19 milliamps unless the bits are reinterpreted. `int64Value` does
+        // exactly that; `doubleValue` does not.
+        guard let amperage = number("Amperage")?.int64Value,
+              let voltage = number("Voltage")?.int64Value
+        else { return }
+
+        let watts = (Double(amperage) / 1000) * (Double(voltage) / 1000)
+        if abs(watts - batteryWatts) > 0.05 { batteryWatts = watts }
     }
 
     private func sampleThermal() {
@@ -174,6 +214,7 @@ final class SystemStatsManager: ObservableObject {
         push(cpuUsage, into: &cpuHistory)
         push(memoryFraction, into: &memoryHistory)
         push(swapFraction, into: &swapHistory)
+        push(abs(batteryWatts) / Self.wattCeiling, into: &powerHistory)
         push(diskFraction, into: &diskHistory)
 
         // Down and up share one ceiling. They are small multiples of the same measure, so
