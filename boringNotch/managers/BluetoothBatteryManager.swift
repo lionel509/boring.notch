@@ -123,9 +123,17 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
 
     /// What was connected at the last poll, so appearing and disappearing are both news.
     private var announced: Set<UUID> = []
+    /// Devices connected but not yet read, whose activity is waiting on a charge figure.
+    private var pendingAnnounce: Set<UUID> = []
+
     /// Set once the first poll has taken stock. Distinguishes "nothing connected yet" from
     /// "we have not looked", which an empty set alone cannot.
     private var adopted = false
+
+    /// Disconnects we caused ourselves. `finish` cancels the link after every read, which
+    /// lands in `didDisconnectPeripheral` exactly like a device walking away -- so without
+    /// this the reads would announce themselves as disconnections.
+    private var selfCancelled: Set<UUID> = []
 
     /// Names outlive readings on purpose. `collected` is pruned the moment a device drops,
     /// which is the same moment the disconnect needs its name -- and falling back to
@@ -179,10 +187,18 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
             for peripheral in connected where !announced.contains(peripheral.identifier) {
                 btTrace("connected: \(peripheral.name ?? "unnamed")")
                 if let name = peripheral.name { names[peripheral.identifier] = name }
-                ConnectionActivityManager.shared.announceBluetooth(
-                    name: peripheral.name ?? "Bluetooth device",
-                    percent: collected[peripheral.identifier]?.percent,
-                    connected: true)
+                if let known = collected[peripheral.identifier]?.percent {
+                    ConnectionActivityManager.shared.announceBluetooth(
+                        name: peripheral.name ?? "Bluetooth device",
+                        percent: known, connected: true)
+                } else {
+                    // Announce once the charge is known rather than immediately. A device
+                    // that has just connected has never been read, so announcing now meant
+                    // the activity slid to an empty second beat -- the "55% charged" that
+                    // never appeared. The read takes a few hundred milliseconds; the
+                    // announcement is worth that much more than it is worth being instant.
+                    pendingAnnounce.insert(peripheral.identifier)
+                }
             }
             for gone in announced.subtracting(ids) {
                 let name = collected[gone]?.name ?? names[gone] ?? "Bluetooth device"
@@ -201,7 +217,9 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
             devices = collected.values.sorted { $0.name < $1.name }
         }
 
-        if subscribers > 0 { refresh() }
+        // Read now if anything is waiting to be announced, even with the notch shut: it is
+        // one read, and it is the difference between naming a charge and not.
+        if subscribers > 0 || !pendingAnnounce.isEmpty { refresh() }
     }
 
     func start() {
@@ -276,12 +294,19 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
                 firstPercent: existing?.firstPercent ?? percent,
                 firstSeen: existing?.firstSeen ?? .now)
         }
+        selfCancelled.insert(peripheral.identifier)
         central?.cancelPeripheralConnection(peripheral)
         reading.removeValue(forKey: peripheral.identifier)
 
         let next = collected.values.sorted { $0.name < $1.name }
         logger.notice("read finished, percent \(percent ?? -1, privacy: .public), devices now \(next.count, privacy: .public)")
         btTrace("read \(peripheral.name ?? "?") -> \(percent.map(String.init) ?? "nil"), devices now \(next.count)")
+
+        if pendingAnnounce.remove(peripheral.identifier) != nil {
+            ConnectionActivityManager.shared.announceBluetooth(
+                name: peripheral.name ?? names[peripheral.identifier] ?? "Bluetooth device",
+                percent: percent, connected: true)
+        }
 
         if next != devices { devices = next }
     }
@@ -325,6 +350,13 @@ extension BluetoothBatteryManager: CBCentralManagerDelegate {
     ) {
         MainActor.assumeIsolated {
             reading.removeValue(forKey: peripheral.identifier)
+            if selfCancelled.remove(peripheral.identifier) == nil {
+                // Not ours: the device actually went away. Polling every five seconds meant
+                // up to five seconds of "it already unpaired and the notch has not noticed",
+                // which reads as broken. The event itself is immediate.
+                btTrace("disconnect event: \(names[peripheral.identifier] ?? "?")")
+                poll()
+            }
             // Deliberately does *not* drop the reading.
             //
             // This is the bug that made the page look empty. `finish` reads the battery and

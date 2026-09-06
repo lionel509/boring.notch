@@ -76,11 +76,29 @@ final class ConnectionActivityManager: NSObject {
         // The left already says what happened. Repeating "disconnected" on the right spent
         // the whole slot saying it twice and left no room for the network's name -- which is
         // the only thing the right side is there for.
+        guard associated else {
+            BoringViewCoordinator.shared.toggleSneakPeek(
+                status: true, type: .wifi, duration: 4, value: 0,
+                icon: "wifi.slash", detail: lastSSID ?? "no network", detailSecondary: "")
+            return
+        }
+        // A link-change event fires at the instant the state flips, when `transmitRate` and
+        // `rssiValue` are still zero and `ssid` is usually still nil -- which is why the name
+        // never appeared and the second beat slid to nothing. Let the radio finish
+        // associating, then read it.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            Self.announceWiFi()
+        }
+    }
+
+    private static func announceWiFi() {
+        let interface = CWWiFiClient.shared().interface()
         BoringViewCoordinator.shared.toggleSneakPeek(
-            status: true, type: .wifi, duration: 4, value: associated ? 1 : 0,
-            icon: associated ? "wifi" : "wifi.slash",
-            detail: associated ? Self.networkName(interface) : (lastSSID ?? "no network"),
-            detailSecondary: associated ? Self.linkDetail(interface) : "")
+            status: true, type: .wifi, duration: 4, value: 1,
+            icon: "wifi",
+            detail: networkName(interface),
+            detailSecondary: linkDetail(interface))
     }
 
     /// The network's name, when macOS will give it.
@@ -88,9 +106,11 @@ final class ConnectionActivityManager: NSObject {
     /// Falls back to the link rather than nagging: if Location is refused the activity still
     /// says something true instead of disappearing or begging.
     private static func networkName(_ interface: CWInterface?) -> String {
-        guard let interface else { return "connected" }
-        if let ssid = interface.ssid(), !ssid.isEmpty { return ssid }
-        return linkDetail(interface).isEmpty ? "connected" : linkDetail(interface)
+        guard let interface, let ssid = interface.ssid(), !ssid.isEmpty else {
+            // Location refused or not yet granted: say the link rather than nothing.
+            return linkDetail(interface).isEmpty ? "connected" : linkDetail(interface)
+        }
+        return ssid
     }
 
     /// The second beat: how good the link is, once the name has had its moment.
@@ -101,8 +121,9 @@ final class ConnectionActivityManager: NSObject {
         if rate > 0 { parts.append("\(Int(rate.rounded())) Mbps") }
         let rssi = interface.rssiValue()
         if rssi != 0 { parts.append("\(rssi) dBm") }
-        // Nothing to slide to if the name *was* the link figures.
-        return parts.count > 1 ? parts.joined(separator: " · ") : ""
+        // One figure still earns a second beat; requiring both meant a link reporting a
+        // rate but no signal yet slid to nothing at all.
+        return parts.joined(separator: " · ")
     }
 
     /// Announced by `BluetoothBatteryManager` when a device appears or goes away.
