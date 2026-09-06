@@ -130,7 +130,7 @@ final class ConnectionActivityManager: NSObject {
         guard let interface else { return "" }
         var parts: [String] = []
         let rate = interface.transmitRate()
-        if rate > 0 { parts.append("\(Int(rate.rounded())) Mbps") }
+        if rate > 0 { parts.append(Units.bitRate(megabitsPerSecond: rate)) }
         let rssi = interface.rssiValue()
         if rssi != 0 { parts.append("\(rssi) dBm") }
         // Both figures if the radio has them by now -- after the settle delay it usually

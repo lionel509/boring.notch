@@ -441,8 +441,8 @@ struct NotchStatsStrip: View {
                   alarming: stats.cpuUsage >= 0.9)
         }
         if showMemory {
-            gauge("MEMORY", Self.gigabytes(stats.memoryUsedBytes),
-                  widest: "99.9 GB",
+            gauge("MEMORY", Units.bytes(stats.memoryUsedBytes),
+                  widest: Units.widestBytes,
                   tint: StatsPalette.severity(stats.memoryFraction),
                   trend: stats.memoryHistory,
                   alarming: stats.memoryFraction >= 0.9)
@@ -450,15 +450,15 @@ struct NotchStatsStrip: View {
         // Swap before disk: it is the one that moves minute to minute, and the one that
         // explains a machine that feels slow while CPU and memory both look fine.
         if stats.swapTotalBytes > 0 {
-            gauge("SWAP", Self.gigabytes(stats.swapUsedBytes),
-                  widest: "99.9 GB",
+            gauge("SWAP", Units.bytes(stats.swapUsedBytes),
+                  widest: Units.widestBytes,
                   tint: StatsPalette.severity(stats.swapFraction),
                   trend: stats.swapHistory,
                   alarming: stats.swapFraction >= 0.5)
         }
         if stats.diskTotalBytes > 0 {
-            gauge("DISK FREE", Self.gigabytes(UInt64(max(stats.diskFreeBytes, 0))),
-                  widest: "999.9 GB",
+            gauge("DISK FREE", Units.bytes(UInt64(max(stats.diskFreeBytes, 0))),
+                  widest: Units.widestBytes,
                   tint: StatsPalette.severity(stats.diskFraction),
                   trend: stats.diskHistory,
                   alarming: stats.diskFraction >= 0.9)
@@ -495,15 +495,18 @@ struct NotchStatsStrip: View {
                   alarming: stats.wifiRSSI <= -75)
         }
         if stats.wifiRate > 0 {
-            gauge("LINK", "\(Int(stats.wifiRate.rounded())) Mbps", widest: "9999 Mbps")
+            gauge("LINK", Units.bitRate(megabitsPerSecond: stats.wifiRate),
+                  widest: Units.widestBitRate)
         }
         if let ip = stats.localIP {
             gauge("IP", ip, widest: "255.255.255.255")
         }
         if showNetwork {
-            gauge("DOWN", Self.rate(stats.networkDownBytesPerSec), widest: "999 KB/s",
+            gauge("DOWN", Units.byteRate(stats.networkDownBytesPerSec),
+                  widest: Units.widestByteRate,
                   trend: stats.networkDownHistory)
-            gauge("UP", Self.rate(stats.networkUpBytesPerSec), widest: "999 KB/s",
+            gauge("UP", Units.byteRate(stats.networkUpBytesPerSec),
+                  widest: Units.widestByteRate,
                   trend: stats.networkUpHistory)
         }
     }
@@ -568,6 +571,7 @@ struct NotchStatsStrip: View {
 
     private static func compact(_ count: Int) -> String {
         switch count {
+        case 1_000_000_000...: String(format: "%.1fB", Double(count) / 1_000_000_000)
         case 1_000_000...: String(format: "%.1fM", Double(count) / 1_000_000)
         case 1_000...: String(format: "%.0fK", Double(count) / 1_000)
         default: "\(count)"
@@ -584,17 +588,5 @@ struct NotchStatsStrip: View {
             return "\(Int(seconds / 3_600))h \(Int((seconds.truncatingRemainder(dividingBy: 3_600)) / 60))m"
         }
         return "\(Int(seconds / 60))m"
-    }
-
-    private static func gigabytes(_ bytes: UInt64) -> String {
-        String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
-    }
-
-    private static func rate(_ bytesPerSecond: Double) -> String {
-        switch bytesPerSecond {
-        case 1_048_576...: String(format: "%.1f MB/s", bytesPerSecond / 1_048_576)
-        case 1_024...: String(format: "%.0f KB/s", bytesPerSecond / 1_024)
-        default: "0 KB/s"
-        }
     }
 }

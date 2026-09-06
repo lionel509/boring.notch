@@ -120,6 +120,7 @@
 		BEEF0004000000000000A004 /* SystemStatsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0003000000000000A003 /* SystemStatsManager.swift */; };
 		BEEF0012000000000000A012 /* BluetoothBatteryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0011000000000000A011 /* BluetoothBatteryManager.swift */; };
 		BEEF0014000000000000A014 /* ConnectionActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0013000000000000A013 /* ConnectionActivityManager.swift */; };
+		BEEF0016000000000000A016 /* Units.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEF0015000000000000A015 /* Units.swift */; };
 		9A0887322C7A693000C160EA /* TabButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0887312C7A693000C160EA /* TabButton.swift */; };
 		9A0887352C7AFF8E00C160EA /* TabSelectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0887342C7AFF8E00C160EA /* TabSelectionView.swift */; };
 		9A987A0D2C73CA66005CA465 /* ShelfView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A987A032C73CA66005CA465 /* ShelfView.swift */; };
@@ -300,6 +301,7 @@
 		BEEF0003000000000000A003 /* SystemStatsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemStatsManager.swift; sourceTree = "<group>"; };
 		BEEF0011000000000000A011 /* BluetoothBatteryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothBatteryManager.swift; sourceTree = "<group>"; };
 		BEEF0013000000000000A013 /* ConnectionActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionActivityManager.swift; sourceTree = "<group>"; };
+		BEEF0015000000000000A015 /* Units.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Units.swift; sourceTree = "<group>"; };
 		9A0887312C7A693000C160EA /* TabButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabButton.swift; sourceTree = "<group>"; };
 		9A0887342C7AFF8E00C160EA /* TabSelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabSelectionView.swift; sourceTree = "<group>"; };
 		9A987A032C73CA66005CA465 /* ShelfView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ShelfView.swift; sourceTree = "<group>"; };
@@ -715,6 +717,7 @@
 				B1FEB4982C7686630066EBBC /* PanGesture.swift */,
 				14FC6E4F2C7DED5600C7BEA5 /* DataTypes+Extensions.swift */,
 				B1C448952C9712C4001F0858 /* ActionBar.swift */,
+				BEEF0015000000000000A015 /* Units.swift */,
 			);
 			path = extensions;
 			sourceTree = "<group>";
@@ -969,6 +972,7 @@
 				BEEF0004000000000000A004 /* SystemStatsManager.swift in Sources */,
 				BEEF0012000000000000A012 /* BluetoothBatteryManager.swift in Sources */,
 				BEEF0014000000000000A014 /* ConnectionActivityManager.swift in Sources */,
+				BEEF0016000000000000A016 /* Units.swift in Sources */,
 				1163988D2DF5CAB40052E6AF /* EventModel.swift in Sources */,
 				14D570B92C5E98A20011E668 /* drop.swift in Sources */,
 				11EFCD702E8E92D600D0B974 /* ShelfItemViewModel.swift in Sources */,
