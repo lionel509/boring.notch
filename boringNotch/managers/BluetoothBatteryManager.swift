@@ -28,6 +28,12 @@
 import Combine
 import CoreBluetooth
 import Foundation
+import OSLog
+
+/// Survives Release, unlike `debugLog`. OSLog redacts interpolated values as `<private>`
+/// by default, so device names never reach the system log -- only the counts and states
+/// needed to tell "no devices" apart from "never asked" apart from "asked and refused".
+private let logger = Logger(subsystem: "theboringteam.boringnotch", category: "BluetoothBattery")
 
 @MainActor
 final class BluetoothBatteryManager: NSObject, ObservableObject {
@@ -73,16 +79,20 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
 
     func start() {
         subscribers += 1
-        guard subscribers == 1 else { return }
 
         // Created lazily: constructing a CBCentralManager is what triggers the Bluetooth
         // permission prompt, and asking on launch for a page the user may never open is
         // the kind of thing that gets an app denied by reflex.
         if central == nil {
+            logger.info("creating central manager")
             central = CBCentralManager(delegate: self, queue: nil)
         } else {
+            // Refresh on *every* open, not only the first subscriber's. SwiftUI pairs
+            // onAppear/onDisappear more often than the notch is actually opened, and the
+            // first version only ever looked once.
             refresh()
         }
+        guard subscribers == 1 else { return }
 
         let timer = Timer(timeInterval: Self.refreshInterval, repeats: true) { _ in
             Task { @MainActor [weak self] in self?.refresh() }
@@ -98,20 +108,25 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         refreshTimer?.invalidate()
         refreshTimer = nil
 
-        // Drop anything still mid-read, or a connection outlives the page that wanted it.
-        for peripheral in reading.values {
-            central?.cancelPeripheralConnection(peripheral)
-        }
-        reading.removeAll()
+        // Deliberately *not* cancelling reads that are already in flight. A GATT read takes
+        // a few hundred milliseconds and each one disconnects itself in `finish`; killing
+        // them here meant a notch opened and closed quickly never completed a single read,
+        // which is exactly how this page came up empty with two devices connected.
     }
 
     private func refresh() {
-        guard let central, central.state == .poweredOn else { return }
+        guard let central else { return }
+        guard central.state == .poweredOn else {
+            logger.info("refresh skipped, central state \(central.state.rawValue, privacy: .public)")
+            return
+        }
 
         // Only devices the *system* already has connected, and only those advertising the
         // battery service. This is a lookup, not a scan: no discovery, no radio sweep, and
         // nothing that could interfere with an audio link.
-        for peripheral in central.retrieveConnectedPeripherals(withServices: [Self.batteryService]) {
+        let connected = central.retrieveConnectedPeripherals(withServices: [Self.batteryService])
+        logger.info("retrieveConnectedPeripherals returned \(connected.count, privacy: .public)")
+        for peripheral in connected {
             guard reading[peripheral.identifier] == nil else { continue }
             reading[peripheral.identifier] = peripheral
             peripheral.delegate = self
@@ -129,6 +144,7 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         reading.removeValue(forKey: peripheral.identifier)
 
         let next = collected.values.sorted { $0.name < $1.name }
+        logger.info("read finished, percent \(percent ?? -1, privacy: .public), devices now \(next.count, privacy: .public)")
         if next != devices { devices = next }
     }
 }
@@ -139,6 +155,7 @@ extension BluetoothBatteryManager: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ manager: CBCentralManager) {
         MainActor.assumeIsolated {
             isAvailable = manager.state == .poweredOn
+            logger.info("central state \(manager.state.rawValue, privacy: .public)")
             guard manager.state == .poweredOn else {
                 // Powered off, unauthorised or unsupported. Forget what we had rather than
                 // show a number that has stopped being true.
@@ -158,7 +175,10 @@ extension BluetoothBatteryManager: CBCentralManagerDelegate {
     nonisolated func centralManager(
         _ manager: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?
     ) {
-        MainActor.assumeIsolated { finish(peripheral, percent: nil) }
+        MainActor.assumeIsolated {
+            logger.error("connect failed: \(error?.localizedDescription ?? "unknown", privacy: .public)")
+            finish(peripheral, percent: nil)
+        }
     }
 
     nonisolated func centralManager(

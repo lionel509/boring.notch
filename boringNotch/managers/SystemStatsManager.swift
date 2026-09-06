@@ -34,6 +34,21 @@ final class SystemStatsManager: ObservableObject {
     @Published private(set) var networkDownBytesPerSec: Double = 0
     @Published private(set) var networkUpBytesPerSec: Double = 0
 
+    /// Swap in use. The number that explains a machine that feels slow while CPU and memory
+    /// both look fine -- memory pressure shows up here before it shows up anywhere else.
+    @Published private(set) var swapUsedBytes: UInt64 = 0
+    @Published private(set) var swapTotalBytes: UInt64 = 0
+
+    /// Boot volume. Sampled every tenth tick: it is a filesystem call rather than two kernel
+    /// counters, and free space does not move at 1 Hz.
+    @Published private(set) var diskFreeBytes: Int64 = 0
+    @Published private(set) var diskTotalBytes: Int64 = 0
+
+    /// Free to read, and the honest answer to "why are the fans on".
+    @Published private(set) var thermalState: ProcessInfo.ThermalState = .nominal
+
+    private var diskTickCounter = 0
+
     let memoryTotalBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
 
     /// Recent history for the sparklines, oldest first, each value already normalised to
@@ -103,7 +118,49 @@ final class SystemStatsManager: ObservableObject {
         sampleCPU()
         sampleMemory()
         sampleNetwork()
+        sampleSwap()
+        sampleThermal()
+        if diskTickCounter % 10 == 0 { sampleDisk() }
+        diskTickCounter += 1
         recordHistory()
+    }
+
+    /// `vm.swapusage` via sysctl -- one call, a fixed-size struct, no process list.
+    private func sampleSwap() {
+        var usage = xsw_usage()
+        var size = MemoryLayout<xsw_usage>.size
+        guard sysctlbyname("vm.swapusage", &usage, &size, nil, 0) == 0 else { return }
+        if usage.xsu_used != swapUsedBytes { swapUsedBytes = usage.xsu_used }
+        if usage.xsu_total != swapTotalBytes { swapTotalBytes = usage.xsu_total }
+    }
+
+    private func sampleThermal() {
+        let state = ProcessInfo.processInfo.thermalState
+        if state != thermalState { thermalState = state }
+    }
+
+    private func sampleDisk() {
+        let url = URL(fileURLWithPath: "/")
+        guard let values = try? url.resourceValues(forKeys: [
+            .volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey
+        ]) else { return }
+        if let free = values.volumeAvailableCapacityForImportantUsage, free != diskFreeBytes {
+            diskFreeBytes = free
+        }
+        if let total = values.volumeTotalCapacity, Int64(total) != diskTotalBytes {
+            diskTotalBytes = Int64(total)
+        }
+    }
+
+    var swapFraction: Double {
+        guard swapTotalBytes > 0 else { return 0 }
+        return Double(swapUsedBytes) / Double(swapTotalBytes)
+    }
+
+    /// Fraction *used*, so it runs the same direction as every other severity on the row.
+    var diskFraction: Double {
+        guard diskTotalBytes > 0 else { return 0 }
+        return 1 - Double(diskFreeBytes) / Double(diskTotalBytes)
     }
 
     private func recordHistory() {

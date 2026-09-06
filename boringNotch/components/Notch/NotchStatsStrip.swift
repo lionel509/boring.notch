@@ -370,6 +370,38 @@ struct NotchStatsStrip: View {
                   trend: stats.memoryHistory,
                   alarming: stats.memoryFraction >= 0.9)
         }
+        // Swap before disk: it is the one that moves minute to minute, and the one that
+        // explains a machine that feels slow while CPU and memory both look fine.
+        if stats.swapTotalBytes > 0 {
+            gauge("SWAP", Self.gigabytes(stats.swapUsedBytes),
+                  widest: "99.9 GB",
+                  tint: StatsPalette.severity(stats.swapFraction),
+                  alarming: stats.swapFraction >= 0.5)
+        }
+        if stats.diskTotalBytes > 0 {
+            gauge("DISK FREE", Self.gigabytes(UInt64(max(stats.diskFreeBytes, 0))),
+                  widest: "999.9 GB",
+                  tint: StatsPalette.severity(stats.diskFraction),
+                  alarming: stats.diskFraction >= 0.9)
+        }
+        // Only when it has something to say. A cell that permanently reads OK is a cell
+        // spent on nothing.
+        if stats.thermalState != .nominal {
+            gauge("THERMAL", Self.thermalLabel(stats.thermalState),
+                  widest: "CRITICAL",
+                  tint: StatsPalette.severity(stats.thermalState == .critical ? 1 : 0.8),
+                  alarming: stats.thermalState == .critical)
+        }
+    }
+
+    private static func thermalLabel(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal: "OK"
+        case .fair: "FAIR"
+        case .serious: "SERIOUS"
+        case .critical: "CRITICAL"
+        @unknown default: "—"
+        }
     }
 
     @ViewBuilder
