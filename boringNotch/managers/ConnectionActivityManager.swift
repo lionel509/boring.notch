@@ -25,6 +25,10 @@ final class ConnectionActivityManager: NSObject {
     private var lastSSID: String?
     private var wasOnWiFi: Bool?
 
+    /// The settle timer. Cancelled and restarted by every event, so a burst of them -- which
+    /// is what changing network looks like from here -- produces exactly one announcement.
+    private var pending: Task<Void, Never>?
+
     private override init() { super.init() }
 
     func start() {
@@ -58,47 +62,51 @@ final class ConnectionActivityManager: NSObject {
         logger.notice("watching wifi, authorised \(self.location.authorizationStatus.rawValue, privacy: .public)")
     }
 
+    /// Every link and SSID event lands here, and none of them announce anything directly.
+    ///
+    /// Switching networks is not one event, it is several: the radio drops the old access
+    /// point, sits unassociated for a moment, then joins the new one. Announcing each event
+    /// as it arrived produced "Wi-Fi lost", then the new name, then the link -- three
+    /// activities for one thing happening. And reading the radio at the instant of an event
+    /// reads it mid-association, when `ssid` is nil and `transmitRate` is still zero.
+    ///
+    /// So every event just resets a timer. Whatever the radio settles into after the last
+    /// one is what gets announced, once.
     fileprivate func wifiChanged() {
+        pending?.cancel()
+        pending = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1600))
+            guard !Task.isCancelled else { return }
+            ConnectionActivityManager.shared.announceSettled()
+        }
+    }
+
+    private func announceSettled() {
         let interface = CWWiFiClient.shared().interface()
         let ssid = interface?.ssid()
         let associated = ssid != nil || (interface?.rssiValue() ?? 0) != 0
 
-        defer { wasOnWiFi = associated; lastSSID = ssid }
-        guard wasOnWiFi != nil else { return }
+        defer { wasOnWiFi = associated; lastSSID = ssid ?? lastSSID }
+        guard let previously = wasOnWiFi else { return }
 
-        // Something worth saying: joined, left, or moved to a different network.
-        let joined = associated && wasOnWiFi != true
-        let left = !associated && wasOnWiFi == true
-        let switched = associated && wasOnWiFi == true && ssid != lastSSID && ssid != nil
+        let joined = associated && !previously
+        let left = !associated && previously
+        let switched = associated && previously && ssid != nil && ssid != lastSSID
         guard joined || left || switched else { return }
 
-        logger.notice("wifi \(associated ? "up" : "down", privacy: .public)")
-        // The left already says what happened. Repeating "disconnected" on the right spent
-        // the whole slot saying it twice and left no room for the network's name -- which is
-        // the only thing the right side is there for.
+        logger.notice("wifi settled: \(associated ? "on" : "off", privacy: .public)")
+
         guard associated else {
             BoringViewCoordinator.shared.toggleSneakPeek(
                 status: true, type: .wifi, duration: 4, value: 0,
                 icon: "wifi.slash", detail: lastSSID ?? "no network", detailSecondary: "")
             return
         }
-        // A link-change event fires at the instant the state flips, when `transmitRate` and
-        // `rssiValue` are still zero and `ssid` is usually still nil -- which is why the name
-        // never appeared and the second beat slid to nothing. Let the radio finish
-        // associating, then read it.
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(900))
-            Self.announceWiFi()
-        }
-    }
-
-    private static func announceWiFi() {
-        let interface = CWWiFiClient.shared().interface()
         BoringViewCoordinator.shared.toggleSneakPeek(
             status: true, type: .wifi, duration: 4, value: 1,
             icon: "wifi",
-            detail: networkName(interface),
-            detailSecondary: linkDetail(interface))
+            detail: Self.networkName(interface),
+            detailSecondary: Self.linkDetail(interface))
     }
 
     /// The network's name, when macOS will give it.
@@ -121,8 +129,8 @@ final class ConnectionActivityManager: NSObject {
         if rate > 0 { parts.append("\(Int(rate.rounded())) Mbps") }
         let rssi = interface.rssiValue()
         if rssi != 0 { parts.append("\(rssi) dBm") }
-        // One figure still earns a second beat; requiring both meant a link reporting a
-        // rate but no signal yet slid to nothing at all.
+        // Both figures if the radio has them by now -- after the settle delay it usually
+        // does, and "-61 dBm" alone was a thin thing to have waited for.
         return parts.joined(separator: " · ")
     }
 
