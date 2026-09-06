@@ -174,15 +174,7 @@ struct NotchStatsStrip: View {
             switch currentPage {
             // One page, not two. The totals and the split answer the same question, and
             // separating them meant waiting a whole flip to find out who spent it.
-            case .usage:
-                row {
-                    caption("TOKENS USED")
-                    usageCells
-                    if usage.byUpstream(for: .week).count > 1 {
-                        caption("BY PROVIDER · 7 DAYS")
-                        providerCells
-                    }
-                }
+            case .usage: row { caption("TOKENS USED"); usageCells }
             case .limits: row { caption("PLAN LIMITS"); limitCells }
             case .power: row { caption("POWER"); powerCells }
             case .system: row { caption("SYSTEM"); systemCells }
@@ -288,17 +280,37 @@ struct NotchStatsStrip: View {
     @ViewBuilder
     private var usageCells: some View {
         if usage.isAvailable {
+            let windows = Self.distinctWindows(usage)
+            let providers = usage.byUpstream(for: .week)
+                // A provider at zero spends a full cell to say nothing.
+                .filter { $0.value.billedTokens > 0 }
+                .sorted { $0.value.billedTokens > $1.value.billedTokens }
+            let reserve = Self.tokenWidth(
+                across: windows.map { usage.totals(for: $0).billedTokens }
+                    + [usage.totals(for: .all).cachedTokens]
+                    + providers.map { $0.value.billedTokens })
+
             // Billed tokens, not the total. Cache reads outweigh real work by two orders of
             // magnitude on a normal day, so folding them in would read as enormous usage
             // every single day and mean nothing; cache gets its own cell.
-            ForEach(UsageWindow.allCases, id: \.self) { window in
+            ForEach(windows, id: \.self) { window in
                 gauge(window.label, Self.compact(usage.totals(for: window).billedTokens),
-                      widest: "999.9M")
+                      widest: reserve)
             }
-            gauge("CACHED", Self.compact(usage.totals(for: .all).cachedTokens), widest: "999.9M")
+            gauge("CACHED", Self.compact(usage.totals(for: .all).cachedTokens), widest: reserve)
             let spend = usage.totals(for: .all).cost
             if spend > 0 {
                 gauge("SPENT", String(format: "$%.2f", spend), widest: "$99.99")
+            }
+            if !providers.isEmpty {
+                // A rule rather than a second caption. "ANTHROPIC" next to "ALL TIME" needs
+                // separating, but a caption costs its own text width on a row that has none
+                // to spare -- and a provider's name already says what it is.
+                Divider().frame(height: 10)
+                ForEach(providers, id: \.key) { entry in
+                    gauge(entry.key.uppercased(), Self.compact(entry.value.billedTokens),
+                          widest: reserve)
+                }
             }
         } else if usage.needsAuthorization {
             // The sandbox, not a missing file. Settings has the button that fixes it.
@@ -308,14 +320,29 @@ struct NotchStatsStrip: View {
         }
     }
 
-    /// Named providers, so a week that spans several is not buried in one figure.
-    @ViewBuilder
-    private var providerCells: some View {
-        let active = usage.byUpstream(for: .week)
-            .sorted { $0.value.billedTokens > $1.value.billedTokens }
-        ForEach(active, id: \.key) { entry in
-            gauge(entry.key.uppercased(), Self.compact(entry.value.billedTokens), widest: "999.9M")
-        }
+    /// Windows that carry distinct figures.
+    ///
+    /// `UsageWindow.allCases` is four cells, and early in a month TODAY, WEEK, MONTH and
+    /// ALL TIME routinely carry two distinct numbers between them. Printing a figure twice
+    /// under two labels is worse than not printing it: it reads as a coincidence the user
+    /// has to stop and check.
+    private static func distinctWindows(_ usage: RouterUsageManager) -> [UsageWindow] {
+        var seen = Set<Int>()
+        return UsageWindow.allCases.filter { seen.insert(usage.totals(for: $0).billedTokens).inserted }
+    }
+
+    /// The width every token cell reserves, sized to the largest figure *actually on this
+    /// row* rather than to the largest one imaginable.
+    ///
+    /// This is what pushed the merged page past the edge. `widest:` exists so a cell does not
+    /// shove its neighbours as its value grows, but hard-coding `"999.9M"` reserved room for
+    /// a hundred million tokens in every cell -- about a character and a half of dead space,
+    /// nine times over, on a row whose biggest number was 31.5M.
+    private static func tokenWidth(across values: [Int]) -> String {
+        let template = compact(values.max() ?? 0)
+        // Same shape, every digit at its widest, so the reservation still cannot be
+        // outgrown by a value of the same magnitude.
+        return String(template.map { $0.isNumber ? "9" : $0 })
     }
 
     /// The subscription's own meters. These are quota, not money, which is why they cannot

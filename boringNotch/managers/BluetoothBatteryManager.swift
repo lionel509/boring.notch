@@ -33,6 +33,10 @@ import OSLog
 /// Survives Release, unlike `debugLog`. OSLog redacts interpolated values as `<private>`
 /// by default, so device names never reach the system log -- only the counts and states
 /// needed to tell "no devices" apart from "never asked" apart from "asked and refused".
+///
+/// `.notice`, not `.info`: info-level messages are kept in a memory ring and never written
+/// to the log store, so `log show` finds nothing afterwards and the whole point of having
+/// diagnostics in a Release build is lost.
 private let logger = Logger(subsystem: "theboringteam.boringnotch", category: "BluetoothBattery")
 
 @MainActor
@@ -90,7 +94,7 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         // permission prompt, and asking on launch for a page the user may never open is
         // the kind of thing that gets an app denied by reflex.
         if central == nil {
-            logger.info("creating central manager")
+            logger.notice("creating central manager")
             central = CBCentralManager(delegate: self, queue: nil)
         } else {
             // Refresh on *every* open, not only the first subscriber's. SwiftUI pairs
@@ -123,7 +127,7 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
     private func refresh() {
         guard let central else { return }
         guard central.state == .poweredOn else {
-            logger.info("refresh skipped, central state \(central.state.rawValue, privacy: .public)")
+            logger.notice("refresh skipped, central state \(central.state.rawValue, privacy: .public)")
             return
         }
 
@@ -131,7 +135,7 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         // battery service. This is a lookup, not a scan: no discovery, no radio sweep, and
         // nothing that could interfere with an audio link.
         let connected = central.retrieveConnectedPeripherals(withServices: [Self.batteryService])
-        logger.info("retrieveConnectedPeripherals returned \(connected.count, privacy: .public)")
+        logger.notice("retrieveConnectedPeripherals returned \(connected.count, privacy: .public)")
         for peripheral in connected {
             guard reading[peripheral.identifier] == nil else { continue }
             reading[peripheral.identifier] = peripheral
@@ -153,7 +157,7 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         reading.removeValue(forKey: peripheral.identifier)
 
         let next = collected.values.sorted { $0.name < $1.name }
-        logger.info("read finished, percent \(percent ?? -1, privacy: .public), devices now \(next.count, privacy: .public)")
+        logger.notice("read finished, percent \(percent ?? -1, privacy: .public), devices now \(next.count, privacy: .public)")
 
         // Announce a device the notch has not seen before -- but never on the very first
         // read of a session, or opening the notch would fire one activity per device that
@@ -175,7 +179,7 @@ extension BluetoothBatteryManager: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ manager: CBCentralManager) {
         MainActor.assumeIsolated {
             isAvailable = manager.state == .poweredOn
-            logger.info("central state \(manager.state.rawValue, privacy: .public)")
+            logger.notice("central state \(manager.state.rawValue, privacy: .public)")
             guard manager.state == .poweredOn else {
                 // Powered off, unauthorised or unsupported. Forget what we had rather than
                 // show a number that has stopped being true.

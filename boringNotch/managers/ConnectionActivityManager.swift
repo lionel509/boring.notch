@@ -44,7 +44,7 @@ final class ConnectionActivityManager {
         guard let previously = wasOnWiFi else { return }
         guard onWiFi != previously else { return }
 
-        logger.info("wifi \(onWiFi ? "up" : "down", privacy: .public)")
+        logger.notice("wifi \(onWiFi ? "up" : "down", privacy: .public)")
         BoringViewCoordinator.shared.toggleSneakPeek(
             status: true, type: .wifi, duration: 2.5,
             icon: onWiFi ? "wifi" : "wifi.slash",
@@ -79,7 +79,7 @@ final class ConnectionActivityManager {
     /// the user may never open.
     func announceBluetooth(name: String, percent: Int?) {
         let detail = percent.map { "\(name) · \($0)%" } ?? name
-        logger.info("bluetooth device appeared")
+        logger.notice("bluetooth device appeared")
         BoringViewCoordinator.shared.toggleSneakPeek(
             status: true, type: .bluetooth, duration: 2.5,
             icon: "dot.radiowaves.right", detail: detail)
