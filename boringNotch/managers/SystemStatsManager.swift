@@ -10,6 +10,7 @@ import Darwin
 import Defaults
 import CoreWLAN
 import Foundation
+import Network
 
 /// Samples aggregate system load, cheaply, and only while something is watching.
 ///
@@ -69,6 +70,13 @@ final class SystemStatsManager: ObservableObject {
     @Published private(set) var wifiRate: Double = 0
     @Published private(set) var localIP: String?
 
+    /// Which interface actually carries traffic off this machine, resolved to a name a human
+    /// recognises: `DIRECT`, `NORDVPN`, `TAILSCALE`. The strip already shows the LAN address,
+    /// but that stays 192.168.x whether or not a VPN has taken the default route — so on its
+    /// own it cannot answer "where is this actually going", which is the question worth
+    /// asking when two tunnels are fighting over the route.
+    @Published private(set) var egressLabel: String?
+
     let memoryTotalBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
 
     /// Recent history for the sparklines, oldest first, each value already normalised to
@@ -96,6 +104,16 @@ final class SystemStatsManager: ObservableObject {
     private var networkPeak: Double = 1
 
     private var timer: Timer?
+
+    /// Primary egress interface (`en0`, `utun11`…), pushed by the path monitor below.
+    private var egressInterface: String?
+    /// IPv4 address of each tunnel interface, refreshed by the `getifaddrs` walk that the
+    /// LAN address already required.
+    private var tunnelAddresses: [String: String] = [:]
+    /// Push-based, so it costs nothing per sample: it fires only when the route actually
+    /// changes, which is far rarer than 1 Hz. Deliberately never cancelled — a cancelled
+    /// `NWPathMonitor` cannot be restarted, and an idle one does no work.
+    private var pathMonitor: NWPathMonitor?
     private var watchers = 0
     private var previousCPUTicks: (busy: UInt64, total: UInt64)?
     private var previousNetwork: (received: UInt64, sent: UInt64, at: Date)?
@@ -108,6 +126,7 @@ final class SystemStatsManager: ObservableObject {
     /// wants figures. Cheap to call repeatedly.
     func start() {
         watchers += 1
+        startPathMonitorIfNeeded()
         guard timer == nil else { return }
 
         sample()
@@ -204,20 +223,79 @@ final class SystemStatsManager: ObservableObject {
         guard getifaddrs(&head) == 0 else { return }
         defer { freeifaddrs(head) }
         var found: String?
+        // Tunnel addresses are collected in the same walk the LAN address already needed,
+        // so naming the active VPN costs no extra syscall — only the comparison below.
+        var tunnels: [String: String] = [:]
         var pointer = head
         while let current = pointer {
             defer { pointer = current.pointee.ifa_next }
             guard let address = current.pointee.ifa_addr,
-                  address.pointee.sa_family == UInt8(AF_INET),
-                  String(cString: current.pointee.ifa_name) == "en0"
+                  address.pointee.sa_family == UInt8(AF_INET)
             else { continue }
+            let name = String(cString: current.pointee.ifa_name)
+            let isTunnel = Self.isTunnelInterface(name)
+            guard name == "en0" || isTunnel else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             guard getnameinfo(address, socklen_t(address.pointee.sa_len),
                               &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0
             else { continue }
-            found = String(cString: host)
+            let text = String(cString: host)
+            if isTunnel { tunnels[name] = text } else { found = text }
         }
         if found != localIP { localIP = found }
+        if tunnels != tunnelAddresses {
+            tunnelAddresses = tunnels
+            refreshEgressLabel()
+        }
+    }
+
+    private func startPathMonitorIfNeeded() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            // `availableInterfaces` is ordered by preference, so the first entry is the one
+            // holding the default route. Reading the route table directly would mean a
+            // NET_RT_DUMP sysctl on every tick; this pushes instead, and only on a change.
+            let name = path.availableInterfaces.first?.name
+            Task { @MainActor in
+                guard let self, self.egressInterface != name else { return }
+                self.egressInterface = name
+                self.refreshEgressLabel()
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "boringnotch.pathmonitor", qos: .utility))
+        pathMonitor = monitor
+    }
+
+    private static func isTunnelInterface(_ name: String) -> Bool {
+        name.hasPrefix("utun") || name.hasPrefix("ipsec") || name.hasPrefix("ppp")
+    }
+
+    private func refreshEgressLabel() {
+        guard let interface = egressInterface else {
+            if egressLabel != nil { egressLabel = nil }
+            return
+        }
+        let label: String
+        if !Self.isTunnelInterface(interface) {
+            label = "DIRECT"
+        } else {
+            label = tunnelAddresses[interface].map(Self.vpnName(forTunnelAddress:)) ?? "VPN"
+        }
+        if label != egressLabel { egressLabel = label }
+    }
+
+    /// A `utun` number says nothing on its own — the kernel hands them out in order, so the
+    /// same VPN is `utun4` one day and `utun11` the next. What actually identifies the tunnel
+    /// is the address range it allocates from, which is stable per vendor: Tailscale uses the
+    /// CGNAT block 100.64.0.0/10, NordVPN's NordLynx consistently hands out 10.5.x. Anything
+    /// else tunnelled is still worth flagging even when it cannot be named.
+    private static func vpnName(forTunnelAddress address: String) -> String {
+        let octets = address.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4 else { return "VPN" }
+        if octets[0] == 100, (64...127).contains(octets[1]) { return "TAILSCALE" }
+        if octets[0] == 10, octets[1] == 5 { return "NORDVPN" }
+        return "VPN"
     }
 
     private func sampleThermal() {

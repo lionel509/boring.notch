@@ -506,6 +506,14 @@ struct NotchStatsStrip: View {
         if let ip = stats.localIP {
             gauge("IP", ip, widest: "255.255.255.255")
         }
+        // The LAN address above is unchanged by a VPN taking the default route, so it cannot
+        // tell you which way traffic is leaving. Tinted when tunnelled, so the answer is a
+        // glance rather than a reading.
+        if let egress = stats.egressLabel {
+            gauge("VIA", egress,
+                  widest: "TAILSCALE",
+                  tint: egress == "DIRECT" ? nil : StatsPalette.good)
+        }
         if showNetwork {
             gauge("DOWN", Units.byteRate(stats.networkDownBytesPerSec),
                   widest: Units.widestByteRate,
