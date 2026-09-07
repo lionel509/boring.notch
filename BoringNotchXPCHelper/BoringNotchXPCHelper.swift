@@ -71,16 +71,88 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
             let share = Double(after - before) * machToNanoseconds / elapsed
             if share > cores { cores = share; busiest = pid }
         }
+        let name = names[busiest].map { displayName(of: busiest, fallback: $0) }
         Logger(subsystem: "theboringteam.boringnotch", category: "SystemAlert").notice("""
             helper: \(second.count, privacy: .public) of \(pids.count, privacy: .public) \
             readable, top \(cores, format: .fixed(precision: 2), privacy: .public) cores = \
-            \(names[busiest] ?? "?", privacy: .public)
+            \(name ?? "?", privacy: .public)
             """)
         // Below half a core, nobody is to blame. A load spread across forty processes has no
         // culprit, and naming the largest of forty small ones is a confident wrong answer --
         // worse than saying nothing, because the figure beside it makes it look checked.
         guard cores >= 0.5 else { return nil }
-        return names[busiest]
+        return name
+    }
+
+    // MARK: - Naming the process
+
+    /// What to call the process the numbers point at.
+    ///
+    /// `p_comm` is the wrong answer twice over: it is the *executable's* name rather than the
+    /// app's, and the kernel caps it at `MAXCOMLEN` -- sixteen characters. Measured on this
+    /// machine, that is what made Safari say `com.apple.WebKit`, Visual Studio Code say
+    /// `Code Helper (Plu` and Obsidian say `Obsidian Helper `. A name cut off mid-word, for a
+    /// process nobody could act on even spelled out in full.
+    ///
+    /// The executable path answers both halves. Every app process runs out of a bundle, and the
+    /// *outermost* `.app` on its path is the thing you would quit -- Electron helpers nest their
+    /// own `.app` inside the parent's `Frameworks/`, so the first one on the path wins and the
+    /// last one is noise.
+    ///
+    /// Only ever called for the one pid that won, so a path lookup and a plist-free string walk
+    /// cost nothing beside the two passes over six hundred processes that chose it.
+    private static func displayName(of pid: pid_t, fallback: String) -> String {
+        guard let path = executablePath(of: pid) else { return fallback }
+        if let app = owningApp(in: path) { return app }
+
+        // An XPC service belongs to whoever asked for it, and Safari's tabs are the case that
+        // matters: `com.apple.WebKit.WebContent` runs out of WebKit.framework, so there is no
+        // `.app` anywhere on its path to find. Deliberately *only* for services -- a command
+        // line tool has no `.app` on its path either, and its responsible process is the
+        // terminal it was launched from, so widening this would turn `python 26.2 W` into
+        // `Terminal 26.2 W` and name the one thing that is certainly not at fault.
+        if path.contains(".xpc/"),
+           let owner = responsibleProcess(of: pid),
+           let ownerPath = executablePath(of: owner),
+           let app = owningApp(in: ownerPath) {
+            return app
+        }
+
+        // Not in a bundle at all: a CLI, a daemon, a bare helper binary. Its own filename is the
+        // best name it has, and unlike `p_comm` it is not cut at sixteen characters --
+        // `ContinuityCaptureAgent` rather than `ContinuityCaptur`.
+        return (path as NSString).lastPathComponent
+    }
+
+    private static func owningApp(in path: String) -> String? {
+        guard let bundle = (path as NSString).pathComponents.first(where: { $0.hasSuffix(".app") })
+        else { return nil }
+        return String(bundle.dropLast(".app".count))
+    }
+
+    private static func executablePath(of pid: pid_t) -> String? {
+        // PROC_PIDPATHINFO_MAXSIZE. Root-owned processes refuse, which is the same set that
+        // refuses `proc_pid_rusage`, so they were never going to win anything anyway.
+        var buffer = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// `responsibility_get_pid_responsible_for_pid` is what Activity Monitor groups by. It ships
+    /// in libsystem and appears in no public header, so it is reached by symbol rather than
+    /// declared; if it ever stops being there, the caller falls back on the path.
+    private static let responsibleForPid: (@convention(c) (pid_t) -> pid_t)? = {
+        let RTLD_DEFAULT = UnsafeMutableRawPointer(bitPattern: -2)
+        guard let symbol = dlsym(RTLD_DEFAULT, "responsibility_get_pid_responsible_for_pid")
+        else { return nil }
+        return unsafeBitCast(symbol, to: (@convention(c) (pid_t) -> pid_t).self)
+    }()
+
+    private static func responsibleProcess(of pid: pid_t) -> pid_t? {
+        guard let responsibleForPid else { return nil }
+        let owner = responsibleForPid(pid)
+        // A process is usually responsible for itself, which answers nothing.
+        return owner > 0 && owner != pid ? owner : nil
     }
 
     private static func processTable() -> [pid_t: String] {
@@ -155,7 +227,7 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
                 return
             }
             let gigabytes = Double(footprint) / 1_073_741_824
-            reply(String(format: "%@ %.1f GB", name, gigabytes))
+            reply(String(format: "%@ %.1f GB", Self.displayName(of: heaviest, fallback: name), gigabytes))
         }
     }
 
@@ -201,7 +273,7 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         // about 1.5 W across a hundred processes, so anything under this is the noise floor
         // and naming the largest grain of it would be a confident wrong answer.
         guard watts >= 0.5, let name = names[hungriest] else { return nil }
-        return String(format: "%@ %.1f W", name, watts)
+        return String(format: "%@ %.1f W", displayName(of: hungriest, fallback: name), watts)
     }
 
     /// Nanojoules burned per process, for the ones that will say. `&+` because these are two
