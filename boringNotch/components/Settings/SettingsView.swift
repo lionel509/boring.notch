@@ -1892,8 +1892,21 @@ struct StatsSettings: View {
                 LabeledContent("Status") {
                     if usage.isAvailable {
                         let totals = usage.totals(for: .today)
-                        Text("\(totals.requests) requests today · \(totals.billedTokens) billed tokens")
-                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(totals.requests) requests today · \(totals.billedTokens) billed tokens")
+                                .foregroundStyle(.secondary)
+                            // A grant on requests.log itself reads perfectly and still cannot
+                            // see rate-limits.json beside it, so the plan meters stay dark
+                            // while this row says everything is fine. That combination is
+                            // unreadable from the outside. The button that fixes it is six
+                            // points above, so the sentence belongs here.
+                            if usage.limits == nil {
+                                Label(
+                                    "Plan meters need the folder — choose it above, not requests.log",
+                                    systemImage: "exclamationmark.triangle")
+                                    .foregroundStyle(.orange)
+                            }
+                        }
                     } else if usage.needsAuthorization {
                         Label("Not readable yet — choose the log above", systemImage: "lock.fill")
                             .foregroundStyle(.orange)

@@ -20,7 +20,13 @@ struct ClaudeUsagePanel: View {
     private enum Copy {
         static let grant = "Grant the proxy folder in Settings to read usage"
         static let reading = "Reading the proxy request log"
-        static let noLimits = "rate-limits.json not readable"
+        // Names the fix, not the file, for the same reason `grant` does two branches
+        // down: a filename in a readout looks like a bug report the user cannot act on.
+        // Length is a hard constraint here and not a style choice — `PanelRow` is one
+        // line with a tail truncation in a 150 pt column, so the old string rendered as
+        // "rate-limits.json not rea…" and said nothing at all. Same length as
+        // `noUpstreams`, which is known to fit.
+        static let noLimits = "Grant folder in Settings"
         static let noModels = "No requests in the recent window"
         static let noUpstreams = "Nothing routed this week"
     }
