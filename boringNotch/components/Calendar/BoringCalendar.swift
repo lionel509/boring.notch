@@ -323,7 +323,55 @@ struct EventListView: View {
     @Default(.showFullEventTitles) private var showFullEventTitles
 
 
+    /// What makes two rows the same occurrence: same title, same moment, same all-day-ness.
+    ///
+    /// A plain `String` key rather than `Hashable` conformances, because neither `EventModel`
+    /// nor `CalendarModel` is `Hashable` and `CalendarModel` carries an `NSColor` — the same
+    /// shape `ShelfItem.identityKey` already uses for deduplication.
+    static func duplicateKey(_ event: EventModel) -> String {
+        "\(event.title)|\(event.start.timeIntervalSince1970)|\(event.isAllDay)"
+    }
+
+    /// How many calendars carried an event, and in which colours.
+    struct Duplicates: Equatable {
+        let count: Int
+        /// Unique by calendar identity, then by colour. Two subscribed holiday calendars are
+        /// often both green, and a green/green bar reads as one colour and looks like a bug.
+        let colors: [Color]
+    }
+
+    /// Counts and colours for the surviving row of each group, keyed by its event id.
+    static func duplicates(in events: [EventModel]) -> [String: Duplicates] {
+        var groups: [String: [EventModel]] = [:]
+        var order: [String] = []
+        for event in filteredRaw(events: events) {
+            let key = duplicateKey(event)
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(event)
+        }
+        var result: [String: Duplicates] = [:]
+        for key in order {
+            guard let members = groups[key], let first = members.first else { continue }
+            var seenCalendars = Set<String>()
+            var colors: [Color] = []
+            for member in members where seenCalendars.insert(member.calendar.id).inserted {
+                let color = Color(member.calendar.color)
+                if !colors.contains(color) { colors.append(color) }
+            }
+            result[first.id] = Duplicates(count: members.count, colors: colors)
+        }
+        return result
+    }
+
+    /// The same occurrence subscribed through three calendars is one thing that is happening,
+    /// not three. Collapsed here rather than in the view so the emptiness check and the list
+    /// can never disagree about how many rows there are.
     static func filteredEvents(events: [EventModel]) -> [EventModel] {
+        var seen = Set<String>()
+        return filteredRaw(events: events).filter { seen.insert(duplicateKey($0)).inserted }
+    }
+
+    private static func filteredRaw(events: [EventModel]) -> [EventModel] {
         events.filter { event in
             if event.type.isReminder {
                 if case .reminder(let completed) = event.type {
@@ -337,6 +385,20 @@ struct EventListView: View {
             return true
         }
     }
+
+    /// Counts and colours for collapsed rows, computed once per render rather than per row.
+    private var duplicates: [String: Duplicates] {
+        Self.duplicates(in: events)
+    }
+
+    /// Falls back to the event's own colour when it was not collapsed, so an ordinary row is
+    /// rendered by exactly the same code path as a grouped one.
+    private func barColors(for event: EventModel) -> [Color] {
+        let colors = duplicates[event.id]?.colors ?? []
+        return colors.isEmpty ? [Color(event.calendar.color)] : colors
+    }
+
+    private static func countBadge(_ count: Int) -> String { "×\(count)" }
 
     private var filteredEvents: [EventModel] {
         Self.filteredEvents(events: events)
@@ -449,17 +511,35 @@ struct EventListView: View {
         } else {
             return AnyView(
                 HStack(alignment: .top, spacing: 4) {
-                    Rectangle()
-                        .fill(Color(event.calendar.color))
-                        .frame(width: 3)
-                        .cornerRadius(1.5)
+                    // One segment per calendar the event came from, in the same 3pt frame a
+                    // single bar occupied — so a collapsed row still shows every colour that
+                    // contributed to it.
+                    VStack(spacing: 0) {
+                        ForEach(Array(barColors(for: event).enumerated()), id: \.offset) { _, color in
+                            Rectangle().fill(color)
+                        }
+                    }
+                    .frame(width: 3)
+                    .cornerRadius(1.5)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(event.title)
-                            .font(.callout)
-                            .fontWeight(.medium)
-                            .foregroundColor(.white)
-                            .lineLimit(showFullEventTitles ? nil : 2)
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(event.title)
+                                .font(.callout)
+                                .fontWeight(.medium)
+                                .foregroundColor(.white)
+                                .lineLimit(showFullEventTitles ? nil : 2)
+
+                            // Inline after the title, not a trailing column: the widget is only
+                            // 170-215pt wide and the time block already reserves 44 of it.
+                            if let extra = duplicates[event.id], extra.count > 1 {
+                                Text(Self.countBadge(extra.count))
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(Color(white: 0.55))
+                                    .fixedSize()
+                            }
+                        }
 
                         if let location = event.location, !location.isEmpty {
                             Text(location)
