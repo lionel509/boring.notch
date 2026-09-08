@@ -28,6 +28,7 @@
 import Combine
 import CoreBluetooth
 import Foundation
+import IOBluetooth
 import OSLog
 
 /// Survives Release, unlike `debugLog`. OSLog redacts interpolated values as `<private>`
@@ -76,8 +77,14 @@ func btTrace(_ line: String) {
 @MainActor
 final class BluetoothBatteryManager: NSObject, ObservableObject {
     struct Device: Identifiable, Equatable {
-        let id: UUID
+        /// A peripheral UUID for a Low Energy device, a hardware address for a classic one.
+        /// The two sources have no identifier in common -- CoreBluetooth deliberately hides
+        /// the MAC -- so this is a string rather than a `UUID`.
+        let id: String
         let name: String
+        /// For earbuds reporting a left and a right, the *lower* of the two: that is the one
+        /// that ends the call. A single figure is what the row has space for, and an average
+        /// would read 50% with one bud flat.
         let percent: Int
         /// Charge over the session, oldest first, as a 0...1 fraction. Polled once a minute,
         /// so this fills in slowly and honestly rather than being interpolated into a curve.
@@ -161,6 +168,48 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
     private var watchTimer: Timer?
     private static let watchInterval: TimeInterval = 5
 
+    // MARK: The other half of the roster -- classic Bluetooth
+    //
+    // CoreBluetooth cannot see a classic device at all. Measured on this machine with AirPods
+    // connected and playing: `retrieveConnectedPeripherals(withServices: [180F])` returns
+    // **zero**, because the headphones speak HFP/A2DP rather than GATT. So the page sat empty
+    // while a pair of headphones with 82% left sat on his head -- which is the whole of "the
+    // notch bluetooth is not working".
+    //
+    // The battery for those devices exists in exactly one reachable place: `system_profiler`,
+    // which reports `device_batteryLevelLeft` / `Right` / `Case`. The other two routes people
+    // recommend were both re-measured here and both return nothing at all -- `ioreg -k
+    // BatteryPercent` is empty, and `AppleDeviceManagementHIDEventService` contains only the
+    // internal keyboard. That settles the "AirPods half is unmeasured" caveat in the spec: the
+    // IOKit enrichment path does not work on this machine, and this is what replaces it.
+
+    /// Battery for classic devices, keyed by canonical hardware address.
+    private var classic: [String: Device] = [:]
+    /// Address -> name for the classic devices connected right now, from IOBluetooth.
+    private var classicConnected: [String: String] = [:]
+    private var announcedClassic: Set<String> = []
+    private var pendingAnnounceClassic: Set<String> = []
+    private var adoptedClassic = false
+
+    /// IOBluetooth answered with a paired device at least once, so it is a usable source.
+    ///
+    /// It is the cheap half of this: `pairedDevices()` plus `isConnected()` across the whole
+    /// roster measures **0.22 ms**, against 40 ms of CPU to spawn `system_profiler`. So
+    /// membership is watched in-process every five seconds and the expensive call is made only
+    /// when that membership changes, or while the panel is actually on screen.
+    ///
+    /// If it ever turns out to answer nothing -- it is reached through a sandbox, and this is
+    /// the one part of the design that cannot be proven from outside one -- the flag stays
+    /// false and the fallback below polls `system_profiler` slowly instead. The feature
+    /// degrades to "less prompt" rather than to "gone".
+    private var ioBluetoothWorks = false
+    private var readingClassic = false
+    private var lastClassicRead: Date = .distantPast
+    /// Floor between helper calls, so a burst of connect events is still one spawn.
+    private static let classicReadFloor: TimeInterval = 3
+    /// Cadence when IOBluetooth is unavailable and `system_profiler` is the only source.
+    private static let classicFallbackInterval: TimeInterval = 30
+
     private override init() { super.init() }
 
     /// Called once at launch. Safe to do here because Bluetooth permission has already been
@@ -181,6 +230,7 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
     /// reading -- this is a query against CoreBluetooth's own bookkeeping.
     private func poll() {
         guard let central, central.state == .poweredOn else { return }
+        pollClassic()
         let connected = central.retrieveConnectedPeripherals(withServices: [Self.batteryService])
         let ids = Set(connected.map(\.identifier))
         for peripheral in connected {
@@ -222,7 +272,7 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         let stale = Set(collected.keys).subtracting(ids)
         if !stale.isEmpty {
             for id in stale { collected.removeValue(forKey: id) }
-            devices = collected.values.sorted { $0.name < $1.name }
+            publish()
         }
 
         // Read now if anything is waiting to be announced, even with the notch shut: it is
@@ -276,6 +326,10 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
             return
         }
 
+        // The panel is open or the minute is up, so this is the moment the expensive half
+        // is worth paying for.
+        readClassicBattery()
+
         // Only devices the *system* already has connected, and only those advertising the
         // battery service. This is a lookup, not a scan: no discovery, no radio sweep, and
         // nothing that could interfere with an audio link.
@@ -298,7 +352,7 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
             history.append(Double(percent) / 100)
             if history.count > 60 { history.removeFirst(history.count - 60) }
             collected[peripheral.identifier] = Device(
-                id: peripheral.identifier, name: name, percent: percent, history: history,
+                id: peripheral.identifier.uuidString, name: name, percent: percent, history: history,
                 firstPercent: existing?.firstPercent ?? percent,
                 firstSeen: existing?.firstSeen ?? .now)
         }
@@ -306,9 +360,8 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         central?.cancelPeripheralConnection(peripheral)
         reading.removeValue(forKey: peripheral.identifier)
 
-        let next = collected.values.sorted { $0.name < $1.name }
-        logger.notice("read finished, percent \(percent ?? -1, privacy: .public), devices now \(next.count, privacy: .public)")
-        btTrace("read \(peripheral.name ?? "?") -> \(percent.map(String.init) ?? "nil"), devices now \(next.count)")
+        logger.notice("read finished, percent \(percent ?? -1, privacy: .public), devices now \(self.devices.count, privacy: .public)")
+        btTrace("read \(peripheral.name ?? "?") -> \(percent.map(String.init) ?? "nil")")
 
         if pendingAnnounce.remove(peripheral.identifier) != nil {
             ConnectionActivityManager.shared.announceBluetooth(
@@ -316,7 +369,173 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
                 percent: percent, connected: true)
         }
 
+        publish()
+    }
+
+    /// The published roster: everything CoreBluetooth read, plus everything `system_profiler`
+    /// reported, as one list.
+    ///
+    /// Deduplicated by name and not by identifier, because the two sources share no identifier
+    /// -- and a device that somehow appears in both is one device to the person reading the
+    /// row. The classic entry wins that tie: it is the one carrying a left/right split.
+    private func publish() {
+        var byName: [String: Device] = [:]
+        for device in collected.values { byName[device.name.lowercased()] = device }
+        for device in classic.values { byName[device.name.lowercased()] = device }
+        let next = byName.values.sorted { $0.name < $1.name }
         if next != devices { devices = next }
+    }
+}
+
+// MARK: - Classic Bluetooth
+
+extension BluetoothBatteryManager {
+    /// Who is connected over classic Bluetooth, cheaply.
+    ///
+    /// `pairedDevices()` and `isConnected()` are an in-process lookup against state the
+    /// Bluetooth stack already holds -- 0.22 ms for the whole roster, measured -- so this can
+    /// sit on the same five-second tick as the Low Energy watch without costing anything.
+    /// Nothing here spawns a process; that only happens when the answer changes.
+    private func pollClassic() {
+        let paired = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? []
+        if !paired.isEmpty { ioBluetoothWorks = true }
+
+        guard ioBluetoothWorks else {
+            // No cheap membership source to be had. Ask the tool itself, slowly, so the
+            // batteries still appear even though connect events will be up to half a minute
+            // late. Better a late activity than a permanently empty page.
+            if Date.now.timeIntervalSince(lastClassicRead) >= Self.classicFallbackInterval {
+                readClassicBattery(force: true)
+            }
+            return
+        }
+
+        var connected: [String: String] = [:]
+        for device in paired where device.isConnected() {
+            guard let address = device.addressString else { continue }
+            connected[Self.canonical(address)] = device.name ?? "Bluetooth device"
+        }
+
+        let ids = Set(connected.keys)
+        let changed = ids != Set(classicConnected.keys)
+        // Captured before the overwrite: a device that drops needs its name at exactly the
+        // moment it stops being listed, and it may never have had a battery read to keep one.
+        let previous = classicConnected
+        classicConnected = connected
+
+        if !adoptedClassic {
+            // First look of the session -- take what is already connected without announcing,
+            // or launching would announce the headphones already on his head.
+            adoptedClassic = true
+        } else if changed {
+            for id in ids.subtracting(announcedClassic) {
+                btTrace("classic connected: \(connected[id] ?? "?")")
+                // Announced once the charge is known, like the Low Energy path: the whole
+                // point of this activity is the number, and it arrives ~40 ms later.
+                pendingAnnounceClassic.insert(id)
+            }
+            for gone in announcedClassic.subtracting(ids) {
+                let name = classic[gone]?.name ?? previous[gone] ?? "Bluetooth device"
+                btTrace("classic disconnected: \(name)")
+                ConnectionActivityManager.shared.announceBluetooth(
+                    name: name, percent: nil, connected: false)
+            }
+        }
+        announcedClassic = ids
+
+        let stale = Set(classic.keys).subtracting(ids)
+        if !stale.isEmpty {
+            for id in stale { classic.removeValue(forKey: id) }
+            publish()
+        }
+
+        if changed || subscribers > 0 || !pendingAnnounceClassic.isEmpty {
+            readClassicBattery(force: changed || !pendingAnnounceClassic.isEmpty)
+        }
+    }
+
+    /// The expensive half: `system_profiler`, through the helper, because the sandbox cannot
+    /// spawn it. ~40 ms of CPU, so it is floored and never runs on the bare watch tick.
+    private func readClassicBattery(force: Bool = false) {
+        guard !readingClassic else { return }
+        guard force || Date.now.timeIntervalSince(lastClassicRead) >= Self.classicReadFloor
+        else { return }
+        readingClassic = true
+        lastClassicRead = .now
+        Task { @MainActor [weak self] in
+            let json = await XPCHelperClient.shared.bluetoothDevices()
+            self?.applyClassic(json)
+        }
+    }
+
+    private func applyClassic(_ json: String?) {
+        readingClassic = false
+        guard let json, let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let blocks = root["SPBluetoothDataType"] as? [[String: Any]]
+        else {
+            btTrace("classic read failed")
+            return
+        }
+
+        // `device_connected` is a list of single-entry dictionaries keyed by device name --
+        // and only connected devices carry a battery, which is exactly the right semantics.
+        var found: [String: Device] = [:]
+        for block in blocks {
+            guard let connected = block["device_connected"] as? [[String: Any]] else { continue }
+            for entry in connected {
+                for (name, raw) in entry {
+                    guard let properties = raw as? [String: Any],
+                          let address = properties["device_address"] as? String,
+                          let percent = Self.charge(properties) else { continue }
+                    let id = Self.canonical(address)
+                    let existing = classic[id]
+                    var history = existing?.history ?? []
+                    history.append(Double(percent) / 100)
+                    if history.count > 60 { history.removeFirst(history.count - 60) }
+                    found[id] = Device(
+                        id: id, name: name, percent: percent, history: history,
+                        firstPercent: existing?.firstPercent ?? percent,
+                        firstSeen: existing?.firstSeen ?? .now)
+                }
+            }
+        }
+        classic = found
+        btTrace("classic read -> \(found.count): \(found.values.map(\.name).joined(separator: ", "))")
+
+        // Every pending announcement resolves here, whether or not a charge turned up, so a
+        // device that reports no battery cannot leave one queued forever.
+        for id in pendingAnnounceClassic {
+            ConnectionActivityManager.shared.announceBluetooth(
+                name: found[id]?.name ?? classicConnected[id] ?? "Bluetooth device",
+                percent: found[id]?.percent, connected: true)
+        }
+        pendingAnnounceClassic.removeAll()
+
+        publish()
+    }
+
+    /// The lower of the two earbuds, or whatever single figure the device reports.
+    private static func charge(_ properties: [String: Any]) -> Int? {
+        let left = percent(properties["device_batteryLevelLeft"])
+        let right = percent(properties["device_batteryLevelRight"])
+        if let left, let right { return min(left, right) }
+        return left ?? right
+            ?? percent(properties["device_batteryLevelMain"])
+            ?? percent(properties["device_batteryLevel"])
+    }
+
+    /// `system_profiler` reports these as strings with a percent sign: `"82%"`.
+    private static func percent(_ raw: Any?) -> Int? {
+        guard let text = raw as? String, let value = Int(text.prefix { $0.isNumber })
+        else { return nil }
+        return min(max(value, 0), 100)
+    }
+
+    /// IOBluetooth writes `04-9d-05-88-3b-a2`, `system_profiler` writes `04:9D:05:88:3B:A2`.
+    /// The same device, and the only key the two sources have in common.
+    private static func canonical(_ address: String) -> String {
+        address.lowercased().filter(\.isHexDigit)
     }
 }
 
@@ -333,6 +552,31 @@ extension BluetoothBatteryManager: CBCentralManagerDelegate {
                 // show a number that has stopped being true.
                 collected.removeAll()
                 reading.removeAll()
+                classic.removeAll()
+                classicConnected.removeAll()
+
+                // And forget that we ever took stock, which is the half that was missing.
+                //
+                // This is the bug that announced "MX Master 3S disconnected" a moment after
+                // Bluetooth was switched back *on*, with nothing connected at all and the
+                // mouse not even in the room. `announced` survived the power-off and
+                // `adopted` stayed true, so the first poll after power-on diffed an empty
+                // connected list against a set still holding the devices from before the
+                // toggle -- and dutifully reported every one of them leaving. Worse, it fired
+                // on the *rising* edge: the radio coming back is the one moment a user is
+                // certain nothing has gone away.
+                //
+                // Turning the radio off is not a device walking away. Drop the bookkeeping
+                // with the readings, and let the first poll after power-on adopt whatever is
+                // there in silence, exactly as the first poll of a session does.
+                announced.removeAll()
+                announcedClassic.removeAll()
+                pendingAnnounce.removeAll()
+                pendingAnnounceClassic.removeAll()
+                selfCancelled.removeAll()
+                adopted = false
+                adoptedClassic = false
+
                 if !devices.isEmpty { devices = [] }
                 return
             }

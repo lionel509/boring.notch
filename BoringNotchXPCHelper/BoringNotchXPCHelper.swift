@@ -546,4 +546,25 @@ extension BoringNotchXPCHelper {
             reply(String(data: data, encoding: .utf8))
         }
     }
+
+    /// Battery for classic-Bluetooth devices, as `system_profiler`'s own JSON.
+    ///
+    /// Here rather than in the app for the same reason as `runTailscale`: spawning a process
+    /// is not something the sandbox permits. Measured at ~40 ms of CPU per call, which is why
+    /// the caller asks only when the set of connected devices changes or the panel is open,
+    /// and never on the five-second watch tick.
+    @objc func bluetoothDevices(with reply: @escaping (String?) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
+            task.arguments = ["-json", "SPBluetoothDataType"]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = FileHandle.nullDevice
+            do { try task.run() } catch { return reply(nil) }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            reply(String(data: data, encoding: .utf8))
+        }
+    }
 }

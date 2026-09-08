@@ -35,5 +35,13 @@ import Foundation
     /// Runs the Tailscale CLI, which a sandboxed app cannot. `subcommand` is matched against
     /// a whitelist, never passed through as argv.
     func runTailscale(_ subcommand: String, with reply: @escaping (String?) -> Void)
+    /// `system_profiler -json SPBluetoothDataType`, which a sandboxed app cannot spawn.
+    ///
+    /// The classic-Bluetooth battery levels live nowhere else that is reachable. Measured on
+    /// this machine with AirPods connected: CoreBluetooth's `retrieveConnectedPeripherals`
+    /// returns zero, `ioreg -k BatteryPercent` is empty, and the whole
+    /// `AppleDeviceManagementHIDEventService` class contains only the internal keyboard --
+    /// while `system_profiler` has `device_batteryLevelLeft = 82%` sitting right there.
+    func bluetoothDevices(with reply: @escaping (String?) -> Void)
 }
 

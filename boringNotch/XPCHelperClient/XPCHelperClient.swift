@@ -144,6 +144,21 @@ final class XPCHelperClient: NSObject {
         }
     }
 
+    /// `system_profiler`'s Bluetooth JSON, for the battery levels of classic devices.
+    /// CoreBluetooth cannot see those devices at all, and the sandbox cannot spawn the tool.
+    nonisolated func bluetoothDevices() async -> String? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            return try await service.withContinuation { service, continuation in
+                service.bluetoothDevices { json in
+                    continuation.resume(returning: json)
+                }
+            }
+        } catch {
+            return nil
+        }
+    }
+
     /// Runs a whitelisted Tailscale subcommand. The CLI is unreachable from inside the
     /// sandbox, so it runs in the helper and the output comes back as text.
     nonisolated func tailscale(_ subcommand: String) async -> String? {
