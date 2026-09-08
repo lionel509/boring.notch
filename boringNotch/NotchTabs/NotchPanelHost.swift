@@ -40,6 +40,7 @@ struct NotchPanelHost: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .environment(\.notchPanelHeight, proxy.size.height)
+            .environment(\.panelAccent, tab.accent)
         }
         // Inside the host, not on the shared container, so home and shelf stay pixel-identical.
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -73,7 +74,7 @@ struct PanelRail: View {
     @ObservedObject private var router = NotchPanelRouter.shared
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 11) {
             ForEach(tab.panels, id: \.self) { panel in
                 let selected = router.panel(for: tab) == panel
                 Button {
@@ -82,14 +83,17 @@ struct PanelRail: View {
                     Text(panel.title.uppercased())
                         .font(.system(size: 8, weight: .bold))
                         .tracking(0.7)
-                        .foregroundStyle(.white.opacity(selected ? 0.95 : 0.3))
+                        .foregroundStyle(selected
+                            ? AnyShapeStyle(tab.accent)
+                            : AnyShapeStyle(Color.white.opacity(0.28)))
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(selected ? [.isSelected] : [])
             }
             Spacer(minLength: 0)
         }
-        .frame(height: 15)
-        .padding(.horizontal, 2)
+        .frame(height: 17)
+        .padding(.horizontal, 4)
+        .padding(.bottom, 3)
     }
 }

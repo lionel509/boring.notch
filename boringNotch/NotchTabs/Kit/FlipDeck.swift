@@ -31,6 +31,8 @@ struct FlipDeck<Page: Hashable, Content: View>: View {
 
     @State private var isHeld = false
     @State private var timer: Timer?
+    @State private var isFlipping = false
+    @State private var flipReset: Task<Void, Never>?
 
     /// A roll implies physical motion. When the user has asked for less of it, the page still
     /// changes — it just cross-fades instead of travelling.
@@ -43,6 +45,10 @@ struct FlipDeck<Page: Hashable, Content: View>: View {
                     // Keyed on the page so SwiftUI treats a flip as a swap, not a redraw.
                     .id(current)
                     .transition(transition)
+                    // Every figure inside stops running its own numeric roll for the length of
+                    // the move, so the page travels as one object instead of leaving digits
+                    // behind mid-animation.
+                    .environment(\.panelIsFlipping, isFlipping)
             }
         }
         // Hovering holds the current page — nothing is more annoying than a number flipping
@@ -62,6 +68,11 @@ struct FlipDeck<Page: Hashable, Content: View>: View {
         // page — so the timer is rebuilt whenever the deck does.
         .onChange(of: pages) { _, _ in start() }
         .onChange(of: interval) { _, _ in start() }
+        // Restart the countdown on *every* page change, whoever caused it. Without this the
+        // timer keeps its original schedule, so switching by hand a moment before it was due
+        // gets the page yanked away almost immediately — the interval is meant to be time
+        // spent looking at a page, not time since the deck started.
+        .onChange(of: current) { _, _ in start() }
     }
 
     private var transition: AnyTransition {
@@ -78,10 +89,17 @@ struct FlipDeck<Page: Hashable, Content: View>: View {
         let next = pages[(index + 1) % pages.count]
         // Snappy and short. A split-flap board goes clack; a 0.42 s eased slide reads as the
         // row being dragged rather than flipped.
+        isFlipping = true
+        flipReset?.cancel()
         withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .snappy(duration: 0.22, extraBounce: 0)) {
             current = next
         }
         onPageChange?(leaving, next)
+        flipReset = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(320))
+            guard !Task.isCancelled else { return }
+            isFlipping = false
+        }
     }
 
     /// Same discipline as every other timer here: stored, guarded, invalidated on the way out.

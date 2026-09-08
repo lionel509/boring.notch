@@ -45,7 +45,7 @@ struct AlertsPanel: View {
     }
 
     private var content: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: 20) {
             vpnColumn
             recentColumn
         }

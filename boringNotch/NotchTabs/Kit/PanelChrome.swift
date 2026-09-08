@@ -15,12 +15,14 @@ struct PanelColumn<Content: View>: View {
     var width: CGFloat = 150
     @ViewBuilder let content: Content
 
+    @Environment(\.panelAccent) private var accent
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 5) {
             Text(title)
                 .font(.system(size: 7, weight: .bold))
                 .tracking(0.7)
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(accent.opacity(0.85))
             content
             Spacer(minLength: 0)
         }
@@ -36,8 +38,10 @@ struct PanelRow: View {
     var tint: Color?
     var status: PanelStatus?
 
+    @Environment(\.panelIsFlipping) private var isFlipping
+
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 7) {
             if let status { StatusDot(status: status) }
             Text(label)
                 .font(.system(size: 10))
@@ -49,10 +53,10 @@ struct PanelRow: View {
                 .font(.system(size: 10, weight: .medium, design: .rounded).monospacedDigit())
                 .foregroundStyle(tint ?? .white.opacity(0.92))
                 .contentTransition(.numericText())
-                .animation(.smooth(duration: 0.35), value: value)
+                .animation(isFlipping ? nil : .smooth(duration: 0.35), value: value)
                 .lineLimit(1)
         }
-        .frame(height: 15)
+        .frame(height: 19)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label): \(value)")
     }
@@ -66,7 +70,7 @@ enum PanelStatus {
         case .up: StatsPalette.good
         case .warn: StatsPalette.serious
         case .down: StatsPalette.critical
-        case .unknown: .white.opacity(0.25)
+        case .unknown: .white.opacity(0.22)
         }
     }
 
@@ -143,10 +147,34 @@ private struct NotchPanelHeightKey: EnvironmentKey {
     static let defaultValue: CGFloat = 150
 }
 
+/// The colour of the tab currently on screen.
+private struct PanelAccentKey: EnvironmentKey {
+    static let defaultValue: Color = .effectiveAccent
+}
+
+/// True while the deck is mid-flip.
+///
+/// A figure animates on its own clock — `contentTransition(.numericText())` rolls the digits
+/// over 0.35 s regardless of what the rest of the view is doing. If a number happens to change
+/// during a page flip, that roll keeps running while the page slides out from under it, so the
+/// number appears to hang back and not travel with everything else. Suppressing the per-value
+/// animation for the length of the flip makes the whole page move as one object.
+private struct PanelIsFlippingKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     var notchPanelHeight: CGFloat {
         get { self[NotchPanelHeightKey.self] }
         set { self[NotchPanelHeightKey.self] = newValue }
+    }
+    var panelAccent: Color {
+        get { self[PanelAccentKey.self] }
+        set { self[PanelAccentKey.self] = newValue }
+    }
+    var panelIsFlipping: Bool {
+        get { self[PanelIsFlippingKey.self] }
+        set { self[PanelIsFlippingKey.self] = newValue }
     }
 }
 

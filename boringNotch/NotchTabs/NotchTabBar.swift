@@ -36,7 +36,11 @@ struct NotchTabBar: View {
             }
             .background(alignment: .leading) {
                 Capsule()
-                    .fill(Color(nsColor: .secondarySystemFill))
+                    // The pill carries the tab's own colour, so which tab you are on is
+                    // legible from the shape alone rather than only from the icon.
+                    .fill(coordinator.currentView.accent.opacity(0.28))
+                    .overlay(
+                        Capsule().strokeBorder(coordinator.currentView.accent.opacity(0.45), lineWidth: 0.5))
                     .frame(width: Self.buttonWidth, height: Self.height)
                     .offset(x: Self.buttonWidth * CGFloat(selectedIndex(in: tabs)))
             }
@@ -61,7 +65,7 @@ struct NotchTabBar: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(selected ? .white : .gray)
+        .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(Color.gray))
         // Six icon-only tabs are not self-describing. The tooltip and the panel rail carry
         // the naming that upstream's TabButton accepted and then never used.
         .help(tab.title)

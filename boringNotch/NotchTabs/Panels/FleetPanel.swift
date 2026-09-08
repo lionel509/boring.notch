@@ -56,7 +56,7 @@ struct FleetPanel: View {
     }
 
     private var content: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: 20) {
             PanelColumn(title: Caption.guests, width: 208) {
                 ForEach(guests, id: \.self) { host in
                     PanelRow(

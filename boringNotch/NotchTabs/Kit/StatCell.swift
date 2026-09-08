@@ -27,6 +27,8 @@ struct StatCell: View {
 
     @Default(.statsStripSparklines) private var showSparklines
     @Default(.statsStripColor) private var useColor
+    @Environment(\.panelAccent) private var panelAccent
+    @Environment(\.panelIsFlipping) private var isFlipping
 
     /// Sized to sit under the player, not to compete with it. At 12 pt semibold the row read
     /// as a second headline; the song title itself is only `.headline`.
@@ -36,13 +38,13 @@ struct StatCell: View {
     static let labelFont = Font.system(size: 6.5, weight: .semibold)
 
     var body: some View {
-        let accent = useColor ? (tint ?? .effectiveAccent) : .secondary
+        let accent = useColor ? (tint ?? panelAccent) : .secondary
 
         VStack(alignment: .leading, spacing: 0) {
             Text(label)
                 .font(Self.labelFont)
                 .tracking(0.4)
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(useColor ? AnyShapeStyle(accent.opacity(0.8)) : AnyShapeStyle(Color.white.opacity(0.6)))
 
             HStack(spacing: 4) {
                 Text(widest)
@@ -51,13 +53,16 @@ struct StatCell: View {
                     .overlay(alignment: .leading) {
                         Text(value)
                             .font(Self.valueFont)
+                            // Alarming paints the whole figure; otherwise it stays near-white
+                            // so the accent on the label and trace does the colouring and the
+                            // number remains the most legible thing in the cell.
                             .foregroundStyle(
                                 useColor && alarming
                                     ? AnyShapeStyle(accent)
-                                    : AnyShapeStyle(Color.white.opacity(0.92)))
+                                    : AnyShapeStyle(Color.white.opacity(0.94)))
                             // Rolls the digits over rather than swapping them.
                             .contentTransition(.numericText())
-                            .animation(.smooth(duration: 0.35), value: value)
+                            .animation(isFlipping ? nil : .smooth(duration: 0.35), value: value)
                             .fixedSize()
                     }
 

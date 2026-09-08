@@ -27,7 +27,7 @@ struct TailnetPanel: View {
                 grid
             }
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, 10)
     }
 
     private var grid: some View {
@@ -35,7 +35,7 @@ struct TailnetPanel: View {
         let chunks = stride(from: 0, to: shown.count, by: Self.rowsPerColumn).map {
             Array(shown[$0..<min($0 + Self.rowsPerColumn, shown.count)])
         }
-        return HStack(alignment: .top, spacing: 14) {
+        return HStack(alignment: .top, spacing: 20) {
             ForEach(Array(chunks.enumerated()), id: \.offset) { index, chunk in
                 PanelColumn(title: index == 0 ? Self.title : " ", width: 168) {
                     ForEach(chunk) { node in

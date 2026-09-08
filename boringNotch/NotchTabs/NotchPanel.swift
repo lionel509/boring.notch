@@ -76,6 +76,19 @@ extension NotchViews {
         }
     }
 
+    /// One hue per tab, the way the vault graph gives one hue per vault. Monochrome panels
+    /// were correct in the abstract and read as lifeless in practice; a tab's colour also tells
+    /// you where you are without reading the rail.
+    var accent: Color {
+        switch self {
+        case .home, .shelf: .effectiveAccent
+        case .claude: Color(red: 0.565, green: 0.380, blue: 1.000)   // #9061ff, the vault accent
+        case .network: Color(red: 0.290, green: 0.647, blue: 0.937)  // #4aa5ef
+        case .system: Color(red: 0.949, green: 0.612, blue: 0.310)   // #f29c4f
+        case .homelab: Color(red: 0.361, green: 0.800, blue: 0.510)  // #5ccc82
+        }
+    }
+
     /// Same trick `AlertRule.enabled` uses: the toggle is derived from the identity, so a new
     /// tab cannot forget its settings switch.
     var enabledKey: Defaults.Key<Bool> { .init("notchTab.\(rawValue)", default: true) }

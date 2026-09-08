@@ -68,7 +68,7 @@ struct NASPanel: View {
     }
 
     private var content: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: 20) {
             capacityColumn
             healthColumn
             logColumn

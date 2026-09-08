@@ -28,11 +28,11 @@ struct VPNPanel: View {
                 columns
             }
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, 10)
     }
 
     private var columns: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: 20) {
             tailscaleColumn
             nordColumn
             linkColumn

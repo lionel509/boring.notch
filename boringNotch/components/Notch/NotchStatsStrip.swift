@@ -44,6 +44,11 @@ struct NotchStatsStrip: View {
     @State private var pageIndex = 0
     @State private var isHeld = false
     @State private var flipTimer: Timer?
+    /// See `PanelIsFlippingKey`: a figure rolls its digits on its own 0.35 s clock, so one that
+    /// changes mid-flip keeps animating in place while the row slides out from under it and
+    /// visibly fails to travel with everything else.
+    @State private var isFlipping = false
+    @State private var flipReset: Task<Void, Never>?
 
     @Default(.statsStripFlipInterval) private var flipInterval
 
@@ -73,8 +78,15 @@ struct NotchStatsStrip: View {
         guard pages.count > 1 else { return }
         // Snappy and short. A split-flap board goes clack; a 0.42s eased slide reads as
         // the row being dragged rather than flipped.
+        isFlipping = true
+        flipReset?.cancel()
         withAnimation(.snappy(duration: 0.22, extraBounce: 0)) {
             pageIndex = (pageIndex + 1) % pages.count
+        }
+        flipReset = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(320))
+            guard !Task.isCancelled else { return }
+            isFlipping = false
         }
     }
 
@@ -135,6 +147,9 @@ struct NotchStatsStrip: View {
         .onTapGesture { advance() }
         .opacity(settled ? 1 : 0)
         .offset(y: settled ? 0 : 7)
+        // Same rule as the tab decks: a hand-driven flip buys a full interval, rather than
+        // leaving the original schedule to fire a moment later and snatch the row away.
+        .onChange(of: pageIndex) { _, _ in startFlipping() }
         .onAppear {
             stats.start()
             bluetooth.start()
@@ -489,7 +504,7 @@ struct NotchStatsStrip: View {
                                     : AnyShapeStyle(Color.white.opacity(0.92)))
                             // Rolls the digits over rather than swapping them.
                             .contentTransition(.numericText())
-                            .animation(.smooth(duration: 0.35), value: value)
+                            .animation(isFlipping ? nil : .smooth(duration: 0.35), value: value)
                             .fixedSize()
                     }
 
@@ -499,7 +514,7 @@ struct NotchStatsStrip: View {
                 // right along the row — the graph loading was itself the jolt.
                 if showSparklines, let trend {
                     Sparkline(values: trend, color: accent)
-                        .animation(.smooth(duration: 0.35), value: trend)
+                        .animation(isFlipping ? nil : .smooth(duration: 0.35), value: trend)
                 }
             }
         }
