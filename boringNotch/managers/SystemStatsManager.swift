@@ -139,6 +139,13 @@ final class SystemStatsManager: ObservableObject {
     /// no extra syscall — only one more comparison in a loop that was running anyway.
     private var previousPerInterface: [String: (rx: UInt64, tx: UInt64)] = [:]
 
+    /// Where the CoreWLAN reads below happen, off the main actor. Serial, because two
+    /// overlapping reads would queue on the same `wifid` reply and neither answer would be
+    /// any fresher for it.
+    private static let wifiQueue = DispatchQueue(label: "boringnotch.wifi", qos: .utility)
+    /// One radio read in flight at a time.
+    private var isReadingWiFi = false
+
     private init() {}
 
     // MARK: - Lifecycle
@@ -250,15 +257,11 @@ final class SystemStatsManager: ObservableObject {
     }
 
     private func sampleNetworkIdentity() {
-        if let interface = CWWiFiClient.shared().interface() {
-            let ssid = interface.ssid()
-            if ssid != wifiSSID { wifiSSID = ssid }
-            let rssi = interface.rssiValue()
-            if rssi != wifiRSSI { wifiRSSI = rssi }
-            let rate = interface.transmitRate()
-            if rate != wifiRate { wifiRate = rate }
-        }
+        sampleWiFiIdentity()
 
+        // `getifaddrs` reads kernel state directly and answers in microseconds however
+        // badly the network stack is behaving, so unlike the radio read above it is safe
+        // to leave on this actor.
         var head: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&head) == 0 else { return }
         defer { freeifaddrs(head) }
@@ -286,6 +289,43 @@ final class SystemStatsManager: ObservableObject {
         if tunnels != tunnelAddresses {
             tunnelAddresses = tunnels
             refreshEgressLabel()
+        }
+    }
+
+    /// The radio's own figures: which network, how strong, how fast.
+    ///
+    /// CoreWLAN's accessors are synchronous XPC into `wifid`, which is the whole reason this
+    /// is not read inline any more. They answer instantly while the network stack is idle, so
+    /// the cost never appears in normal profiling — but while the stack is *reconfiguring*
+    /// they block until `wifid` gets round to them. A `tailscale down` tore the tunnel out
+    /// and re-elected the default route five times in thirty seconds, and this was running on
+    /// the main actor for every one of them: the notch was frozen for the whole transition,
+    /// which is not a thing a stats readout is allowed to do to the app it sits in.
+    ///
+    /// The in-flight guard earns its place as much as the queue does. Samples are 5 s apart,
+    /// so a `wifid` blocked for longer than that would otherwise build a backlog of reads
+    /// whose answers are stale by the time they land.
+    private func sampleWiFiIdentity() {
+        guard !isReadingWiFi else { return }
+        isReadingWiFi = true
+        Self.wifiQueue.async { [weak self] in
+            // Read into plain values here: a `CWInterface` is not something to carry back
+            // across an actor hop.
+            let reading = CWWiFiClient.shared().interface().map {
+                (ssid: $0.ssid(), rssi: $0.rssiValue(), rate: $0.transmitRate())
+            }
+            Task { @MainActor in
+                guard let self else { return }
+                // Cleared before the early return below, or one interfaceless moment would
+                // latch the guard shut and the row would never update again.
+                self.isReadingWiFi = false
+                // No interface at all leaves every figure as it was, which is what reading
+                // them inline did: nothing to say is not the same as zero.
+                guard let reading else { return }
+                if reading.ssid != self.wifiSSID { self.wifiSSID = reading.ssid }
+                if reading.rssi != self.wifiRSSI { self.wifiRSSI = reading.rssi }
+                if reading.rate != self.wifiRate { self.wifiRate = reading.rate }
+            }
         }
     }
 
