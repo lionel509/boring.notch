@@ -188,6 +188,8 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
     /// Address -> name for the classic devices connected right now, from IOBluetooth.
     private var classicConnected: [String: String] = [:]
     private var announcedClassic: Set<String> = []
+    /// Last raw reading, still awaiting a second opinion. See `pollClassic`.
+    private var unconfirmedClassic: Set<String> = []
     private var pendingAnnounceClassic: Set<String> = []
     private var adoptedClassic = false
 
@@ -417,6 +419,20 @@ extension BluetoothBatteryManager {
         }
 
         let ids = Set(connected.keys)
+
+        // A membership change has to survive a second poll before it is believed.
+        //
+        // Measured on this Mac: his headphones connected and dropped again **inside one
+        // second** -- 13:40:02 to 13:40:03 -- and then nothing moved for the next four
+        // minutes. Continuity keeps links like that up and down all day. A five-second poll
+        // lands inside a flap like that maybe a fifth of the time, which is exactly the
+        // reported symptom: mostly quiet, then a connect and a disconnect for something
+        // nobody touched. One tick of confirmation costs a real connect five seconds and
+        // removes the entire class of phantom pairs.
+        let settled = ids == unconfirmedClassic
+        unconfirmedClassic = ids
+        guard settled else { return }
+
         let changed = ids != Set(classicConnected.keys)
         // Captured before the overwrite: a device that drops needs its name at exactly the
         // moment it stops being listed, and it may never have had a battery read to keep one.
@@ -435,10 +451,13 @@ extension BluetoothBatteryManager {
                 pendingAnnounceClassic.insert(id)
             }
             for gone in announcedClassic.subtracting(ids) {
-                let name = classic[gone]?.name ?? previous[gone] ?? "Bluetooth device"
-                btTrace("classic disconnected: \(name)")
+                // Only for something whose arrival was worth announcing. Symmetric with the
+                // charge gate in `applyClassic`, and it is what keeps his phone quiet on the
+                // way out as well as on the way in.
+                guard let device = classic[gone] else { continue }
+                btTrace("classic disconnected: \(device.name)")
                 ConnectionActivityManager.shared.announceBluetooth(
-                    name: name, percent: nil, connected: false)
+                    name: device.name, percent: nil, connected: false)
             }
         }
         announcedClassic = ids
@@ -503,12 +522,26 @@ extension BluetoothBatteryManager {
         classic = found
         btTrace("classic read -> \(found.count): \(found.values.map(\.name).joined(separator: ", "))")
 
-        // Every pending announcement resolves here, whether or not a charge turned up, so a
-        // device that reports no battery cannot leave one queued forever.
+        // Every pending announcement resolves here -- cleared unconditionally, so nothing can
+        // queue forever -- but only a device that actually reports a charge gets said out loud.
+        //
+        // This is the half that silences his phone and his watch. Both are paired, both come
+        // and go as Continuity puts a link up and takes it down, and neither publishes a
+        // battery over Bluetooth at all: they are *presence beacons*, and the spec above
+        // measured exactly that (`Nearby Info`, no battery field, no GATT services). Device
+        // class cannot tell them apart from a mouse -- phone, watch, mouse and one pair of
+        // headphones all report `major = 0, Miscellaneous` on this Mac, measured -- so the
+        // charge is the only honest discriminator available, and it happens to be the right
+        // one: the notch announces what it can show, and a beacon has nothing to show.
         for id in pendingAnnounceClassic {
+            guard let device = found[id] else { continue }
+            // One device, one activity: a peripheral the Low Energy path already knows about
+            // must not announce itself twice under a slightly different name.
+            guard !collected.values.contains(where: {
+                $0.name.caseInsensitiveCompare(device.name) == .orderedSame
+            }) else { continue }
             ConnectionActivityManager.shared.announceBluetooth(
-                name: found[id]?.name ?? classicConnected[id] ?? "Bluetooth device",
-                percent: found[id]?.percent, connected: true)
+                name: device.name, percent: device.percent, connected: true)
         }
         pendingAnnounceClassic.removeAll()
 
@@ -571,6 +604,7 @@ extension BluetoothBatteryManager: CBCentralManagerDelegate {
                 // there in silence, exactly as the first poll of a session does.
                 announced.removeAll()
                 announcedClassic.removeAll()
+                unconfirmedClassic.removeAll()
                 pendingAnnounce.removeAll()
                 pendingAnnounceClassic.removeAll()
                 selfCancelled.removeAll()
