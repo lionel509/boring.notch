@@ -25,5 +25,15 @@ import Foundation
     func topProcessName(with reply: @escaping (String?) -> Void)
     func topMemoryProcess(with reply: @escaping (String?) -> Void)
     func topPowerProcess(with reply: @escaping (String?) -> Void)
+    /// The whole ranking, as JSON, rather than one name. Returns a JSON array of
+    /// `{"name": String, "cpu": Double, "mem": UInt64}`, busiest first.
+    ///
+    /// A JSON `String?` and not a typed array on purpose: `NSXPCInterface` needs explicit
+    /// class whitelisting for collection reply types, which the client's generic wrapper does
+    /// not expose. A string needs no ceremony and versions trivially.
+    func topProcesses(_ limit: Int, with reply: @escaping (String?) -> Void)
+    /// Runs the Tailscale CLI, which a sandboxed app cannot. `subcommand` is matched against
+    /// a whitelist, never passed through as argv.
+    func runTailscale(_ subcommand: String, with reply: @escaping (String?) -> Void)
 }
 

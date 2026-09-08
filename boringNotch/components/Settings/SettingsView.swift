@@ -54,6 +54,9 @@ struct SettingsView: View {
                 NavigationLink(value: "Stats") {
                     Label("Stats strip", systemImage: "chart.bar.xaxis")
                 }
+                NavigationLink(value: "Tabs") {
+                    Label("Notch tabs", systemImage: "rectangle.3.group")
+                }
                 NavigationLink(value: "Shortcuts") {
                     Label("Shortcuts", systemImage: "keyboard")
                 }
@@ -90,6 +93,8 @@ struct SettingsView: View {
                     Shelf()
                 case "Stats":
                     StatsSettings()
+                case "Tabs":
+                    NotchTabsSettings()
                 case "Shortcuts":
                     Shortcuts()
                 case "Extensions":

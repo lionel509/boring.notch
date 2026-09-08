@@ -105,7 +105,10 @@ class BoringViewCoordinator: ObservableObject {
         didSet {
             if !alwaysShowTabs {
                 openLastTabByDefault = false
-                if ShelfStateViewModel.shared.isEmpty || !Defaults[.openShelfByDefault] {
+                // Only the shelf tab is governed by this switch. Without the guard, hiding
+                // tabs would also kick you off a fork tab that is still perfectly visible.
+                if currentView == .shelf,
+                   ShelfStateViewModel.shared.isEmpty || !Defaults[.openShelfByDefault] {
                     currentView = .home
                 }
             }
@@ -281,7 +284,18 @@ class BoringViewCoordinator: ObservableObject {
     private var sneakPeekDuration: TimeInterval = 1.5
     private var sneakPeekTask: Task<Void, Never>?
 
-    // Helper function to manage sneakPeek timer using Swift Concurrency
+    /// Hides the peek when its time is up.
+    ///
+    /// Hiding flips `show` and *nothing else*. It used to call `toggleSneakPeek(status: false,
+    /// type: .music)`, which reset the type, icon, text, label and tint in the same breath --
+    /// so the view still on screen, mid-fade, was rendering an empty peek: no icon, no words,
+    /// a type whose `switch` falls through to `EmptyView`. The words vanished a frame before
+    /// the shape did, which is the jolt on the way back to the album art. The next peek sets
+    /// every one of those fields anyway, so there is nothing to clear here.
+    ///
+    /// The animation also has to be applied where the mutation happens. Wrapping the call in
+    /// `withAnimation` animated nothing, because `toggleSneakPeek` hops onto a `Task` and the
+    /// change lands a turn later, outside the transaction that was meant to carry it.
     private func scheduleSneakPeekHide(after duration: TimeInterval) {
         sneakPeekTask?.cancel()
 
@@ -289,10 +303,10 @@ class BoringViewCoordinator: ObservableObject {
             try? await Task.sleep(for: .seconds(duration))
             guard let self = self, !Task.isCancelled else { return }
             await MainActor.run {
-                withAnimation {
-                    self.toggleSneakPeek(status: false, type: .music)
-                    self.sneakPeekDuration = 1.5
+                withAnimation(.smooth) {
+                    self.sneakPeek.show = false
                 }
+                self.sneakPeekDuration = 1.5
             }
         }
     }

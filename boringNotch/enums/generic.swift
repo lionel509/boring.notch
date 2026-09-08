@@ -24,9 +24,11 @@ public enum NotchState {
     case open
 }
 
-public enum NotchViews {
+public enum NotchViews: String, CaseIterable, Hashable {
     case home
     case shelf
+    // Fork. Kept below the upstream cases so a rebase resolves in one hunk.
+    case claude, network, system, homelab
 }
 
 enum SettingsEnum {

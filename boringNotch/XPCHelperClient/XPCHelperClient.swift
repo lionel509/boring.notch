@@ -129,6 +129,36 @@ final class XPCHelperClient: NSObject {
         }
     }
 
+    /// The whole CPU/memory ranking as JSON, for the Offenders panel. The sandbox returns
+    /// nothing for a process list, so this is the only route to one.
+    nonisolated func topProcesses(limit: Int = 8) async -> String? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            return try await service.withContinuation { service, continuation in
+                service.topProcesses(limit) { json in
+                    continuation.resume(returning: json)
+                }
+            }
+        } catch {
+            return nil
+        }
+    }
+
+    /// Runs a whitelisted Tailscale subcommand. The CLI is unreachable from inside the
+    /// sandbox, so it runs in the helper and the output comes back as text.
+    nonisolated func tailscale(_ subcommand: String) async -> String? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            return try await service.withContinuation { service, continuation in
+                service.runTailscale(subcommand) { output in
+                    continuation.resume(returning: output)
+                }
+            }
+        } catch {
+            return nil
+        }
+    }
+
     /// What is drawing power, for a drain alert. `nil` when nothing clears the floor or the
     /// helper is unreachable -- the caller omits the name either way.
     nonisolated func topPowerProcess() async -> String? {

@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 """Tell the notch that a Claude Code tab changed state.
 
-Runs on SessionStart, Stop, and the two Notification kinds, in every session. The state is
-passed as argv[1] rather than sniffed out of the payload, because settings.json already has to
-register each event separately to give it a matcher -- so the event name is known at the point
-of registration and there is nothing to infer.
+Runs on SessionStart, UserPromptSubmit, Stop, SessionEnd and the two Notification kinds, in
+every session. The state is passed as argv[1] rather than sniffed out of the payload, because
+settings.json already has to register each event separately to give it a matcher -- so the
+event name is known at the point of registration and there is nothing to infer.
+
+SessionEnd is not optional decoration. The notch keeps a list of live sessions, and without an
+event saying a tab is gone the only way out of that list is an eight-hour timeout -- so a
+morning's finished work would still be sitting there mid-afternoon.
+
+Sends `session_id` alongside the label, and this is the part that matters most. The label below
+is not an identity: it falls back to a gist of the last message, which changes on every single
+Stop, so a notch keyed on it would show one tab over and over under a different name each time.
+`session_id` is in every hook payload and is stable for the life of the tab.
 
 Always exits 0. A Stop hook that exits 2 actively prevents Claude from stopping, which is the
 exact opposite of the intent here.
@@ -103,8 +112,22 @@ label = (os.environ.get("NOTCH_TAB", "").strip()
          or where
          or "session")
 
+params = {"event": state, "project": label}
+
+# The stable key. Every hook payload carries it; the app treats it as opaque, filters it to
+# alphanumerics plus - and _, and never displays it.
+session_id = payload.get("session_id")
+if isinstance(session_id, str) and session_id.strip():
+    params["session_id"] = session_id.strip()
+
+# The full path, not the basename the label uses. It is the one field that tells two tabs with
+# the same title apart, and the notch shows it on hover where its length costs nothing.
+cwd = payload.get("cwd") or os.getcwd()
+if isinstance(cwd, str) and cwd:
+    params["cwd"] = cwd
+
 # quote_via=quote, not the default quote_plus: form encoding turns a space into "+", and
 # URLComponents on the other end decodes %20 but leaves "+" alone -- so the notch showed
 # "I'm+refactoring+the+parser".
 subprocess.run(["open", "-g", "boringnotch://claude?" + urllib.parse.urlencode(
-    {"event": state, "project": label}, quote_via=urllib.parse.quote)], capture_output=True)
+    params, quote_via=urllib.parse.quote)], capture_output=True)

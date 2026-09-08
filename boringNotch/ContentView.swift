@@ -100,7 +100,7 @@ struct ContentView: View {
             moonProgress: weather.moonProgress,
             showCity: Defaults[.weatherShowCity],
             accent: musicManager.avgColor,
-            bottomInset: Defaults[.showStatsStrip] ? statsStripHeight : 0)
+            bottomInset: (Defaults[.showStatsStrip] && coordinator.currentView == .home) ? statsStripHeight : 0)
     }
 
     var body: some View {
@@ -327,6 +327,14 @@ struct ContentView: View {
     }
 
     @ViewBuilder
+    /// A peek sizes the closed notch to its content; everything else lets the notch keep the
+    /// width it already has.
+    private var peekTakesIntrinsicWidth: Bool {
+        guard coordinator.sneakPeek.show, vm.notchState == .closed else { return false }
+        guard coordinator.sneakPeek.type == .music else { return true }
+        return !vm.hideOnClosed && Defaults[.sneakPeekStyles] == .standard
+    }
+
     func NotchLayout() -> some View {
         VStack(alignment: .leading) {
             VStack(alignment: .leading) {
@@ -431,18 +439,31 @@ struct ContentView: View {
                       }
                   }
               }
-              .conditionalModifier((coordinator.sneakPeek.show && (coordinator.sneakPeek.type == .music) && vm.notchState == .closed && !vm.hideOnClosed && Defaults[.sneakPeekStyles] == .standard) || (coordinator.sneakPeek.show && (coordinator.sneakPeek.type != .music) && (vm.notchState == .closed))) { view in
-                  view
-                      .fixedSize()
-              }
+              // Parameterised rather than wrapped in a branch, and that is the whole fix for
+              // the peek cutting instead of fading. `conditionalModifier` is a `@ViewBuilder
+              // if`, so it produces `_ConditionalContent`: flipping the condition changes the
+              // *identity* of this entire subtree, and SwiftUI tears the old one down and
+              // builds a fresh one rather than animating between them. Nothing inside gets to
+              // transition -- `InlineHUD`'s `.transition(.opacity)` never ran a frame, and the
+              // album art appeared in one step. `fixedSize(horizontal:vertical:)` takes the
+              // condition as an argument, so there is one view all the way through and the
+              // layout animates.
+              .fixedSize(horizontal: peekTakesIntrinsicWidth, vertical: peekTakesIntrinsicWidth)
               .zIndex(2)
             if vm.notchState == .open {
                 VStack {
                     switch coordinator.currentView {
                     case .home:
                         NotchHomeView(albumArtNamespace: albumArtNamespace)
+                            // Home only. Every other tab gets the strip's 27pt back as content.
+                            .notchStatsStrip(gestureProgress: gestureProgress,
+                                             isOpen: vm.notchState == .open)
                     case .shelf:
                         ShelfView()
+                    // Named explicitly rather than `default:` so this cannot silently swallow a
+                    // case upstream adds later. Tabs beyond these never touch this file again.
+                    case .claude, .network, .system, .homelab:
+                        NotchPanelHost(tab: coordinator.currentView)
                     }
                 }
                 .transition(
@@ -453,16 +474,6 @@ struct ContentView: View {
                 .zIndex(1)
                 .allowsHitTesting(vm.notchState == .open)
                 .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
-                // safeAreaInset with spacing 0 reserves exactly statsStripHeight. A plain
-                // VStack sibling would also add the stack's default spacing, so the row
-                // would eat more than the notch grew by and squeeze the player again.
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if showStatsStrip {
-                        NotchStatsStrip()
-                            .allowsHitTesting(vm.notchState == .open)
-                            .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
-                    }
-                }
             }
         }
         .onDrop(of: [.fileURL, .url, .utf8PlainText, .plainText, .data], delegate: GeneralDropTargetDelegate(isTargeted: $vm.generalDropTargeting))

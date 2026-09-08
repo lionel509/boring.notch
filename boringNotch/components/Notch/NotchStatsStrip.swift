@@ -8,81 +8,6 @@
 import Defaults
 import SwiftUI
 
-// MARK: - Palette
-
-/// Load severity, deliberately short of a full traffic-light ramp.
-///
-/// There is no "good" green. A readout that turns green to say nothing is wrong is noise —
-/// the value is already right there, and colour that is always on stops meaning anything.
-/// Normal sits in the user's own accent, and the semantic steps appear only when the number
-/// actually warrants a look. Colour is never the sole channel: every cell has a text label
-/// and the figure itself.
-/// Shared with the alert rules, which colour their icons from the same three steps rather
-/// than inventing a second vocabulary for the same surface.
-enum StatsPalette {
-    static let serious = Color(red: 0.925, green: 0.514, blue: 0.353)   // #ec835a
-    static let critical = Color(red: 0.816, green: 0.231, blue: 0.231)  // #d03b3b
-    /// Nothing in the strip is ever *good*, so this step is new: it exists for alerts that
-    /// report a success. 10.4:1 on black, well clear of the 3:1 the other two were held to.
-    static let good = Color(red: 0.361, green: 0.800, blue: 0.510)      // #5ccc82
-
-    /// Both steps clear 3:1 on black and separate by ΔE 11.3 under deuteranopia, checked
-    /// against this surface rather than assumed.
-    static func severity(_ fraction: Double) -> Color {
-        switch fraction {
-        case ..<0.75: .effectiveAccent
-        case ..<0.90: serious
-        default: critical
-        }
-    }
-}
-
-// MARK: - Sparkline
-
-/// A filled trace, shaped the way the system's own small graphs are — a soft gradient area
-/// under a thin line, rather than the bare polyline a dashboard library would draw.
-private struct Sparkline: View {
-    let values: [Double]
-    let color: Color
-
-    var body: some View {
-        Canvas { context, size in
-            guard values.count > 1 else { return }
-
-            let step = size.width / CGFloat(values.count - 1)
-            func point(_ index: Int) -> CGPoint {
-                let clamped = min(max(values[index], 0), 1)
-                // A little headroom so a trace pinned at 100% still reads as a line
-                // rather than merging with the top edge.
-                return CGPoint(x: CGFloat(index) * step, y: size.height * (1 - clamped * 0.9) - 0.5)
-            }
-
-            var line = Path()
-            line.move(to: point(0))
-            for index in 1..<values.count { line.addLine(to: point(index)) }
-
-            var area = line
-            area.addLine(to: CGPoint(x: size.width, y: size.height))
-            area.addLine(to: CGPoint(x: 0, y: size.height))
-            area.closeSubpath()
-
-            context.fill(
-                area,
-                with: .linearGradient(
-                    Gradient(colors: [color.opacity(0.42), color.opacity(0.04)]),
-                    startPoint: .zero,
-                    endPoint: CGPoint(x: 0, y: size.height)))
-
-            context.stroke(
-                line,
-                with: .color(color),
-                style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round))
-        }
-        .frame(width: 22, height: 9)
-        .accessibilityHidden(true)
-    }
-}
-
 // MARK: - Strip
 
 /// One `statsStripHeight` row, attached as a bottom safe-area inset so it reserves exactly
@@ -509,10 +434,11 @@ struct NotchStatsStrip: View {
         // The LAN address above is unchanged by a VPN taking the default route, so it cannot
         // tell you which way traffic is leaving. Tinted when tunnelled, so the answer is a
         // glance rather than a reading.
-        if let egress = stats.egressLabel {
-            gauge("VIA", egress,
-                  widest: "TAILSCALE",
-                  tint: egress == "DIRECT" ? nil : StatsPalette.good)
+        if stats.egressLabel != nil {
+            let tunnelled = stats.egressLabel != "DIRECT"
+            gauge("VIA", stats.egressDisplay,
+                  widest: "MyNetwork · NORDVPN",
+                  tint: tunnelled ? StatsPalette.good : nil)
         }
         if showNetwork {
             gauge("DOWN", Units.byteRate(stats.networkDownBytesPerSec),
@@ -601,5 +527,27 @@ struct NotchStatsStrip: View {
             return "\(Int(seconds / 3_600))h \(Int((seconds.truncatingRemainder(dividingBy: 3_600)) / 60))m"
         }
         return "\(Int(seconds / 60))m"
+    }
+}
+
+// MARK: - Home-only attachment
+
+extension View {
+    /// The strip belongs to home, not to every tab.
+    ///
+    /// `safeAreaInset` with `spacing: 0` reserves exactly `statsStripHeight`. A plain `VStack`
+    /// sibling would also add the stack's default spacing, so the row would eat more than the
+    /// notch grew by and squeeze the player again.
+    ///
+    /// Keeping it a modifier rather than inline in `ContentView` means the fork's diff against
+    /// upstream there stays a single word on one branch.
+    func notchStatsStrip(gestureProgress: CGFloat, isOpen: Bool) -> some View {
+        safeAreaInset(edge: .bottom, spacing: 0) {
+            if Defaults[.showStatsStrip] {
+                NotchStatsStrip()
+                    .allowsHitTesting(isOpen)
+                    .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
+            }
+        }
     }
 }

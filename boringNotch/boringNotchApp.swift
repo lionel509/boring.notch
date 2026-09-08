@@ -87,8 +87,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let query = components.queryItems ?? []
             let event = query.first { $0.name == "event" }?.value
             let subject = Self.displayable(query.first { $0.name == "project" }?.value)
+            // `project` is a *label*, not an identity, and treating it as one was the bug that
+            // made a persistent list impossible. The hook derives it from `$NOTCH_TAB`, else
+            // the transcript's `ai-title`, else a gist of the last message -- and the gist
+            // changes on every Stop, so one tab would enter the list again under a new name
+            // every time it finished a turn. `session_id` is stable for the life of the tab.
+            let identity = Self.identifier(query.first { $0.name == "session_id" }?.value)
+            let workingDirectory = Self.path(query.first { $0.name == "cwd" }?.value)
 
             Task { @MainActor in
+                // Two consumers, one event. The store is the persistent view -- which tab is
+                // blocked on you right now -- and the sneak peek below is unchanged: it still
+                // says what just happened and then forgets it.
+                //
+                // Falling back to the label as a key only matters against an older copy of the
+                // hook that sends no id. It is the pre-existing behaviour, degraded exactly as
+                // before rather than dropping the event.
+                let key = identity ?? subject
+                if event == "ended" {
+                    ClaudeSessionManager.shared.end(id: key)
+                } else if let event, let state = ClaudeSessionManager.State(hookEvent: event) {
+                    ClaudeSessionManager.shared.record(
+                        id: key, label: subject, state: state, cwd: workingDirectory)
+                }
+
                 switch event {
                 case "done":
                     SystemAlertManager.shared.fire(
@@ -125,6 +147,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             from: head.startIndex, to: space) >= 16
         else { return head }
         return head[..<space].trimmingCharacters(in: .whitespaces) + "..."
+    }
+
+    /// The session key. Never drawn, only compared, so it is filtered down to the characters
+    /// an identifier can legitimately contain rather than merely stripped of control codes --
+    /// a key is a dictionary lookup and has no business carrying anything else.
+    private static func identifier(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let filtered = String(raw.unicodeScalars.filter { allowed.contains($0) })
+        let clean = String(filtered.prefix(64))
+        return clean.isEmpty ? nil : clean
+    }
+
+    /// The working directory, shown only on hover. Same untrusted treatment as the label: it
+    /// is text to display, never a path to resolve, open, or hand to a shell.
+    private static func path(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let clean = String(raw.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0)
+        }).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return nil }
+        return String(clean.prefix(200))
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

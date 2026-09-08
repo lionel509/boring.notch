@@ -171,6 +171,28 @@ extension Defaults.Keys {
     static let statsStripShowNetwork = Key<Bool>("statsStripShowNetwork", default: true)
     static let statsStripSparklines = Key<Bool>("statsStripSparklines", default: true)
     static let statsStripColor = Key<Bool>("statsStripColor", default: true)
+
+    /// Notch tabs. Per-tab switches are not declared here: a tab builds its own key from its
+    /// raw value (`notchTab.claude`), the same way an alert rule does, so adding a tab cannot
+    /// forget its toggle.
+    /// Last panel visited per tab, so returning to a tab lands where you left it.
+    static let notchPanelSelection = Key<[String: String]>("notchPanelSelection", default: [:])
+    /// Seconds a panel holds before the deck flips. Longer than the strip's four: a full panel
+    /// carries far more to read than a single row does.
+    static let notchPanelFlipInterval = Key<Double>("notchPanelFlipInterval", default: 8)
+    /// Where the homelab lives. Not hardcoded -- this is a fork of a public app, and a literal
+    /// 192.168.x baked into a release is a bug report waiting to happen.
+    static let homelabPrometheusURL = Key<String>("homelabPrometheusURL", default: "")
+    static let homelabLokiURL = Key<String>("homelabLokiURL", default: "")
+    static let homelabQbitURL = Key<String>("homelabQbitURL", default: "")
+    /// The label the NAS appears under — `host` in Loki, `instance` in Prometheus. A setting
+    /// and not a constant, because it is chosen when the exporter is set up, not when this
+    /// is compiled.
+    static let homelabNASHost = Key<String>("homelabNASHost", default: "synology")
+    static let homelabQbitUsername = Key<String>("homelabQbitUsername", default: "")
+    /// A write-only inbox, not storage. The next refresh moves this into the Keychain and
+    /// blanks it, so a password never settles in a plist that every backup copies.
+    static let homelabQbitPassword = Key<String>("homelabQbitPassword", default: "")
     /// Threshold alerts -- see `SystemAlertManager`. Per-rule switches are not declared
     /// here: a rule builds its own key from its id (`systemAlert.cpu`), so adding a rule
     /// cannot forget to add the switch that turns it off.

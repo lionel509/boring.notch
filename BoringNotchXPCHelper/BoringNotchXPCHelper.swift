@@ -466,3 +466,84 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         }()
     }
 }
+
+// MARK: - Panels
+
+extension BoringNotchXPCHelper {
+    /// The full CPU/memory ranking. `busiestProcess` already builds this and throws all but
+    /// the winner away, so this is the same two-reading measurement kept whole.
+    @objc func topProcesses(_ limit: Int, with reply: @escaping (String?) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let names = Self.processTable()
+            guard !names.isEmpty else { return reply(nil) }
+
+            let pids = Array(names.keys)
+            let first = Self.cpuTimes(of: pids)
+            guard !first.isEmpty else { return reply(nil) }
+
+            // A single reading cannot answer "what is busy now" — `proc_pid_rusage` reports
+            // CPU burned since launch, so a long-lived idle process would always win.
+            let started = DispatchTime.now().uptimeNanoseconds
+            Thread.sleep(forTimeInterval: 0.3)
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started)
+            guard elapsed > 0 else { return reply(nil) }
+
+            let second = Self.cpuTimes(of: Array(first.keys))
+            var rows: [[String: Any]] = []
+            for (pid, after) in second {
+                guard let before = first[pid], after > before, let name = names[pid] else { continue }
+                var memory: UInt64 = 0
+                var info = rusage_info_current()
+                withUnsafeMutablePointer(to: &info) {
+                    $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
+                        _ = proc_pid_rusage(pid, RUSAGE_INFO_CURRENT, $0)
+                    }
+                }
+                memory = info.ri_resident_size
+                rows.append([
+                    "name": name,
+                    "cpu": Double(after - before) / elapsed,
+                    "mem": memory,
+                ])
+            }
+            rows.sort { ($0["cpu"] as? Double ?? 0) > ($1["cpu"] as? Double ?? 0) }
+            let top = Array(rows.prefix(max(0, limit)))
+            guard let data = try? JSONSerialization.data(withJSONObject: top) else { return reply(nil) }
+            reply(String(data: data, encoding: .utf8))
+        }
+    }
+
+    /// Whitelisted, never argv passthrough. This service is `ServiceType: Application` and so
+    /// is private to the containing bundle, which makes this defence in depth — but it is one
+    /// switch, and it means a future bug in the app cannot become arbitrary execution.
+    @objc func runTailscale(_ subcommand: String, with reply: @escaping (String?) -> Void) {
+        let arguments: [String]
+        switch subcommand {
+        case "status": arguments = ["status", "--json"]
+        case "up": arguments = ["up"]
+        case "down": arguments = ["down"]
+        default: return reply(nil)
+        }
+
+        let candidates = [
+            "/usr/local/bin/tailscale",
+            "/opt/homebrew/bin/tailscale",
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        ]
+        guard let binary = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+        else { return reply(nil) }
+
+        DispatchQueue.global(qos: .utility).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: binary)
+            task.arguments = arguments
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = FileHandle.nullDevice
+            do { try task.run() } catch { return reply(nil) }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            reply(String(data: data, encoding: .utf8))
+        }
+    }
+}

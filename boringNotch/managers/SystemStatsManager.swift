@@ -36,6 +36,10 @@ final class SystemStatsManager: ObservableObject {
     @Published private(set) var networkDownBytesPerSec: Double = 0
     @Published private(set) var networkUpBytesPerSec: Double = 0
 
+    /// Throughput per interface name (`en0`, `utun8`, …). What lets the VPN panel show
+    /// Tailscale's traffic separately from NordVPN's rather than one meaningless total.
+    @Published private(set) var interfaceRates: [String: InterfaceRate] = [:]
+
     /// Swap in use. The number that explains a machine that feels slow while CPU and memory
     /// both look fine -- memory pressure shows up here before it shows up anywhere else.
     @Published private(set) var swapUsedBytes: UInt64 = 0
@@ -77,6 +81,16 @@ final class SystemStatsManager: ObservableObject {
     /// asking when two tunnels are fighting over the route.
     @Published private(set) var egressLabel: String?
 
+    /// The same answer, phrased for a human: the network name when nothing is tunnelling, and
+    /// `network · VPN` when something is. "DIRECT" was accurate and meant nothing to anyone —
+    /// the useful reading is *which* network, and the VPN only when there is one. The exit
+    /// location is deliberately left out; it is constant in practice and carries no signal.
+    var egressDisplay: String {
+        let network = wifiSSID ?? localIP ?? "—"
+        guard let egress = egressLabel, egress != "DIRECT" else { return network }
+        return "\(network) · \(egress)"
+    }
+
     let memoryTotalBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
 
     /// Recent history for the sparklines, oldest first, each value already normalised to
@@ -104,12 +118,15 @@ final class SystemStatsManager: ObservableObject {
     private var networkPeak: Double = 1
 
     private var timer: Timer?
+    private var teardownTask: Task<Void, Never>?
 
     /// Primary egress interface (`en0`, `utun11`…), pushed by the path monitor below.
     private var egressInterface: String?
     /// IPv4 address of each tunnel interface, refreshed by the `getifaddrs` walk that the
-    /// LAN address already required.
-    private var tunnelAddresses: [String: String] = [:]
+    /// LAN address already required. Published because the VPN panel needs to map an
+    /// interface back to the tunnel holding it, which is the same question `egressLabel`
+    /// answers for one interface only.
+    @Published private(set) var tunnelAddresses: [String: String] = [:]
     /// Push-based, so it costs nothing per sample: it fires only when the route actually
     /// changes, which is far rarer than 1 Hz. Deliberately never cancelled — a cancelled
     /// `NWPathMonitor` cannot be restarted, and an idle one does no work.
@@ -117,6 +134,10 @@ final class SystemStatsManager: ObservableObject {
     private var watchers = 0
     private var previousCPUTicks: (busy: UInt64, total: UInt64)?
     private var previousNetwork: (received: UInt64, sent: UInt64, at: Date)?
+    /// Per-interface baseline, kept alongside the aggregate one. Filled by the same
+    /// `getifaddrs` walk the total already required, so naming a tunnel's throughput costs
+    /// no extra syscall — only one more comparison in a loop that was running anyway.
+    private var previousPerInterface: [String: (rx: UInt64, tx: UInt64)] = [:]
 
     private init() {}
 
@@ -126,6 +147,10 @@ final class SystemStatsManager: ObservableObject {
     /// wants figures. Cheap to call repeatedly.
     func start() {
         watchers += 1
+        // Cancels a teardown still inside its grace period, which is what makes a
+        // panel-to-panel flip seamless rather than a stutter.
+        teardownTask?.cancel()
+        teardownTask = nil
         startPathMonitorIfNeeded()
         guard timer == nil else { return }
 
@@ -142,14 +167,29 @@ final class SystemStatsManager: ObservableObject {
         watchers = max(0, watchers - 1)
         guard watchers == 0 else { return }
 
+        // Deferred, not immediate. SwiftUI does not promise that one view's `onDisappear`
+        // runs before the next view's `onAppear`, so flipping between two panels that both
+        // want these figures — or moving from home to the System tab — can release and
+        // re-claim within the same runloop turn. Tearing down in between would clear the
+        // baselines below and make the very next sample report the average since the notch
+        // was last closed. A short grace period costs one idle second and removes the whole
+        // class of problem, including the pre-existing jitter on close-then-reopen.
+        teardownTask?.cancel()
+        teardownTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard let self, !Task.isCancelled, self.watchers == 0 else { return }
+            self.teardown()
+        }
+    }
+
+    private func teardown() {
         timer?.invalidate()
         timer = nil
-        // Drop the baselines too: a stale one would make the first sample after
-        // reopening report the average since the notch was last closed.
         // The tick and byte baselines must go — a stale one would make the first sample
         // after reopening report the average since the notch was last closed.
         previousCPUTicks = nil
         previousNetwork = nil
+        previousPerInterface = [:]
         // The traces deliberately stay. Clearing them meant every reopen drew its plots in
         // from nothing, which is a jolt every single time the notch is used. What is on
         // screen is still twelve real samples; they just span the gap.
@@ -267,7 +307,7 @@ final class SystemStatsManager: ObservableObject {
         pathMonitor = monitor
     }
 
-    private static func isTunnelInterface(_ name: String) -> Bool {
+    static func isTunnelInterface(_ name: String) -> Bool {
         name.hasPrefix("utun") || name.hasPrefix("ipsec") || name.hasPrefix("ppp")
     }
 
@@ -290,7 +330,7 @@ final class SystemStatsManager: ObservableObject {
     /// is the address range it allocates from, which is stable per vendor: Tailscale uses the
     /// CGNAT block 100.64.0.0/10, NordVPN's NordLynx consistently hands out 10.5.x. Anything
     /// else tunnelled is still worth flagging even when it cannot be named.
-    private static func vpnName(forTunnelAddress address: String) -> String {
+    static func vpnName(forTunnelAddress address: String) -> String {
         let octets = address.split(separator: ".").compactMap { Int($0) }
         guard octets.count == 4 else { return "VPN" }
         if octets[0] == 100, (64...127).contains(octets[1]) { return "TAILSCALE" }
@@ -432,6 +472,7 @@ final class SystemStatsManager: ObservableObject {
 
         var received: UInt64 = 0
         var sent: UInt64 = 0
+        var perInterface: [String: (rx: UInt64, tx: UInt64)] = [:]
 
         for pointer in sequence(first: first, next: { $0.pointee.ifa_next }) {
             let interface = pointer.pointee
@@ -442,12 +483,18 @@ final class SystemStatsManager: ObservableObject {
             guard interface.ifa_flags & UInt32(IFF_LOOPBACK) == 0 else { continue }
             guard let data = interface.ifa_data?.assumingMemoryBound(to: if_data.self) else { continue }
 
-            received += UInt64(data.pointee.ifi_ibytes)
-            sent += UInt64(data.pointee.ifi_obytes)
+            let rx = UInt64(data.pointee.ifi_ibytes)
+            let tx = UInt64(data.pointee.ifi_obytes)
+            received += rx
+            sent += tx
+            perInterface[String(cString: interface.ifa_name)] = (rx, tx)
         }
 
         let now = Date()
-        defer { previousNetwork = (received, sent, now) }
+        defer {
+            previousNetwork = (received, sent, now)
+            previousPerInterface = perInterface
+        }
         guard let previous = previousNetwork else { return }
 
         let elapsed = now.timeIntervalSince(previous.at)
@@ -455,5 +502,20 @@ final class SystemStatsManager: ObservableObject {
 
         networkDownBytesPerSec = Double(received &- previous.received) / elapsed
         networkUpBytesPerSec = Double(sent &- previous.sent) / elapsed
+
+        var rates: [String: InterfaceRate] = [:]
+        for (name, current) in perInterface {
+            guard let was = previousPerInterface[name] else { continue }
+            rates[name] = InterfaceRate(
+                down: Double(current.rx &- was.rx) / elapsed,
+                up: Double(current.tx &- was.tx) / elapsed)
+        }
+        if rates != interfaceRates { interfaceRates = rates }
     }
+}
+
+/// Throughput for one network interface.
+struct InterfaceRate: Equatable {
+    let down: Double
+    let up: Double
 }
