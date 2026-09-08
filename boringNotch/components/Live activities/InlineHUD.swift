@@ -50,7 +50,10 @@ struct InlineHUD: View {
                                 .contentTransition(.interpolate)
                                 .frame(width: 20, height: 15, alignment: .center)
                         case .wifi:
-                            Image(systemName: "wifi")
+                            // The caller's icon, not a fixed one. `wifi.slash` was being
+                            // passed for a drop and thrown away here, so losing a network
+                            // drew the same full-strength glyph as joining one.
+                            Image(systemName: icon.isEmpty ? "wifi" : icon)
                                 .contentTransition(.interpolate)
                                 .frame(width: 20, height: 15, alignment: .center)
                         case .bluetooth:
@@ -197,7 +200,9 @@ struct InlineHUD: View {
     private var leftLabel: String {
         switch type {
         case .bluetooth: value == 1 ? "Connected" : "Disconnected"
-        case .wifi: value == 1 ? "Wi-Fi" : "Wi-Fi lost"
+        // Same reasoning as `.systemAlert` below: joining, switching and dropping all
+        // arrive as one type, and `value` only distinguishes the last of the three.
+        case .wifi: label.isEmpty ? (value == 1 ? "Wi-Fi" : "Wi-Fi lost") : label
         // The rule picks its own word -- "CPU high" and "Draining" arrive under one type,
         // so there is nothing here that could derive it.
         case .systemAlert: label.isEmpty ? "System" : label

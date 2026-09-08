@@ -103,14 +103,37 @@ final class ConnectionActivityManager: NSObject {
         guard associated else {
             BoringViewCoordinator.shared.toggleSneakPeek(
                 status: true, type: .wifi, duration: 4, value: 0,
-                icon: "wifi.slash", detail: lastSSID ?? "no network", detailSecondary: "")
+                icon: "wifi.slash", detail: lastSSID ?? "no network", detailSecondary: "",
+                label: "Disconnected", tint: .orange)
             return
         }
+
+        // Which of the three things that just happened, said in the word the notch leads
+        // with. "Wi-Fi" beside a network name was the *state*, not the event: it read
+        // identically whether the Mac had joined that network from nothing, hopped to it
+        // from another one, or simply reassociated to the one it was already on. The name
+        // and the signal answered "what am I on"; nobody was asking that -- the reason the
+        // notch spoke up at all is that something changed, and it was the one thing it
+        // would not say.
+        let label: String
+        let detail: String
+        if switched, let from = lastSSID, let to = ssid {
+            // Both ends, because a switch is the one case where the network you *left* is
+            // half the news -- and it is the half that is gone from the interface by the
+            // time anything can be read off it.
+            label = "Switched"
+            detail = "\(from) → \(to)"
+        } else {
+            label = "Joined"
+            detail = Self.networkName(interface)
+        }
+
         BoringViewCoordinator.shared.toggleSneakPeek(
             status: true, type: .wifi, duration: 4, value: 1,
             icon: "wifi",
-            detail: Self.networkName(interface),
-            detailSecondary: Self.linkDetail(interface))
+            detail: detail,
+            detailSecondary: Self.linkDetail(interface),
+            label: label)
     }
 
     /// The network's name, when macOS will give it.
@@ -136,6 +159,17 @@ final class ConnectionActivityManager: NSObject {
         // Both figures if the radio has them by now -- after the settle delay it usually
         // does, and "-61 dBm" alone was a thin thing to have waited for.
         return parts.joined(separator: " · ")
+    }
+
+    /// Picks up the current network as the baseline, without announcing anything.
+    ///
+    /// Only ever fills a gap: if the name is already known this leaves it alone, so a grant
+    /// changing mid-session cannot quietly rewrite what the next switch compares against.
+    fileprivate func refreshBaselineSSID() {
+        guard lastSSID == nil, let ssid = CWWiFiClient.shared().interface()?.ssid(),
+              !ssid.isEmpty else { return }
+        lastSSID = ssid
+        wasOnWiFi = true
     }
 
     /// Announced by `BluetoothBatteryManager` when a device appears or goes away.
@@ -164,5 +198,10 @@ extension ConnectionActivityManager: CWEventDelegate {
 extension ConnectionActivityManager: CLLocationManagerDelegate {
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         logger.notice("location authorisation \(manager.authorizationStatus.rawValue, privacy: .public)")
+        // The grant arrives a second or two after `start()` asks for it, and until it does
+        // `ssid()` returns nil -- so the network already joined at launch was never written
+        // down, and the first switch after a restart had no name to say it came *from*.
+        // Reading it here is the earliest moment there is anything to read.
+        Task { @MainActor in ConnectionActivityManager.shared.refreshBaselineSSID() }
     }
 }

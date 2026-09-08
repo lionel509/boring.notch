@@ -10,7 +10,7 @@ import Combine
 import Defaults
 import SwiftUI
 
-enum SneakContentType {
+enum SneakContentType: Equatable {
     case brightness
     case volume
     case backlight
@@ -253,7 +253,6 @@ class BoringViewCoordinator: ObservableObject {
         icon: String = "", detail: String = "", detailSecondary: String = "", label: String = "",
         tint: Color = .white
     ) {
-        sneakPeekDuration = duration
         // `hudReplacement` is a promise about volume and brightness -- that the notch will
         // stand in for the system HUD. A Wi-Fi or Bluetooth event replaces no HUD at all, so
         // gating it on that setting would hide the feature behind an unrelated switch.
@@ -263,6 +262,21 @@ class BoringViewCoordinator: ObservableObject {
                 return
             }
         }
+
+        // Announcements take their turn; everything else takes the notch. A volume key is a
+        // control the user is holding right now and cannot be made to wait behind a
+        // four-second network message -- but the reverse is not true, and an announcement
+        // that gets written over is simply lost, because nothing the user can press will
+        // bring it back.
+        if status, type.isAnnouncement {
+            enqueueAnnouncement(
+                QueuedAnnouncement(
+                    type: type, duration: duration, value: value, icon: icon, detail: detail,
+                    detailSecondary: detailSecondary, label: label, tint: tint))
+            return
+        }
+
+        sneakPeekDuration = duration
         Task { @MainActor in
             withAnimation(.smooth) {
                 self.sneakPeek.show = status
@@ -283,6 +297,89 @@ class BoringViewCoordinator: ObservableObject {
 
     private var sneakPeekDuration: TimeInterval = 1.5
     private var sneakPeekTask: Task<Void, Never>?
+
+    // MARK: - Announcement queue
+
+    /// One announcement waiting its turn.
+    ///
+    /// An announcement reports something that *happened*, and the events worth announcing
+    /// arrive in clusters -- leaving a network and joining another, a headset dropping as
+    /// its case closes, a thermal rule firing while both of those are still on screen.
+    /// Every one of them called straight into `sneakPeek`, so the second overwrote the
+    /// first mid-sentence and the four-second timer restarted around the survivor. What you
+    /// saw was the last event of the burst, with no sign that the others had ever happened.
+    private struct QueuedAnnouncement: Equatable {
+        let type: SneakContentType
+        let duration: TimeInterval
+        let value: CGFloat
+        let icon: String
+        let detail: String
+        let detailSecondary: String
+        let label: String
+        let tint: Color
+    }
+
+    private var announcementQueue: [QueuedAnnouncement] = []
+    private var announcementDrainTask: Task<Void, Never>?
+
+    /// Deeper than any real burst, so the cap only ever bites on a fault -- an access point
+    /// flapping, a rule retriggering. Then it drops the *oldest*, because a radio that keeps
+    /// dropping makes its early events obsolete: the newest is the one still true.
+    private static let announcementQueueLimit = 4
+
+    /// A beat with the notch shut between two announcements, so they read as two events
+    /// rather than one message rewriting itself. Load-bearing rather than decorative:
+    /// `InlineHUD` starts its name-then-signal swap from `onAppear`, and the view only
+    /// leaves the hierarchy when `show` goes false, so without the gap the second
+    /// announcement would inherit the first one's timing and never show its second half.
+    private static let announcementGap: TimeInterval = 0.3
+
+    private func enqueueAnnouncement(_ announcement: QueuedAnnouncement) {
+        // The same event twice is one event: a link change fires per interface, and an
+        // alert rule that is still true re-fires on its own schedule.
+        guard !announcementQueue.contains(announcement) else { return }
+        announcementQueue.append(announcement)
+        if announcementQueue.count > Self.announcementQueueLimit {
+            announcementQueue.removeFirst(announcementQueue.count - Self.announcementQueueLimit)
+        }
+        // With the notch already showing something, the hide that is already scheduled will
+        // come back for the queue. With it empty, nothing else is going to.
+        if !sneakPeek.show { drainAnnouncementsSoon() }
+    }
+
+    /// Schedules the next announcement after `announcementGap`.
+    ///
+    /// Guarded on the task rather than the queue so two callers -- an arrival and a peek
+    /// ending at the same moment -- cannot both schedule one and cut the first short.
+    private func drainAnnouncementsSoon() {
+        guard announcementDrainTask == nil, !announcementQueue.isEmpty else { return }
+        announcementDrainTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(BoringViewCoordinator.announcementGap))
+            guard let self else { return }
+            self.announcementDrainTask = nil
+            // A volume HUD cutting in during the gap keeps the notch; its own hide will
+            // come back here when it is done.
+            guard !self.sneakPeek.show else { return }
+            self.presentNextAnnouncement()
+        }
+    }
+
+    private func presentNextAnnouncement() {
+        guard !announcementQueue.isEmpty else { return }
+        let next = announcementQueue.removeFirst()
+        // Set before the mutation, not after: `sneakPeek.didSet` reads it to size the hide.
+        sneakPeekDuration = next.duration
+        withAnimation(.smooth) {
+            sneakPeek.show = true
+            sneakPeek.type = next.type
+            sneakPeek.value = next.value
+            sneakPeek.icon = next.icon
+            sneakPeek.detail = next.detail
+            sneakPeek.detailSecondary = next.detailSecondary
+            sneakPeek.label = next.label
+            sneakPeek.tint = next.tint
+        }
+    }
 
     /// Hides the peek when its time is up.
     ///
@@ -317,6 +414,12 @@ class BoringViewCoordinator: ObservableObject {
                 scheduleSneakPeekHide(after: sneakPeekDuration)
             } else {
                 sneakPeekTask?.cancel()
+                // The notch is free, so whatever piled up while it was busy gets its turn --
+                // including anything left waiting behind a volume HUD that cut in front of
+                // it. Hooked here rather than in the hide timer because this is the one
+                // place every route to an empty notch passes through: the timer expiring, a
+                // peek being dismissed outright, the XPC path sending `status: false`.
+                drainAnnouncementsSoon()
             }
         }
     }
