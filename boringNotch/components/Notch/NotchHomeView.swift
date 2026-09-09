@@ -633,11 +633,42 @@ struct LyricScrollColumn: View, Equatable {
     /// Measured against the real font rather than counted in characters — Hangul is roughly
     /// twice the advance width of a Latin letter, so a character count would call a short
     /// Korean line short when it is not.
+    ///
+    /// It has to be the font the row *draws in*, which is not the one the text style hands
+    /// back. `row` renders at `.fontWeight(.medium)`, and medium runs about 2.3% wider than
+    /// regular — so measuring the regular face called a line short when the drawn line was
+    /// not, handed it `lineLimit(1)`, and truncated it. Measured on this Mac: "Act like an
+    /// angel and dress like crazy" is **193.2 pt** regular against **197.6 pt** medium, and
+    /// this column is about 196 pt wide. Every line landing in that 4.4 pt band lost its
+    /// ending, which is exactly the case this view exists to avoid.
     private func rowCount(for text: String) -> Int {
         guard width > 0 else { return 1 }
-        let font = NSFont.preferredFont(forTextStyle: .subheadline)
-        let measured = NSAttributedString(string: text, attributes: [.font: font]).size().width
-        return measured <= width ? 1 : Self.maximumRows
+        let measured = NSAttributedString(
+            string: text, attributes: [.font: Self.face(for: text)]).size().width
+        return measured <= width - Self.wrapMargin ? 1 : Self.maximumRows
+    }
+
+    /// Wrap rather than truncate when it is close.
+    ///
+    /// `NSAttributedString.size()` and SwiftUI's own layout do not agree to the pixel — the
+    /// renderer applies tracking the measurement does not — so a line measuring exactly at
+    /// the boundary can still overflow. The two failures are not symmetric: a needless
+    /// second row costs one line of context, while truncation loses the end of the line,
+    /// and the end is where the rhyme is. Round toward wrapping, which is the whole reason
+    /// this column wraps at all.
+    private static let wrapMargin: CGFloat = 4
+
+    /// The face the row will actually draw this line in, Persian branch included.
+    private static func face(for text: String) -> NSFont {
+        let size = NSFont.preferredFont(forTextStyle: .subheadline).pointSize
+        if isPersian(text), let vazirmatn = NSFont(name: "Vazirmatn-Regular", size: size) {
+            return vazirmatn
+        }
+        return NSFont.systemFont(ofSize: size, weight: .medium)
+    }
+
+    private static func isPersian(_ text: String) -> Bool {
+        text.unicodeScalars.contains { (0x0600...0x06FF).contains($0.value) }
     }
 
     /// Splits a leading singer tag off a lyric line.
@@ -656,10 +687,7 @@ struct LyricScrollColumn: View, Equatable {
     }
 
     private func row(_ text: String, isCurrent: Bool, rows: Int) -> some View {
-        let isPersian = text.unicodeScalars.contains { scalar in
-            let v = scalar.value
-            return v >= 0x0600 && v <= 0x06FF
-        }
+        let isPersian = Self.isPersian(text)
         let (tag, body) = Self.splitSingerTag(text)
         let styled: Text = tag.isEmpty
             ? Text(text)
