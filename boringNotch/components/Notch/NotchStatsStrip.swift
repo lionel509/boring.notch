@@ -359,12 +359,25 @@ struct NotchStatsStrip: View {
         // it fills in over a session instead of arriving complete -- which is honest for a
         // quantity that moves that slowly.
         ForEach(bluetooth.devices) { device in
+            // Earbuds put both numbers in the one cell rather than earning a second cell
+            // that repeats the lower of them: `percent` is by definition `min(L, R)`, so a
+            // name cell plus an L and an R would spend three slots saying two things. The
+            // tint still tracks the weaker bud -- that is the one that ends the call.
             gauge(device.name.uppercased(),
-                  "\(device.percent)%",
-                  widest: "100%",
+                  device.reading,
+                  widest: device.isSplit ? "L100 R100" : "100%",
                   tint: StatsPalette.severity(1 - Double(device.percent) / 100),
                   trend: device.history,
                   alarming: device.percent <= 10)
+            // The case is absent far more often than the buds are -- it reports only while
+            // awake and in range -- so it appears and disappears on its own rather than
+            // leaving a permanent empty third of the earbud cell.
+            if let caseCharge = device.caseCharge {
+                gauge("CASE", "\(caseCharge)%",
+                      widest: "100%",
+                      tint: StatsPalette.severity(1 - Double(caseCharge) / 100),
+                      alarming: caseCharge <= 10)
+            }
             // The equivalent of POWER OUT for something that will not tell us its wattage.
             // Appears once it has been watched long enough to be a measurement rather than
             // a rounding artefact.

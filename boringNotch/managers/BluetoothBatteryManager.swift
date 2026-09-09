@@ -86,6 +86,27 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
         /// that ends the call. A single figure is what the row has space for, and an average
         /// would read 50% with one bud flat.
         let percent: Int
+        /// The per-bud split, when the device reports one. `system_profiler` is the only
+        /// source that carries it -- GATT `0x2A19` is a single byte and cannot express three
+        /// numbers -- so these are populated for classic Apple earbuds and stay nil for
+        /// everything else, the AirPods Max included: one earpiece, as far as its battery
+        /// is concerned.
+        var left: Int? = nil
+        var right: Int? = nil
+        /// The case, which reports only while it is awake and in range. It comes and goes
+        /// independently of the buds, so it cannot share their cell.
+        var caseCharge: Int? = nil
+
+        /// Whether there are two sides worth naming separately. A device reporting only one
+        /// of them is drawn as a single figure -- an `L` with no `R` is worse than neither.
+        var isSplit: Bool { left != nil && right != nil }
+
+        /// `L95 R94` for earbuds, `95%` for everything else.
+        var reading: String {
+            if let left, let right { return "L\(left) R\(right)" }
+            return "\(percent)%"
+        }
+
         /// Charge over the session, oldest first, as a 0...1 fraction. Polled once a minute,
         /// so this fills in slowly and honestly rather than being interpolated into a curve.
         var history: [Double] = []
@@ -513,7 +534,11 @@ extension BluetoothBatteryManager {
                     history.append(Double(percent) / 100)
                     if history.count > 60 { history.removeFirst(history.count - 60) }
                     found[id] = Device(
-                        id: id, name: name, percent: percent, history: history,
+                        id: id, name: name, percent: percent,
+                        left: Self.percent(properties["device_batteryLevelLeft"]),
+                        right: Self.percent(properties["device_batteryLevelRight"]),
+                        caseCharge: Self.percent(properties["device_batteryLevelCase"]),
+                        history: history,
                         firstPercent: existing?.firstPercent ?? percent,
                         firstSeen: existing?.firstSeen ?? .now)
                 }
