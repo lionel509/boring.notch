@@ -226,6 +226,10 @@ final class BluetoothBatteryManager: NSObject, ObservableObject {
     /// false and the fallback below polls `system_profiler` slowly instead. The feature
     /// degrades to "less prompt" rather than to "gone".
     private var ioBluetoothWorks = false
+    /// When a point was last appended to the classic sparklines. The membership poll now
+    /// carries the charge, so it arrives every five seconds -- but the trend is meant to show
+    /// a session, and 60 points at 5 s would show five minutes. Held to the original cadence.
+    private var lastClassicHistory: Date = .distantPast
     private var readingClassic = false
     private var lastClassicRead: Date = .distantPast
     /// Floor between helper calls, so a burst of connect events is still one spawn.
@@ -434,9 +438,12 @@ extension BluetoothBatteryManager {
         }
 
         var connected: [String: String] = [:]
+        var readings: [String: Reading] = [:]
         for device in paired where device.isConnected() {
             guard let address = device.addressString else { continue }
-            connected[Self.canonical(address)] = device.name ?? "Bluetooth device"
+            let id = Self.canonical(address)
+            connected[id] = device.name ?? "Bluetooth device"
+            if let reading = Self.ioBattery(device) { readings[id] = reading }
         }
 
         let ids = Set(connected.keys)
@@ -489,9 +496,98 @@ extension BluetoothBatteryManager {
             publish()
         }
 
-        if changed || subscribers > 0 || !pendingAnnounceClassic.isEmpty {
+        // The free refresh. Every connected device IOBluetooth can answer for is now updated
+        // in-process on the bare watch tick, which is what removes `subscribers > 0` from the
+        // condition below: an open panel used to spawn `system_profiler` every five seconds
+        // for numbers that were already sitting in the sweep that watched membership.
+        applyIOReadings(readings)
+
+        // The tool is still the only source for two things: the name Lionel actually set --
+        // IOBluetooth reports `AirPods Pro` while a link is up and his own name only while it
+        // is down -- and any connected device whose charge IOBluetooth does not carry. So it
+        // runs on a membership change, for an announcement, or when someone connected is still
+        // unaccounted for; never on the bare tick.
+        //
+        // The condition is deliberately about devices the tool is *still* the source for, not
+        // about devices nothing can answer for. His phone and his watch are connected classic
+        // devices that publish no battery to either source, so "unaccounted for" would have
+        // been permanently true while either was linked -- spawning on every tick, which is
+        // worse than the behaviour this replaces.
+        let toolOnly = ids.contains { readings[$0] == nil && classic[$0] != nil }
+        if changed || !pendingAnnounceClassic.isEmpty || (subscribers > 0 && toolOnly) {
             readClassicBattery(force: changed || !pendingAnnounceClassic.isEmpty)
         }
+    }
+
+    /// What one connected device reports over IOBluetooth.
+    private struct Reading: Equatable {
+        var left: Int?
+        var right: Int?
+        var caseCharge: Int?
+        var single: Int?
+
+        /// The lower of the two buds, or the single figure. Same rule the tool path uses.
+        var percent: Int? {
+            if let left, let right { return min(left, right) }
+            return left ?? right ?? single
+        }
+    }
+
+    /// Battery straight off the paired-device sweep, in-process.
+    ///
+    /// Measured against bluetoothd's own record seconds apart: it logged
+    /// `Battery L -61% R -56%` while this read `61` / `58`. The same `pairedDevices()` call
+    /// that watches membership carries the charge, so the numbers on the DEVICES page cost
+    /// nothing beyond a poll that was already happening.
+    ///
+    /// > `isMultiBatteryDevice` looks like the shape test and is not: it reads **0** for the
+    /// > AirPods Pro while left and right both report. Presence of the two sides is the test.
+    ///
+    /// Zero is read as "not reporting" rather than as a charge -- the case answers 0 whenever
+    /// it is shut or out of range, which is most of the time. A device genuinely at 0% is off,
+    /// and so is not connected to be asked.
+    private static func ioBattery(_ device: IOBluetoothDevice) -> Reading? {
+        func read(_ key: String) -> Int? {
+            guard device.responds(to: Selector(key)),
+                  let value = device.value(forKey: key) as? Int, value > 0
+            else { return nil }
+            return min(value, 100)
+        }
+        let reading = Reading(left: read("batteryPercentLeft"),
+                              right: read("batteryPercentRight"),
+                              caseCharge: read("batteryPercentCase"),
+                              single: read("batteryPercentSingle") ?? read("batteryPercentCombined"))
+        return reading.percent == nil ? nil : reading
+    }
+
+    /// Fold the in-process readings into the page, keeping the name already established for
+    /// the device -- the tool's name outranks IOBluetooth's, and a device first seen here gets
+    /// IOBluetooth's only until the spawn on the same membership change corrects it.
+    private func applyIOReadings(_ readings: [String: Reading]) {
+        guard !readings.isEmpty else { return }
+        let appendHistory = Date.now.timeIntervalSince(lastClassicHistory) >= 60
+        var touched = false
+
+        for (id, reading) in readings {
+            guard let percent = reading.percent else { continue }
+            let existing = classic[id]
+            var history = existing?.history ?? []
+            if appendHistory || history.isEmpty {
+                history.append(Double(percent) / 100)
+                if history.count > 60 { history.removeFirst(history.count - 60) }
+            }
+            let device = Device(
+                id: id, name: existing?.name ?? classicConnected[id] ?? "Bluetooth device",
+                percent: percent, left: reading.left, right: reading.right,
+                caseCharge: reading.caseCharge, history: history,
+                firstPercent: existing?.firstPercent ?? percent,
+                firstSeen: existing?.firstSeen ?? .now)
+            if device != existing { touched = true }
+            classic[id] = device
+        }
+
+        if appendHistory { lastClassicHistory = .now }
+        if touched { publish() }
     }
 
     /// The expensive half: `system_profiler`, through the helper, because the sandbox cannot
@@ -544,7 +640,12 @@ extension BluetoothBatteryManager {
                 }
             }
         }
-        classic = found
+        // Merged, not replaced. The tool no longer runs on every tick, so `classic` may
+        // already hold entries this read knows nothing about -- anything IOBluetooth answered
+        // for in between. Whatever the tool did find wins, because it carries the name Lionel
+        // set; anything it did not is left alone and pruned by the membership poll if it
+        // actually goes away.
+        for (id, device) in found { classic[id] = device }
         btTrace("classic read -> \(found.count): \(found.values.map(\.name).joined(separator: ", "))")
 
         // Every pending announcement resolves here -- cleared unconditionally, so nothing can
@@ -559,7 +660,10 @@ extension BluetoothBatteryManager {
         // charge is the only honest discriminator available, and it happens to be the right
         // one: the notch announces what it can show, and a beacon has nothing to show.
         for id in pendingAnnounceClassic {
-            guard let device = found[id] else { continue }
+            // `found` first, then what IOBluetooth already established: the charge gate below
+            // is about whether the device reports one *at all*, and since this read stopped
+            // being the only source, the tool missing a device no longer means it is a beacon.
+            guard let device = found[id] ?? classic[id] else { continue }
             // One device, one activity: a peripheral the Low Energy path already knows about
             // must not announce itself twice under a slightly different name.
             guard !collected.values.contains(where: {
