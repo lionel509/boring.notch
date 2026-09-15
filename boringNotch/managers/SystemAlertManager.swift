@@ -227,18 +227,33 @@ extension AlertRule {
             // Both percentages default to zero when their key is missing, so a partial or
             // abandoned file reads as *plenty of quota left* rather than as no information.
             // The freshness check is what makes a zero here trustworthy.
-            guard let limits = sources.usage.limits,
-                  let updated = limits.updatedAt,
-                  Date().timeIntervalSince(updated) < 3_600
-            else { return nil }
-
-            let onFiveHour = limits.fiveHourPercent >= limits.sevenDayPercent
-            let worst = max(limits.fiveHourPercent, limits.sevenDayPercent)
-            let resets = onFiveHour ? limits.fiveHourResetsAt : limits.sevenDayResetsAt
+            var worst: (percent: Double, label: String, resets: Date?)?
+            if let limits = sources.usage.limits,
+               let updated = limits.updatedAt,
+               Date().timeIntervalSince(updated) < 3_600 {
+                let onFiveHour = limits.fiveHourPercent >= limits.sevenDayPercent
+                worst = (max(limits.fiveHourPercent, limits.sevenDayPercent),
+                         onFiveHour ? "5-hour" : "7-day",
+                         onFiveHour ? limits.fiveHourResetsAt : limits.sevenDayResetsAt)
+            }
+            // Kimi's plan has its own ceiling and its own file; burning one down while
+            // watching the other is exactly the miss this rule exists to prevent.
+            if let kimi = sources.usage.kimiLimits,
+               let updated = kimi.updatedAt,
+               Date().timeIntervalSince(updated) < 3_600 {
+                let onFiveHour = kimi.fiveHourPercent >= kimi.monthPercent
+                let candidate = (percent: max(kimi.fiveHourPercent, kimi.monthPercent),
+                                 label: onFiveHour ? "kimi 5-hour" : "kimi month",
+                                 resets: onFiveHour ? kimi.fiveHourResetsAt : kimi.monthResetsAt)
+                if candidate.percent > (worst?.percent ?? -.infinity) {
+                    worst = candidate
+                }
+            }
+            guard let worst else { return nil }
             return AlertReading(
-                value: worst,
-                detail: "\(onFiveHour ? "5-hour" : "7-day") \(Int(worst.rounded()))%",
-                context: resets.map { "resets \(Self.clock.string(from: $0))" })
+                value: worst.percent,
+                detail: "\(worst.label) \(Int(worst.percent.rounded()))%",
+                context: worst.resets.map { "resets \(Self.clock.string(from: $0))" })
         })
 
     /// A tab finished, is blocked, went quiet, or just started. Four rules rather than one

@@ -39,7 +39,7 @@ struct NotchStatsStrip: View {
     /// Grouped by subject rather than by which manager the numbers came from. `system`
     /// used to carry battery, CPU, memory and both network figures -- three unrelated
     /// questions sharing a row because they arrived together.
-    private enum Page: Hashable { case usage, limits, power, system, network }
+    private enum Page: Hashable { case usage, limits, kimiLimits, power, system, network }
 
     @State private var pageIndex = 0
     @State private var isHeld = false
@@ -57,6 +57,7 @@ struct NotchStatsStrip: View {
         if showUsage {
             pages.append(.usage)
             if usage.limits != nil { pages.append(.limits) }
+            if usage.kimiLimits != nil { pages.append(.kimiLimits) }
         }
         if showSystem {
             // A page has to earn its slot. Six pages at the current flip interval is most
@@ -118,6 +119,7 @@ struct NotchStatsStrip: View {
             // separating them meant waiting a whole flip to find out who spent it.
             case .usage: row { caption("TOKENS USED"); usageCells }
             case .limits: row { caption("PLAN LIMITS"); limitCells }
+            case .kimiLimits: row { caption("KIMI LIMITS"); kimiLimitCells }
             case .power: row { caption("POWER"); powerCells }
             case .system: row { caption("SYSTEM"); systemCells }
             // Captioned by the network itself. An SSID can be long, and a caption is
@@ -308,6 +310,25 @@ struct NotchStatsStrip: View {
                   tint: StatsPalette.severity(limits.sevenDayPercent / 100),
                   alarming: limits.sevenDayPercent >= 90)
             gauge("RESETS IN", Self.countdown(to: limits.sevenDayResetsAt), widest: "23h 59m")
+        }
+    }
+
+    /// Kimi's meters, written to `kimi-limits.json` by the router after each Kimi request
+    /// (it holds the credential; this app holds none). A page of their own rather than four
+    /// more cells on PLAN LIMITS — one subscription per page, the same rule as one subject
+    /// per page everywhere else here. The long window is the billing month, and a month
+    /// reads in days: "30d 4h", not "720h".
+    @ViewBuilder
+    private var kimiLimitCells: some View {
+        if let kimi = usage.kimiLimits {
+            gauge("5 HOUR", "\(Int(kimi.fiveHourPercent.rounded()))%", widest: "100%",
+                  tint: StatsPalette.severity(kimi.fiveHourPercent / 100),
+                  alarming: kimi.fiveHourPercent >= 90)
+            gauge("RESETS IN", Self.countdown(to: kimi.fiveHourResetsAt), widest: "23h 59m")
+            gauge("MONTH", "\(Int(kimi.monthPercent.rounded()))%", widest: "100%",
+                  tint: StatsPalette.severity(kimi.monthPercent / 100),
+                  alarming: kimi.monthPercent >= 90)
+            gauge("RESETS IN", Self.countdown(to: kimi.monthResetsAt), widest: "23h 59m")
         }
     }
 

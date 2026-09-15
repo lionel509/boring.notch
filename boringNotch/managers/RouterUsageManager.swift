@@ -62,6 +62,19 @@ struct SubscriptionLimits: Equatable {
     var updatedAt: Date?
 }
 
+/// The Kimi For Coding plan's own meters, from the `kimi-limits.json` the router writes
+/// beside the log after each Kimi request. It is the router that polls `api.kimi.com`,
+/// not this app — the router already holds the credential, and this app deliberately
+/// holds none (it is GPL-3.0; a key pasted in is a key published). Kimi's long window is
+/// the billing month, not Claude's seven days.
+struct KimiLimits: Equatable {
+    var fiveHourPercent: Double
+    var fiveHourResetsAt: Date?
+    var monthPercent: Double
+    var monthResetsAt: Date?
+    var updatedAt: Date?
+}
+
 /// Reads API usage out of the proxy's request log rather than polling any vendor.
 ///
 /// The proxy appends one JSON object per request:
@@ -79,8 +92,9 @@ struct SubscriptionLimits: Equatable {
 /// through the proxy". Traffic that bypasses it — a browser session, an app calling a
 /// vendor directly — is invisible here, which is why the strip labels the figure rather
 /// than presenting it as a total bill. Subscription rows also carry no `cost`, because plan
-/// quota is not dollars; those show as tokens only, and the quota itself comes from
-/// `rate-limits.json` instead.
+/// quota is not dollars; those show as tokens only, and the quota itself comes from the
+/// files beside the log instead — `rate-limits.json` from the statusline (Claude's plan),
+/// `kimi-limits.json` from the router (Kimi's plan).
 @MainActor
 final class RouterUsageManager: ObservableObject {
     static let shared = RouterUsageManager()
@@ -89,6 +103,7 @@ final class RouterUsageManager: ObservableObject {
     /// is a fold over the same scan, and a midnight rollover needs no special handling.
     @Published private(set) var totalsByDay: [String: [String: RouterUsageTotals]] = [:]
     @Published private(set) var limits: SubscriptionLimits?
+    @Published private(set) var kimiLimits: KimiLimits?
     @Published private(set) var isAvailable = false
     @Published private(set) var needsAuthorization = false
 
@@ -177,10 +192,12 @@ final class RouterUsageManager: ObservableObject {
             let logURL = Self.logURL(granted: granted, fallback: fallback)
             let scanned = Self.scan(url: logURL, from: startOffset, into: carried)
             let limits = Self.readLimits(beside: logURL)
+            let kimiLimits = Self.readKimiLimits(beside: logURL)
 
             await MainActor.run {
                 self.isReading = false
                 self.limits = limits
+                self.kimiLimits = kimiLimits
 
                 switch scanned {
                 case .success(let result):
@@ -211,36 +228,54 @@ final class RouterUsageManager: ObservableObject {
         return isDirectory == true ? granted.appendingPathComponent("requests.log") : granted
     }
 
+    /// Two date shapes share these files, which is why this is not a one-liner. `ts`
+    /// fields are ISO 8601; the reset fields in `rate-limits.json` are Unix seconds —
+    /// and they arrive quoted, so neither a date parser nor a numeric cast finds them on
+    /// its own. Parsed as ISO 8601 only, both reset fields came back nil and the strip's
+    /// RESETS IN gauge could never have read anything but an em dash. The router's
+    /// `kimi-limits.json` writes ISO strings throughout, which the first branch covers.
+    private nonisolated static func limitsDate(_ object: [String: Any], key: String) -> Date? {
+        let iso = ISO8601DateFormatter()
+        switch object[key] {
+        case let text as String:
+            if let parsed = iso.date(from: text) { return parsed }
+            return TimeInterval(text).map(Date.init(timeIntervalSince1970:))
+        case let seconds as TimeInterval:
+            return Date(timeIntervalSince1970: seconds)
+        default:
+            return nil
+        }
+    }
+
     private nonisolated static func readLimits(beside log: URL) -> SubscriptionLimits? {
         let url = log.deletingLastPathComponent().appendingPathComponent("rate-limits.json")
         guard let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
 
-        let iso = ISO8601DateFormatter()
-        // Two shapes in the same file, which is why this is not a one-liner. `ts` is ISO 8601;
-        // the two reset fields are Unix seconds -- and they arrive quoted, so neither a date
-        // parser nor a numeric cast finds them on its own. Parsed as ISO 8601 only, both reset
-        // fields came back nil and the strip's RESETS IN gauge could never have read anything
-        // but an em dash.
-        func date(_ key: String) -> Date? {
-            switch object[key] {
-            case let text as String:
-                if let parsed = iso.date(from: text) { return parsed }
-                return TimeInterval(text).map(Date.init(timeIntervalSince1970:))
-            case let seconds as TimeInterval:
-                return Date(timeIntervalSince1970: seconds)
-            default:
-                return nil
-            }
-        }
-
         return SubscriptionLimits(
             fiveHourPercent: (object["five_hour_pct"] as? Double) ?? 0,
-            fiveHourResetsAt: date("five_hour_resets_at"),
+            fiveHourResetsAt: limitsDate(object, key: "five_hour_resets_at"),
             sevenDayPercent: (object["seven_day_pct"] as? Double) ?? 0,
-            sevenDayResetsAt: date("seven_day_resets_at"),
-            updatedAt: date("ts"))
+            sevenDayResetsAt: limitsDate(object, key: "seven_day_resets_at"),
+            updatedAt: limitsDate(object, key: "ts"))
+    }
+
+    /// Absence reads as silence, not as an error: no file usually means the router is
+    /// older than this feature or no Kimi plan is configured, and neither is something
+    /// to nag about.
+    private nonisolated static func readKimiLimits(beside log: URL) -> KimiLimits? {
+        let url = log.deletingLastPathComponent().appendingPathComponent("kimi-limits.json")
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+
+        return KimiLimits(
+            fiveHourPercent: (object["five_hour_pct"] as? Double) ?? 0,
+            fiveHourResetsAt: limitsDate(object, key: "five_hour_resets_at"),
+            monthPercent: (object["month_pct"] as? Double) ?? 0,
+            monthResetsAt: limitsDate(object, key: "month_resets_at"),
+            updatedAt: limitsDate(object, key: "ts"))
     }
 
     /// Surfaces the real error rather than collapsing every failure to nil — "operation not

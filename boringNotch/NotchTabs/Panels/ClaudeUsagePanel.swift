@@ -104,38 +104,85 @@ struct ClaudeUsagePanel: View {
         }
     }
 
-    /// Quota, not money — the proxy sees tokens, never the plan. These come from the
-    /// `rate-limits.json` the statusline writes beside the log.
+    /// Quota, not money — the proxy sees tokens, never the plan. Claude's meters come from
+    /// the `rate-limits.json` the statusline writes beside the log, Kimi's from the
+    /// `kimi-limits.json` the router writes after each Kimi request.
     private var limits: some View {
         PanelColumn(title: "PLAN LIMITS", width: 150) {
-            if let limits = usage.limits {
+            if usage.limits == nil && usage.kimiLimits == nil {
+                PanelRow(label: Copy.noLimits, value: "—")
+            } else {
                 // A countdown that never counts is just a stale number. Thirty seconds is
                 // finer than the minute the figure is printed to, so it is never visibly wrong.
                 TimelineView(.periodic(from: .now, by: 30)) { context in
-                    VStack(alignment: .leading, spacing: 3) {
-                        meter(
-                            label: "5 hour", percent: limits.fiveHourPercent,
-                            resetsAt: limits.fiveHourResetsAt, now: context.date)
-                        meter(
-                            label: "7 day", percent: limits.sevenDayPercent,
-                            resetsAt: limits.sevenDayResetsAt, now: context.date)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let limits = usage.limits {
+                            limitRow(
+                                "Claude 5h", percent: limits.fiveHourPercent,
+                                resetsAt: limits.fiveHourResetsAt, now: context.date)
+                            limitRow(
+                                "Claude 7d", percent: limits.sevenDayPercent,
+                                resetsAt: limits.sevenDayResetsAt, now: context.date)
+                        }
+                        if let kimi = usage.kimiLimits {
+                            limitRow(
+                                "Kimi 5h", percent: kimi.fiveHourPercent,
+                                resetsAt: kimi.fiveHourResetsAt, now: context.date)
+                            limitRow(
+                                "Kimi month", percent: kimi.monthPercent,
+                                resetsAt: kimi.monthResetsAt, now: context.date)
+                        }
                     }
                 }
-            } else {
-                PanelRow(label: Copy.noLimits, value: "—")
             }
         }
     }
 
-    @ViewBuilder
-    private func meter(label: String, percent: Double, resetsAt: Date?, now: Date) -> some View {
+    /// One window, one row. The bar is the row's own filled background, which buys it the
+    /// full column width — the strongest proportion signal the column can draw, at one row
+    /// per window instead of the three lines a label/bar/RESETS IN stack needed. The plan
+    /// lives in the label rather than in a group header: a header spends a whole row saying
+    /// what four labels say for free. Percent keeps the severity tint as the alarm channel;
+    /// the countdown sits dimmer, secondary to the number it qualifies.
+    private func limitRow(_ label: String, percent: Double, resetsAt: Date?, now: Date) -> some View {
         let fraction = min(max(percent / 100, 0), 1)
-        PanelRow(
-            label: label,
-            value: "\(Int(percent.rounded()))%",
-            tint: StatsPalette.severity(fraction))
-        MeterBar(fraction: fraction, width: 148)
-        PanelRow(label: "Resets in", value: Self.countdown(to: resetsAt, from: now))
+        let tint = StatsPalette.severity(fraction)
+        return HStack(spacing: 0) {
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.62))
+            Spacer(minLength: 4)
+            Text("\(Int(percent.rounded()))%")
+                .font(.system(size: 10, weight: .medium, design: .rounded).monospacedDigit())
+                .foregroundStyle(tint)
+            Text(" · " + Self.countdown(to: resetsAt, from: now))
+                .font(.system(size: 10, weight: .medium, design: .rounded).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        .padding(.horizontal, 6)
+        .frame(height: 19)
+        .background(
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.white.opacity(0.07))
+                GeometryReader { proxy in
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(tint.opacity(0.35))
+                        .frame(width: max(2, proxy.size.width * fraction))
+                        .animation(.smooth(duration: 0.35), value: fraction)
+                }
+            })
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label): \(Int(percent.rounded())) percent")
+    }
+
+    /// The small caps head one group of rows shares — a name at this weight reads as a
+    /// heading rather than as a row.
+    private func groupTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 7, weight: .bold))
+            .tracking(0.7)
+            .foregroundStyle(.white.opacity(0.4))
     }
 
     /// Grouped by upstream because a bare model name does not say who is serving it, and
@@ -148,10 +195,7 @@ struct ClaudeUsagePanel: View {
                 PanelRow(label: Copy.noModels, value: "—")
             } else {
                 ForEach(grouped, id: \.upstream) { group in
-                    Text(group.upstream.uppercased())
-                        .font(.system(size: 7, weight: .bold))
-                        .tracking(0.7)
-                        .foregroundStyle(.white.opacity(0.4))
+                    groupTitle(group.upstream.uppercased())
                     ForEach(group.models) { entry in
                         PanelRow(
                             label: RouterModelLog.short(entry.model),
