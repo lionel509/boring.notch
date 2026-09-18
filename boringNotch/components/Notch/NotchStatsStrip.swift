@@ -39,7 +39,7 @@ struct NotchStatsStrip: View {
     /// Grouped by subject rather than by which manager the numbers came from. `system`
     /// used to carry battery, CPU, memory and both network figures -- three unrelated
     /// questions sharing a row because they arrived together.
-    private enum Page: Hashable { case usage, limits, kimiLimits, power, system, network }
+    private enum Page: Hashable { case usage, limits, power, system, network }
 
     @State private var pageIndex = 0
     @State private var isHeld = false
@@ -56,8 +56,10 @@ struct NotchStatsStrip: View {
         var pages: [Page] = []
         if showUsage {
             pages.append(.usage)
-            if usage.limits != nil { pages.append(.limits) }
-            if usage.kimiLimits != nil { pages.append(.kimiLimits) }
+            // Both subscriptions share one page. Two plans is two facts each, not a
+            // subject each, and a page per vendor meant waiting a whole flip to compare
+            // them -- the same reason TOKENS USED stopped being two pages.
+            if usage.limits != nil || usage.kimiLimits != nil { pages.append(.limits) }
         }
         if showSystem {
             // A page has to earn its slot. Six pages at the current flip interval is most
@@ -119,7 +121,6 @@ struct NotchStatsStrip: View {
             // separating them meant waiting a whole flip to find out who spent it.
             case .usage: row { caption("TOKENS USED"); usageCells }
             case .limits: row { caption("PLAN LIMITS"); limitCells }
-            case .kimiLimits: row { caption("KIMI LIMITS"); kimiLimitCells }
             case .power: row { caption("POWER"); powerCells }
             case .system: row { caption("SYSTEM"); systemCells }
             // Captioned by the network itself. An SSID can be long, and a caption is
@@ -296,40 +297,41 @@ struct NotchStatsStrip: View {
         return String(template.map { $0.isNumber ? "9" : $0 })
     }
 
-    /// The subscription's own meters. These are quota, not money, which is why they cannot
-    /// come from the request log — the proxy sees tokens, not the plan. The statusline
-    /// publishes them beside the log from the JSON Claude Code hands it.
+    /// Every subscription's own meters, on one page. These are quota, not money, which is
+    /// why they cannot come from the request log — the proxy sees tokens, not the plan. The
+    /// statusline publishes Claude's beside the log from the JSON Claude Code hands it; the
+    /// router writes Kimi's to `kimi-limits.json` after each Kimi request, because it holds
+    /// that credential and this app holds none.
+    ///
+    /// Two cells per plan, not four: each reset countdown rides in the cell it qualifies.
+    /// Split out, a countdown needed its own label, and "RESETS IN" repeated down the row
+    /// was the loudest thing on a page whose actual content is percentages.
+    ///
+    /// That halving is what makes one page affordable. A page per vendor is the tidier rule
+    /// on paper and the worse one in the notch — the strip flips on a timer, so a second
+    /// page is not a second place to look, it is a wait. Both plans answer the same
+    /// question, and the answer is only useful side by side.
+    ///
+    /// The long Kimi window is the billing month, and a month reads in days: "30d 4h", not
+    /// "720h". Labels carry the plan name because the caption can no longer.
     @ViewBuilder
     private var limitCells: some View {
         if let limits = usage.limits {
-            gauge("5 HOUR", "\(Int(limits.fiveHourPercent.rounded()))%", widest: "100%",
+            gauge("CLAUDE 5H", "\(Int(limits.fiveHourPercent.rounded()))%", widest: "100%",
                   detail: Self.countdown(to: limits.fiveHourResetsAt), detailWidest: "23h 59m",
                   tint: StatsPalette.severity(limits.fiveHourPercent / 100),
                   alarming: limits.fiveHourPercent >= 90)
-            gauge("7 DAY", "\(Int(limits.sevenDayPercent.rounded()))%", widest: "100%",
+            gauge("CLAUDE 7D", "\(Int(limits.sevenDayPercent.rounded()))%", widest: "100%",
                   detail: Self.countdown(to: limits.sevenDayResetsAt), detailWidest: "9d 23h",
                   tint: StatsPalette.severity(limits.sevenDayPercent / 100),
                   alarming: limits.sevenDayPercent >= 90)
         }
-    }
-
-    /// Kimi's meters, written to `kimi-limits.json` by the router after each Kimi request
-    /// (it holds the credential; this app holds none). A page of their own rather than more
-    /// cells on PLAN LIMITS — one subscription per page, the same rule as one subject per
-    /// page everywhere else here. The long window is the billing month, and a month reads in
-    /// days: "30d 4h", not "720h".
-    ///
-    /// Two cells, not four: each reset countdown rides in the cell it belongs to. Split out,
-    /// they needed a label, and "RESETS IN" twice on a four-column row was the loudest thing
-    /// on a page whose actual content is two percentages.
-    @ViewBuilder
-    private var kimiLimitCells: some View {
         if let kimi = usage.kimiLimits {
-            gauge("5 HOUR", "\(Int(kimi.fiveHourPercent.rounded()))%", widest: "100%",
+            gauge("KIMI 5H", "\(Int(kimi.fiveHourPercent.rounded()))%", widest: "100%",
                   detail: Self.countdown(to: kimi.fiveHourResetsAt), detailWidest: "23h 59m",
                   tint: StatsPalette.severity(kimi.fiveHourPercent / 100),
                   alarming: kimi.fiveHourPercent >= 90)
-            gauge("MONTH", "\(Int(kimi.monthPercent.rounded()))%", widest: "100%",
+            gauge("KIMI MONTH", "\(Int(kimi.monthPercent.rounded()))%", widest: "100%",
                   detail: Self.countdown(to: kimi.monthResetsAt), detailWidest: "99d 23h",
                   tint: StatsPalette.severity(kimi.monthPercent / 100),
                   alarming: kimi.monthPercent >= 90)
