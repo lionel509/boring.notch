@@ -303,32 +303,36 @@ struct NotchStatsStrip: View {
     private var limitCells: some View {
         if let limits = usage.limits {
             gauge("5 HOUR", "\(Int(limits.fiveHourPercent.rounded()))%", widest: "100%",
+                  detail: Self.countdown(to: limits.fiveHourResetsAt), detailWidest: "23h 59m",
                   tint: StatsPalette.severity(limits.fiveHourPercent / 100),
                   alarming: limits.fiveHourPercent >= 90)
-            gauge("RESETS IN", Self.countdown(to: limits.fiveHourResetsAt), widest: "23h 59m")
             gauge("7 DAY", "\(Int(limits.sevenDayPercent.rounded()))%", widest: "100%",
+                  detail: Self.countdown(to: limits.sevenDayResetsAt), detailWidest: "9d 23h",
                   tint: StatsPalette.severity(limits.sevenDayPercent / 100),
                   alarming: limits.sevenDayPercent >= 90)
-            gauge("RESETS IN", Self.countdown(to: limits.sevenDayResetsAt), widest: "23h 59m")
         }
     }
 
     /// Kimi's meters, written to `kimi-limits.json` by the router after each Kimi request
-    /// (it holds the credential; this app holds none). A page of their own rather than four
-    /// more cells on PLAN LIMITS — one subscription per page, the same rule as one subject
-    /// per page everywhere else here. The long window is the billing month, and a month
-    /// reads in days: "30d 4h", not "720h".
+    /// (it holds the credential; this app holds none). A page of their own rather than more
+    /// cells on PLAN LIMITS — one subscription per page, the same rule as one subject per
+    /// page everywhere else here. The long window is the billing month, and a month reads in
+    /// days: "30d 4h", not "720h".
+    ///
+    /// Two cells, not four: each reset countdown rides in the cell it belongs to. Split out,
+    /// they needed a label, and "RESETS IN" twice on a four-column row was the loudest thing
+    /// on a page whose actual content is two percentages.
     @ViewBuilder
     private var kimiLimitCells: some View {
         if let kimi = usage.kimiLimits {
             gauge("5 HOUR", "\(Int(kimi.fiveHourPercent.rounded()))%", widest: "100%",
+                  detail: Self.countdown(to: kimi.fiveHourResetsAt), detailWidest: "23h 59m",
                   tint: StatsPalette.severity(kimi.fiveHourPercent / 100),
                   alarming: kimi.fiveHourPercent >= 90)
-            gauge("RESETS IN", Self.countdown(to: kimi.fiveHourResetsAt), widest: "23h 59m")
             gauge("MONTH", "\(Int(kimi.monthPercent.rounded()))%", widest: "100%",
+                  detail: Self.countdown(to: kimi.monthResetsAt), detailWidest: "99d 23h",
                   tint: StatsPalette.severity(kimi.monthPercent / 100),
                   alarming: kimi.monthPercent >= 90)
-            gauge("RESETS IN", Self.countdown(to: kimi.monthResetsAt), widest: "23h 59m")
         }
     }
 
@@ -505,14 +509,28 @@ struct NotchStatsStrip: View {
     private static let valueFont = Font.system(size: 10, weight: .medium, design: .rounded)
         .monospacedDigit()
 
+    /// The subordinate figure in a cell that carries two. Deliberately smaller and dimmer
+    /// than `valueFont`: a countdown qualifies the percentage beside it, so drawing the two
+    /// at equal weight is what made a two-fact page read as four columns.
+    private static let detailFont = Font.system(size: 8.5, weight: .medium, design: .rounded)
+        .monospacedDigit()
+
     /// - Parameter widest: the longest string this cell can ever display. The cell reserves
     ///   that width up front, so a figure going from `9 KB/s` to `912 KB/s` does not shove
     ///   every cell to its right along the row. Monospaced digits alone are not enough —
     ///   they fix the width of a digit, not the number of digits or the length of a unit.
+    /// - Parameter detail: a second figure that *qualifies* the first rather than standing
+    ///   beside it — a reset countdown against a percentage. It shares the cell so the pair
+    ///   reads as one fact, which is the whole reason it exists: given its own cell it needs
+    ///   its own label, and a label like "RESETS IN" repeated down the row is louder than
+    ///   either number it introduces.
+    /// - Parameter detailWidest: `widest`, for the detail. Same reservation, same reason.
     private func gauge(
         _ label: String,
         _ value: String,
         widest: String,
+        detail: String? = nil,
+        detailWidest: String = "",
         tint: Color? = nil,
         trend: [Double]? = nil,
         alarming: Bool = false
@@ -541,6 +559,21 @@ struct NotchStatsStrip: View {
                             .animation(isFlipping ? nil : .smooth(duration: 0.35), value: value)
                             .fixedSize()
                     }
+
+                if let detail {
+                    Text(detailWidest.isEmpty ? detail : detailWidest)
+                        .font(Self.detailFont)
+                        .hidden()
+                        .overlay(alignment: .leading) {
+                            Text(detail)
+                                .font(Self.detailFont)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .contentTransition(.numericText())
+                                .animation(isFlipping ? nil : .smooth(duration: 0.35),
+                                           value: detail)
+                                .fixedSize()
+                        }
+                }
 
                 // Rendered as soon as the cell has any trace at all, even before there
                 // are two samples to join. Gating on trend.count > 1 meant the plot
