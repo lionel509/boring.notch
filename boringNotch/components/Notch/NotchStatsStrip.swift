@@ -44,11 +44,6 @@ struct NotchStatsStrip: View {
     @State private var pageIndex = 0
     @State private var isHeld = false
     @State private var flipTimer: Timer?
-    /// See `PanelIsFlippingKey`: a figure rolls its digits on its own 0.35 s clock, so one that
-    /// changes mid-flip keeps animating in place while the row slides out from under it and
-    /// visibly fails to travel with everything else.
-    @State private var isFlipping = false
-    @State private var flipReset: Task<Void, Never>?
 
     @Default(.statsStripFlipInterval) private var flipInterval
 
@@ -81,15 +76,8 @@ struct NotchStatsStrip: View {
         guard pages.count > 1 else { return }
         // Snappy and short. A split-flap board goes clack; a 0.42s eased slide reads as
         // the row being dragged rather than flipped.
-        isFlipping = true
-        flipReset?.cancel()
         withAnimation(.snappy(duration: 0.22, extraBounce: 0)) {
             pageIndex = (pageIndex + 1) % pages.count
-        }
-        flipReset = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(320))
-            guard !Task.isCancelled else { return }
-            isFlipping = false
         }
     }
 
@@ -556,9 +544,11 @@ struct NotchStatsStrip: View {
                                 useColor && alarming
                                     ? AnyShapeStyle(accent)
                                     : AnyShapeStyle(Color.white.opacity(0.92)))
-                            // Rolls the digits over rather than swapping them.
-                            .contentTransition(.numericText())
-                            .animation(isFlipping ? nil : .smooth(duration: 0.35), value: value)
+                            // Swapped, not rolled. The rolling-digit transition was lovely
+                            // on a figure that changes now and then, but network speed and
+                            // CPU change every second, so the row was mid-animation almost
+                            // all the time -- redrawing its digits in software at the full
+                            // refresh rate. That was the spike whenever this row showed.
                             .fixedSize()
                     }
 
@@ -570,9 +560,6 @@ struct NotchStatsStrip: View {
                             Text(detail)
                                 .font(Self.detailFont)
                                 .foregroundStyle(.white.opacity(0.45))
-                                .contentTransition(.numericText())
-                                .animation(isFlipping ? nil : .smooth(duration: 0.35),
-                                           value: detail)
                                 .fixedSize()
                         }
                 }
@@ -582,8 +569,9 @@ struct NotchStatsStrip: View {
                 // appeared a second after the notch opened and pushed every figure to its
                 // right along the row — the graph loading was itself the jolt.
                 if showSparklines, let trend {
+                    // A Canvas cannot interpolate between two traces, so animating it
+                    // only opened a transaction every second for nothing.
                     Sparkline(values: trend, color: accent)
-                        .animation(isFlipping ? nil : .smooth(duration: 0.35), value: trend)
                 }
             }
         }
