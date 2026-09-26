@@ -26,10 +26,6 @@ struct RecordPlayerView: View {
     /// 0...1 through the track at a given moment, so the needle can walk inward.
     var progress: (Date) -> Double = { _ in 0 }
 
-    /// 33 1/3 rpm.
-    private static let degreesPerSecond = 200.0
-
-    @State private var bankedAngle = 0.0
     @State private var spinStart: Date?
     @State private var armDown: Bool
     /// Sleeve layout only: the record is out of its sleeve.
@@ -129,12 +125,7 @@ struct RecordPlayerView: View {
     }
 
     private func setPlaying(_ playing: Bool) {
-        if playing {
-            if spinStart == nil { spinStart = Date() }
-        } else if let start = spinStart {
-            bankedAngle += Date().timeIntervalSince(start) * Self.degreesPerSecond
-            spinStart = nil
-        }
+        spinStart = playing ? (spinStart ?? Date()) : nil
         guard !changingRecord else { return }
         // Order matters in the sleeve: the record comes out before the needle drops, and
         // the needle lifts before the record goes back in.
@@ -147,10 +138,6 @@ struct RecordPlayerView: View {
             withAnimation(arm) { armDown = false }
             withAnimation(slide.delay(0.25)) { recordOut = false }
         }
-    }
-
-    private func spinAngle(at date: Date) -> Double {
-        bankedAngle + (spinStart.map { date.timeIntervalSince($0) } ?? 0) * Self.degreesPerSecond
     }
 
     /// The part that changes with the track, sliding off one way and on from the other.
@@ -257,8 +244,8 @@ struct RecordPlayerView: View {
     private func record(diameter d: CGFloat) -> some View {
         let label = d * Self.labelFraction
         return ZStack {
-            // Grooves look the same at any angle, so only the label turns. The vinyl, its
-            // grooves and the shadow draw once instead of 30 times a second.
+            // Grooves look the same at any angle, so only the label turns, and it turns in
+            // Core Animation: nothing here redraws while the record spins.
             Canvas { ctx, size in
                 let r = size.width / 2
                 let c = CGPoint(x: r, y: r)
@@ -286,20 +273,11 @@ struct RecordPlayerView: View {
             }
             .shadow(color: .black.opacity(0.7), radius: 5, y: 2)
 
-            // 30 fps is plenty for 33 rpm.
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: spinStart == nil)) { tl in
-                ZStack {
-                    Image(nsImage: art)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: label, height: label)
-                        .clipShape(Circle())
-                    Circle()
-                        .fill(Color(white: 0.02))
-                        .frame(width: d * 0.035, height: d * 0.035)
-                }
-                .rotationEffect(.degrees(spinAngle(at: tl.date)))
-            }
+            SpinningLabel(art: art, spinning: spinStart != nil)
+                .frame(width: label, height: label)
+            Circle()
+                .fill(Color(white: 0.02))
+                .frame(width: d * 0.035, height: d * 0.035)
             Circle()
                 .strokeBorder(.black.opacity(0.55), lineWidth: max(d * 0.012, 1))
                 .frame(width: label, height: label)
@@ -491,5 +469,86 @@ struct RecordPlayerView: View {
         }
         .frame(width: width, height: height)
         .allowsHitTesting(false)
+    }
+}
+
+/// The record's label, spun by a repeating Core Animation rotation.
+///
+/// The first version drove `rotationEffect` from a 30 fps `TimelineView`, which is a
+/// SwiftUI update and a layout pass of the whole notch per frame. This is one animation
+/// handed to the render server; pausing freezes the layer's clock where it is, so the
+/// record still stops mid-turn rather than snapping back.
+private struct SpinningLabel: NSViewRepresentable {
+    let art: NSImage
+    let spinning: Bool
+
+    func makeNSView(context: Context) -> SpinningLabelView { SpinningLabelView() }
+
+    func updateNSView(_ view: SpinningLabelView, context: Context) {
+        view.setArt(art)
+        view.setSpinning(spinning)
+    }
+}
+
+private final class SpinningLabelView: NSView {
+    /// 33 1/3 rpm.
+    private static let secondsPerTurn = 1.8
+
+    private let label = CALayer()
+    private weak var art: NSImage?
+    private var spinning = false
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        label.contentsGravity = .resizeAspectFill
+        label.masksToBounds = true
+        layer?.addSublayer(label)
+
+        let turn = CABasicAnimation(keyPath: "transform.rotation.z")
+        turn.fromValue = 0
+        turn.toValue = -2 * Double.pi          // negative is clockwise in an unflipped layer
+        turn.duration = Self.secondsPerTurn
+        turn.repeatCount = .infinity
+        turn.isRemovedOnCompletion = false
+        label.add(turn, forKey: "spin")
+        freeze()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        label.frame = bounds
+        label.cornerRadius = bounds.width / 2
+        CATransaction.commit()
+    }
+
+    func setArt(_ image: NSImage) {
+        guard image !== art else { return }
+        art = image
+        label.contents = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+    }
+
+    func setSpinning(_ on: Bool) {
+        guard on != spinning else { return }
+        spinning = on
+        if on {
+            let pausedAt = label.timeOffset
+            label.speed = 1
+            label.timeOffset = 0
+            label.beginTime = 0
+            label.beginTime = label.convertTime(CACurrentMediaTime(), from: nil) - pausedAt
+        } else {
+            freeze()
+        }
+    }
+
+    private func freeze() {
+        let now = label.convertTime(CACurrentMediaTime(), from: nil)
+        label.speed = 0
+        label.timeOffset = now
     }
 }

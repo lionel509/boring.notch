@@ -604,6 +604,14 @@ class MusicManager: ObservableObject {
         syncedLyrics.isEmpty ? plainLyricLines : syncedLyrics.map(\.text)
     }
 
+    /// Where each line of `lyricLines` starts, in seconds, matching `lyricIndex(at:)`.
+    func lyricLineStartTimes() -> [Double] {
+        if !syncedLyrics.isEmpty { return syncedLyrics.map(\.time) }
+        let count = plainLyricLines.count
+        guard count > 0, songDuration > 0 else { return [] }
+        return (1..<max(count, 1)).map { Double($0) * songDuration / Double(count) }
+    }
+
     /// Index of the line being sung, into `lyricLines`.
     func lyricIndex(at elapsed: Double) -> Int {
         if !syncedLyrics.isEmpty { return syncedIndex(at: elapsed) }

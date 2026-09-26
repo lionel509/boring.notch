@@ -262,7 +262,10 @@ struct MusicControlsView: View {
     @ViewBuilder
     private func lyricsBlock(width: CGFloat) -> some View {
         if Defaults[.enableLyrics] {
-            TimelineView(.animation(minimumInterval: 0.25)) { timeline in
+            // Wakes only when the sung line changes. It used to tick four times a second
+            // to notice a change that happens every few seconds, and each tick was a
+            // layout pass of the whole notch.
+            TimelineView(.explicit(lyricChangeDates())) { timeline in
                 let currentElapsed: Double = {
                     guard musicManager.isPlaying else { return musicManager.elapsedTime }
                     let delta = timeline.date.timeIntervalSince(musicManager.timestampDate)
@@ -283,8 +286,23 @@ struct MusicControlsView: View {
         }
     }
 
+    /// When the line being sung will next change, from here to the end of the track.
+    /// Recomputed whenever the player publishes -- a seek, a pause, a new track -- since
+    /// that re-evaluates this view.
+    private func lyricChangeDates() -> [Date] {
+        let now = Date()
+        guard musicManager.isPlaying, musicManager.playbackRate > 0 else { return [now] }
+        let elapsed = musicManager.estimatedPlaybackPosition(at: now)
+        // A hair past each boundary, so the tick lands on the new line, not the old one.
+        return [now] + musicManager.lyricLineStartTimes()
+            .filter { $0 > elapsed }
+            .map { now.addingTimeInterval(($0 - elapsed) / musicManager.playbackRate + 0.03) }
+    }
+
     private var musicSlider: some View {
-        TimelineView(.animation(minimumInterval: musicManager.playbackRate > 0 ? 0.1 : nil)) { timeline in
+        // Twice a second, not ten times: the playhead moves ~2 pt a second on a three-minute
+        // track, and every tick here is a layout pass of the whole notch.
+        TimelineView(.animation(minimumInterval: musicManager.playbackRate > 0 ? 0.5 : nil)) { timeline in
             MusicSliderView(
                 sliderValue: $sliderValue,
                 duration: $musicManager.songDuration,
