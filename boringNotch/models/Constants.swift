@@ -213,6 +213,7 @@ extension Defaults.Keys {
     static let routerLogDiagnostic = Key<String>("routerLogDiagnostic", default: "never read")
 
     static let hideCompletedReminders = Key<Bool>("hideCompletedReminders", default: true)
+    static let artworkStyle = Key<ArtworkStyle>("artworkStyle", default: .deck)
     static let sliderColor = Key<SliderColorEnum>(
         "sliderUseAlbumArtColor",
         default: SliderColorEnum.white

@@ -741,13 +741,19 @@ class MusicManager: ObservableObject {
         }
     }
 
+    /// Which way the last skip went, so the turntable slides the record off the right
+    /// side. Media keys and the player's own buttons leave it as it was, which is fine.
+    @Published private(set) var skippedBackward = false
+
     func nextTrack() {
+        skippedBackward = false
         Task {
             await activeController?.nextTrack()
         }
     }
 
     func previousTrack() {
+        skippedBackward = true
         Task {
             await activeController?.previousTrack()
         }

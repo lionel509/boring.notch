@@ -1208,6 +1208,7 @@ struct Appearance: View {
     @ObservedObject var coordinator = BoringViewCoordinator.shared
     @Default(.mirrorShape) var mirrorShape
     @Default(.sliderColor) var sliderColor
+    @Default(.artworkStyle) var artworkStyle
     @Default(.useMusicVisualizer) var useMusicVisualizer
     @Default(.customVisualizers) var customVisualizers
     @Default(.selectedVisualizer) var selectedVisualizer
@@ -1239,6 +1240,11 @@ struct Appearance: View {
                     .Toggle("Player tinting", key: .playerColorTinting)
                 Defaults.Toggle(key: .lightingEffect) {
                     Text("Enable blur effect behind album art")
+                }
+                Picker("Album art style", selection: $artworkStyle) {
+                    ForEach(ArtworkStyle.allCases, id: \.self) { option in
+                        Text(option.rawValue)
+                    }
                 }
                 Picker("Slider color", selection: $sliderColor) {
                     ForEach(SliderColorEnum.allCases, id: \.self) { option in

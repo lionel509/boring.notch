@@ -64,6 +64,15 @@ enum WindowHeightMode: String, Defaults.Serializable {
     case custom = "Custom height"
 }
 
+/// How the open notch draws the album art. Three of them are record players, kept side
+/// by side so they can be compared live; the losers can go once one is picked.
+enum ArtworkStyle: String, CaseIterable, Defaults.Serializable {
+    case cover = "Square cover"
+    case record = "Record and tonearm"
+    case deck = "Turntable deck"
+    case sleeve = "Sleeve and record"
+}
+
 enum SliderColorEnum: String, CaseIterable, Defaults.Serializable {
     case white = "White"
     case albumArt = "Match album art"

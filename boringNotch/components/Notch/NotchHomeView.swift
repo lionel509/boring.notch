@@ -44,20 +44,58 @@ struct AlbumArtView: View {
     /// with it.
     @State private var revealing = false
 
+    @Default(.artworkStyle) private var artworkStyle
+
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            if Defaults[.lightingEffect] {
-                albumArtBackground
+        if let layout = recordLayout {
+            // The record players carry their own title, and draw nothing behind themselves:
+            // the blurred-cover glow and the text scrim were both clipped to the old square,
+            // and with no cover filling it they read as a grey tile.
+            Button {
+                musicManager.openMusicApp()
+            } label: {
+                RecordPlayerView(
+                    layout: layout,
+                    art: musicManager.albumArt,
+                    title: musicManager.displayTitle,
+                    artist: musicManager.displayArtist,
+                    accent: Defaults[.playerColorTinting]
+                        ? Color(nsColor: musicManager.avgColor).ensureMinimumBrightness(factor: 0.85)
+                        : .white.opacity(0.72),
+                    isPlaying: musicManager.isPlaying,
+                    trackKey: musicManager.displayTitle + "\u{1F}" + musicManager.displayArtist,
+                    skippedBackward: musicManager.skippedBackward,
+                    progress: { date in
+                        let length = musicManager.songDuration
+                        return length > 0 ? musicManager.estimatedPlaybackPosition(at: date) / length : 0
+                    })
+                .matchedGeometryEffect(id: "albumArt", in: albumArtNamespace)
             }
-            albumArtButton
-                .overlay {
-                    if vm.notchState == .open && Defaults[.albumArtShowsIdentity] {
-                        identityOverlay
-                    }
+            .buttonStyle(PlainButtonStyle())
+        } else {
+            ZStack(alignment: .bottomTrailing) {
+                if Defaults[.lightingEffect] {
+                    albumArtBackground
                 }
+                albumArtButton
+                    .overlay {
+                        if vm.notchState == .open && Defaults[.albumArtShowsIdentity] {
+                            identityOverlay
+                        }
+                    }
+            }
+            .onHover { hovering in
+                withAnimation(.smooth(duration: 0.26)) { revealing = hovering }
+            }
         }
-        .onHover { hovering in
-            withAnimation(.smooth(duration: 0.26)) { revealing = hovering }
+    }
+
+    private var recordLayout: RecordPlayerView.Layout? {
+        switch artworkStyle {
+        case .cover: nil
+        case .record: .record
+        case .deck: .deck
+        case .sleeve: .sleeve
         }
     }
 
