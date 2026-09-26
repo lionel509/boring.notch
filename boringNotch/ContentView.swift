@@ -251,6 +251,14 @@ struct ContentView: View {
                             }
                         }
                     }
+                    // `onHover` fires on entry and exit only. A hover refused because a HUD
+                    // was up is never asked again, so a pointer still resting on the notch
+                    // when the HUD goes stayed shut until it left and came back.
+                    .onChange(of: coordinator.sneakPeek.show) { _, showing in
+                        if !showing && isHovering && vm.notchState == .closed {
+                            handleHover(true)
+                        }
+                    }
                     .onChange(of: vm.isBatteryPopoverActive) {
                         if !vm.isBatteryPopoverActive && !isHovering && vm.notchState == .open && !SharingStateManager.shared.preventNotchClose {
                             hoverTask?.cancel()
@@ -656,6 +664,15 @@ struct ContentView: View {
 
     // MARK: - Hover Management
 
+    /// A volume or brightness HUD holds the notch shut against a hover: the pointer is
+    /// often resting up there while the keys are pressed. An announcement does not. A
+    /// Claude tab finishing is exactly what makes you reach for the notch, and queued
+    /// announcements run 4 s each back to back, so a couple of tabs finishing together used
+    /// to lock the notch closed for ten seconds or more.
+    private var peekBlocksHover: Bool {
+        coordinator.sneakPeek.show && !coordinator.sneakPeek.type.isAnnouncement
+    }
+
     private func handleHover(_ hovering: Bool) {
         if coordinator.firstLaunch { return }
         hoverTask?.cancel()
@@ -670,7 +687,7 @@ struct ContentView: View {
             }
             
             guard vm.notchState == .closed,
-                  !coordinator.sneakPeek.show,
+                  !peekBlocksHover,
                   Defaults[.openNotchOnHover] else { return }
             
             hoverTask = Task {
@@ -680,7 +697,7 @@ struct ContentView: View {
                 await MainActor.run {
                     guard self.vm.notchState == .closed,
                           self.isHovering,
-                          !self.coordinator.sneakPeek.show else { return }
+                          !self.peekBlocksHover else { return }
                     
                     self.doOpen()
                 }
