@@ -681,10 +681,14 @@ class MusicManager: ObservableObject {
     }
 
     func calculateAverageColor() {
-        albumArt.averageColor { [weak self] color in
+        let art = albumArt
+        art.averageColor { [weak self] color in
             DispatchQueue.main.async {
+                // The work runs off the main queue, so a slow result for the placeholder
+                // icon or the previous track can land after the current one's. Drop it.
+                guard let self, self.albumArt === art else { return }
                 withAnimation(.smooth) {
-                    self?.avgColor = color ?? .white
+                    self.avgColor = color ?? .white
                 }
             }
         }

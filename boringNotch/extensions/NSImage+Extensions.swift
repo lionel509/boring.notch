@@ -16,93 +16,52 @@ import CoreImage.CIFilterBuiltins
 extension NSImage {
 
     
+    /// The cover's dominant *vivid* colour, not its arithmetic mean.
+    ///
+    /// A mean of a dusky cover is a muddy grey-green whatever the art looks like: teal sky
+    /// plus dark foreground plus pink cloud averages to #233840. Instead, pixels vote into
+    /// 24 hue buckets weighted by saturation x brightness, and the heaviest bucket's own
+    /// mean colour wins. Covers with no real colour fall back to a neutral grey.
     func averageColor(completion: @escaping (NSColor?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-                DispatchQueue.main.async {
-                    completion(nil)
-                }
-                return
-            }
-            
-            let width = cgImage.width
-            let height = cgImage.height
-            let totalPixels = width * height
-            
-            guard let context = CGContext(data: nil,
-                                          width: width,
-                                          height: height,
-                                          bitsPerComponent: 8,
-                                          bytesPerRow: width * 4,
-                                          space: CGColorSpaceCreateDeviceRGB(),
-                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-                DispatchQueue.main.async {
-                    completion(nil)
-                }
-                return
-            }
-            
-            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-            
-            guard let data = context.data else {
-                DispatchQueue.main.async {
-                    completion(nil)
-                }
-                return
-            }
-            
-            let pointer = data.bindMemory(to: UInt32.self, capacity: totalPixels)
-            
-            var totalRed: UInt64 = 0
-            var totalGreen: UInt64 = 0
-            var totalBlue: UInt64 = 0
-            
-            for i in 0..<totalPixels {
-                let color = pointer[i]
-                totalRed += UInt64(color & 0xFF)
-                totalGreen += UInt64((color >> 8) & 0xFF)
-                totalBlue += UInt64((color >> 16) & 0xFF)
-            }
-            
-            let averageRed = CGFloat(totalRed) / CGFloat(totalPixels) / 255.0
-            let averageGreen = CGFloat(totalGreen) / CGFloat(totalPixels) / 255.0
-            let averageBlue = CGFloat(totalBlue) / CGFloat(totalPixels) / 255.0
-            
-            let minBrightness: CGFloat = 0.5
-            let isNearBlack = averageRed < 0.03 && averageGreen < 0.03 && averageBlue < 0.03
-            
-            var finalColor: NSColor
-            
-            if isNearBlack {
-                // If it's near black, just return a gray color with the minimum brightness
-                finalColor = NSColor(white: minBrightness, alpha: 1.0)
-            } else {
-                var color = NSColor(red: averageRed, green: averageGreen, blue: averageBlue, alpha: 1.0)
-                
-                var hue: CGFloat = 0
-                var saturation: CGFloat = 0
-                var brightness: CGFloat = 0
-                var alpha: CGFloat = 0
-                
-                color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
-                
-                if brightness < minBrightness {
-                    // Increase brightness while maintaining hue and reducing saturation
-                    let saturationScale = brightness / minBrightness
-                    color = NSColor(hue: hue,
-                                    saturation: saturation * saturationScale,
-                                    brightness: minBrightness,
-                                    alpha: alpha)
-                }
-                
-                finalColor = color
-            }
-            
-            DispatchQueue.main.async {
-                completion(finalColor)
-            }
+            let color = self.dominantColor()
+            DispatchQueue.main.async { completion(color) }
         }
-        
+    }
+
+    private func dominantColor() -> NSColor? {
+        guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        // 48x48 is plenty to find a dominant hue, and the draw does the downsampling.
+        let side = 48
+        guard let context = CGContext(data: nil, width: side, height: side,
+                                      bitsPerComponent: 8, bytesPerRow: side * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: side, height: side))
+        guard let data = context.data else { return nil }
+        let bytes = data.bindMemory(to: UInt8.self, capacity: side * side * 4)
+
+        let buckets = 24
+        var weight = [CGFloat](repeating: 0, count: buckets)
+        var rgb = [(CGFloat, CGFloat, CGFloat)](repeating: (0, 0, 0), count: buckets)
+        for i in 0..<(side * side) {
+            let r = CGFloat(bytes[i * 4]) / 255, g = CGFloat(bytes[i * 4 + 1]) / 255, b = CGFloat(bytes[i * 4 + 2]) / 255
+            let maxC = max(r, g, b), minC = min(r, g, b)
+            let sat = maxC == 0 ? 0 : (maxC - minC) / maxC
+            guard sat > 0.15, maxC > 0.15 else { continue }
+            let hue = NSColor(red: r, green: g, blue: b, alpha: 1).hueComponent
+            let k = min(Int(hue * CGFloat(buckets)), buckets - 1)
+            let w = sat * maxC
+            weight[k] += w
+            rgb[k].0 += r * w; rgb[k].1 += g * w; rgb[k].2 += b * w
+        }
+
+        guard let best = weight.indices.max(by: { weight[$0] < weight[$1] }),
+              weight[best] > CGFloat(side * side) * 0.01
+        else { return NSColor(white: 0.5, alpha: 1) }
+        let w = weight[best]
+        return NSColor(red: rgb[best].0 / w, green: rgb[best].1 / w, blue: rgb[best].2 / w, alpha: 1)
     }
     
     func getBrightness() -> CGFloat {
@@ -156,13 +115,20 @@ extension Color {
         
         rgbColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
         
-        // Calculate perceived brightness using the formula: (0.299*R + 0.587*G + 0.114*B)
-        let perceivedBrightness = (0.2126 * red + 0.7152 * green + 0.0722 * blue)
-        
-        let scale = factor / perceivedBrightness
-        red = min(red * scale, 1.0)
-        green = min(green * scale, 1.0)
-        blue = min(blue * scale, 1.0)
+        // Brighten without moving the hue. Scaling each channel toward a luminance target
+        // clips the strongest one first, and because green carries most of the luminance a
+        // dark teal came out mint. So scale until the brightest channel reaches 1 (exact
+        // ratios, exact hue), then mix toward white for whatever luminance is still owed.
+        func luminance() -> CGFloat { 0.2126 * red + 0.7152 * green + 0.0722 * blue }
+        guard luminance() < factor else { return self }
+        let peak = max(red, green, blue)
+        guard peak > 0 else { return Color(white: Double(factor), opacity: Double(alpha)) }
+        red /= peak; green /= peak; blue /= peak
+        let current = luminance()
+        if current < factor {
+            let mix = (factor - current) / (1 - current)
+            red += mix * (1 - red); green += mix * (1 - green); blue += mix * (1 - blue)
+        }
         
         return Color(red: Double(red), green: Double(green), blue: Double(blue), opacity: Double(alpha))
     }
