@@ -404,7 +404,7 @@ struct RecordPlayerView: View {
         let behind = g.counterweight * h
         let height = behind + g.armLength * h + h * 0.03
         let width = h * 0.16
-        return TimelineView(.animation(minimumInterval: 1, paused: spinStart == nil)) { tl in
+        return TimelineView(Ticks(every: 1, paused: spinStart == nil)) { tl in
             let p = min(max(progress(tl.date), 0), 1)
             armDrawing(h: h, width: width, height: height, behind: behind)
                 .rotationEffect(.degrees(armDown ? outer + (inner - outer) * p : rest),
@@ -550,5 +550,25 @@ private final class SpinningLabelView: NSView {
         let now = label.convertTime(CACurrentMediaTime(), from: nil)
         label.speed = 0
         label.timeOffset = now
+    }
+}
+
+/// A timeline that fires every `every` seconds off a timer, or once when paused.
+///
+/// `.animation(minimumInterval:)` looks like the same thing and is not: it subscribes to
+/// the display link at the full refresh rate and skips the frames it does not want, so a
+/// once-a-second clock still woke the main thread 120 times a second, and every wakeup
+/// flushed a transaction and re-ran layout for the whole notch.
+struct Ticks: TimelineSchedule {
+    let every: TimeInterval
+    var paused = false
+
+    func entries(from start: Date, mode: TimelineScheduleMode) -> AnyIterator<Date> {
+        var next: Date? = start
+        return AnyIterator {
+            guard let date = next else { return nil }
+            next = paused ? nil : date.addingTimeInterval(every)
+            return date
+        }
     }
 }

@@ -28,7 +28,9 @@ struct MusicPlayerView: View {
             // the subtree contains the scrubber's timeline ticking ten times a second —
             // so the lyric scroll was being re-rasterised mid-animation on every tick,
             // which is what made it stutter.
-            MusicControlsView().compositingGroup()
+            // No .compositingGroup() either, for the same reason: it rendered the lyrics,
+            // slider and times into one CPU-drawn image on every change.
+            MusicControlsView()
         }
     }
 }
@@ -302,7 +304,7 @@ struct MusicControlsView: View {
     private var musicSlider: some View {
         // Twice a second, not ten times: the playhead moves ~2 pt a second on a three-minute
         // track, and every tick here is a layout pass of the whole notch.
-        TimelineView(.animation(minimumInterval: musicManager.playbackRate > 0 ? 0.5 : nil)) { timeline in
+        TimelineView(Ticks(every: 0.5, paused: musicManager.playbackRate <= 0)) { timeline in
             MusicSliderView(
                 sliderValue: $sliderValue,
                 duration: $musicManager.songDuration,
@@ -372,7 +374,7 @@ struct MusicControlsView: View {
         case .album:
             slotReadout(musicManager.album)
         case .remaining:
-            TimelineView(.animation(minimumInterval: 1, paused: !musicManager.isPlaying)) { timeline in
+            TimelineView(Ticks(every: 1, paused: !musicManager.isPlaying)) { timeline in
                 let elapsed = musicManager.isPlaying
                     ? min(musicManager.elapsedTime
                         + timeline.date.timeIntervalSince(musicManager.timestampDate)

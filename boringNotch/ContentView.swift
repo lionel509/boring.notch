@@ -192,10 +192,21 @@ struct ContentView: View {
                             .frame(height: 1)
                             .padding(.horizontal, topCornerRadius)
                     }
-                    .shadow(
-                        color: ((vm.notchState == .open || isHovering) && Defaults[.enableShadow])
-                            ? .black.opacity(0.7) : .clear, radius: Defaults[.cornerRadiusScaling] ? 6 : 4
-                    )
+                    // Cast by a plain copy of the shape behind the content, not by the
+                    // content. A `.shadow` on the notch itself blurs the notch's own pixels,
+                    // so every change inside it -- each spectrum frame, each lyric, the
+                    // network figures -- re-rasterised the whole open notch on the CPU,
+                    // text included, and then convolved it: the largest cost left in a
+                    // profile with the notch open. The notch is opaque, so the silhouette
+                    // is the same and the shape underneath rasterises once.
+                    .background {
+                        currentNotchShape
+                            .fill(.black)
+                            .shadow(
+                                color: ((vm.notchState == .open || isHovering) && Defaults[.enableShadow])
+                                    ? .black.opacity(0.7) : .clear,
+                                radius: Defaults[.cornerRadiusScaling] ? 6 : 4)
+                    }
                     .padding(
                         .bottom,
                         vm.effectiveClosedNotchHeight == 0 ? 10 : 0
@@ -296,7 +307,12 @@ struct ContentView: View {
         }
         .padding(.bottom, 8)
         .frame(maxWidth: windowSize.width, maxHeight: windowSize.height, alignment: .top)
-        .compositingGroup()
+        // No .compositingGroup() before this scale. It flattened the entire notch into one
+        // offscreen image, which RenderBox draws with CoreGraphics on the CPU, so every
+        // change anywhere inside -- a lyric, a slider tick, a network figure -- re-rasterised
+        // all of its text and images: two thirds of the main thread with the notch open.
+        // The gesture only scales by a percent or so, where scaling layer by layer
+        // looks the same.
         .scaleEffect(
             x: gestureScale,
             y: gestureScale,
