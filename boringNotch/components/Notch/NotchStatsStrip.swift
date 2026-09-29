@@ -107,7 +107,7 @@ struct NotchStatsStrip: View {
             switch currentPage {
             // One page, not two. The totals and the split answer the same question, and
             // separating them meant waiting a whole flip to find out who spent it.
-            case .usage: row { caption("TOKENS USED"); usageCells }
+            case .usage: usageRow
             case .limits: row { caption("PLAN LIMITS"); limitCells }
             case .power: row { caption("POWER"); powerCells }
             case .system: row { caption("SYSTEM"); systemCells }
@@ -215,41 +215,79 @@ struct NotchStatsStrip: View {
             endPoint: .trailing)
     }
 
+    /// The usage page, fitted to the notch rather than scrolled past it.
+    ///
+    /// Every upstream Switchboard routes to earns a cell here by design, so this row grows
+    /// whenever Switchboard does: the two Gemma routes arrived in one day and pushed
+    /// GEMMA-KAGGLE off the edge. Trimming the row once lasts only until the next route, so
+    /// the first arrangement that fits wins instead: as many providers as the notch holds,
+    /// with as much air between the cells as it can spare, and the quietest providers folded
+    /// into one MORE cell. Scrolling is the last resort, for a notch too narrow even for that.
+    ///
+    /// The gaps close all the way before anything folds. Folding at 10 pt hid a 6.8M
+    /// provider inside "3 MORE" alongside two that had done almost nothing, for want of 7 pt.
+    private var usageRow: some View {
+        let providers = weekProviders
+        let fits = (0...providers.count).reversed().flatMap { shown in
+            [14, 10, 8, 6].map { (shown: shown, spacing: CGFloat($0)) }
+        }
+        return ViewThatFits(in: .horizontal) {
+            ForEach(fits.indices, id: \.self) { i in
+                usageLine(providers, shown: fits[i].shown, spacing: fits[i].spacing)
+            }
+            row { caption("TOKENS USED"); usageCells(providers, shown: providers.count) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func usageLine(_ providers: [(key: String, value: RouterUsageTotals)],
+                           shown: Int, spacing: CGFloat) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: spacing) {
+            caption("TOKENS USED")
+            usageCells(providers, shown: shown)
+        }
+        .padding(.horizontal, 8)
+    }
+
+    /// Upstreams that saw traffic this week, busiest first, so the ones folded away when the
+    /// row runs out of room are the ones that did the least.
+    private var weekProviders: [(key: String, value: RouterUsageTotals)] {
+        usage.byUpstream(for: .week)
+            // A provider at zero spends a full cell to say nothing.
+            .filter { $0.value.billedTokens > 0 }
+            .sorted { $0.value.billedTokens > $1.value.billedTokens }
+    }
+
     // MARK: Cells
 
+    /// - Parameter shown: how many of `providers` get a cell of their own; the rest share one.
     @ViewBuilder
-    private var usageCells: some View {
+    private func usageCells(_ providers: [(key: String, value: RouterUsageTotals)],
+                            shown: Int) -> some View {
         if usage.isAvailable {
-            let windows = Self.distinctWindows(usage)
-            let providers = usage.byUpstream(for: .week)
-                // A provider at zero spends a full cell to say nothing.
-                .filter { $0.value.billedTokens > 0 }
-                .sorted { $0.value.billedTokens > $1.value.billedTokens }
-            let reserve = Self.tokenWidth(
-                across: windows.map { usage.totals(for: $0).billedTokens }
-                    + [usage.totals(for: .all).cachedTokens]
-                    + providers.map { $0.value.billedTokens })
-
             // Billed tokens, not the total. Cache reads outweigh real work by two orders of
             // magnitude on a normal day, so folding them in would read as enormous usage
             // every single day and mean nothing; cache gets its own cell.
-            ForEach(windows, id: \.self) { window in
-                gauge(window.label, Self.compact(usage.totals(for: window).billedTokens),
-                      widest: reserve)
+            ForEach(Self.distinctWindows(usage), id: \.self) { window in
+                tokenGauge(window.label, usage.totals(for: window).billedTokens)
             }
-            gauge("CACHED", Self.compact(usage.totals(for: .all).cachedTokens), widest: reserve)
+            tokenGauge("CACHED", usage.totals(for: .all).cachedTokens)
             let spend = usage.totals(for: .all).cost
             if spend > 0 {
-                gauge("SPENT", String(format: "$%.2f", spend), widest: "$99.99")
+                let text = String(format: "$%.2f", spend)
+                gauge("SPENT", text, widest: text)
             }
             if !providers.isEmpty {
                 // A rule rather than a second caption. "ANTHROPIC" next to "ALL TIME" needs
                 // separating, but a caption costs its own text width on a row that has none
                 // to spare -- and a provider's name already says what it is.
                 Divider().frame(height: 10)
-                ForEach(providers, id: \.key) { entry in
-                    gauge(entry.key.uppercased(), Self.compact(entry.value.billedTokens),
-                          widest: reserve)
+                ForEach(providers.prefix(shown), id: \.key) { entry in
+                    tokenGauge(entry.key.uppercased(), entry.value.billedTokens)
+                }
+                if shown < providers.count {
+                    let rest = providers.dropFirst(shown)
+                    tokenGauge("\(rest.count) MORE", rest.reduce(0) { $0 + $1.value.billedTokens })
                 }
             }
         } else if usage.needsAuthorization {
@@ -271,18 +309,17 @@ struct NotchStatsStrip: View {
         return UsageWindow.allCases.filter { seen.insert(usage.totals(for: $0).billedTokens).inserted }
     }
 
-    /// The width every token cell reserves, sized to the largest figure *actually on this
-    /// row* rather than to the largest one imaginable.
+    /// A token count in a cell that reserves its own figure's width, not the row's widest.
     ///
-    /// This is what pushed the merged page past the edge. `widest:` exists so a cell does not
-    /// shove its neighbours as its value grows, but hard-coding `"999.9M"` reserved room for
-    /// a hundred million tokens in every cell -- about a character and a half of dead space,
-    /// nine times over, on a row whose biggest number was 31.5M.
-    private static func tokenWidth(across values: [Int]) -> String {
-        let template = compact(values.max() ?? 0)
-        // Same shape, every digit at its widest, so the reservation still cannot be
-        // outgrown by a value of the same magnitude.
-        return String(template.map { $0.isNumber ? "9" : $0 })
+    /// The digits are monospaced, so a figure only changes width when it gains a digit or a
+    /// unit -- a reservation of anything more is dead space. Two shared reservations came
+    /// before this and both were wrong. Hard-coding `"999.9M"` reserved a hundred million
+    /// tokens' room nine times over, which pushed the merged page past the edge. Sizing to the
+    /// largest *value* instead picked `8.4B` beside a MONTH of `114.1M`, so the longest figure
+    /// on the row sat in the narrowest slot and drew over the gap into CACHED.
+    private func tokenGauge(_ label: String, _ count: Int) -> some View {
+        let text = Self.compact(count)
+        return gauge(label, text, widest: text)
     }
 
     /// Every subscription's own meters, on one page. These are quota, not money, which is
