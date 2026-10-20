@@ -31,6 +31,14 @@ final class SpeechAnalyzerSession: VoiceSession {
     private var continuation: AsyncStream<AnalyzerInput>.Continuation?
     private var resultsTask: Task<Void, Never>?
     private var finals: [String] = []
+    /// Measures what the mic delivers. Read by the manager's verdict and by the take report.
+    let levelTap = MicLevelTap()
+    private(set) var tapChannels = -1
+    private(set) var tapSampleRate = -1
+    private var partialCount = 0
+    private var finalizeMs = -1
+    private var finalized = false
+    private var configObserver: NSObjectProtocol?
 
     /// Makes sure the on-device en_US model is installed. The OS fetches it once.
     /// `onDownloadStart` runs only when a download is actually needed, so the UI can say so.
@@ -57,12 +65,16 @@ final class SpeechAnalyzerSession: VoiceSession {
         guard inFormat.channelCount > 0, inFormat.sampleRate > 0 else {
             throw VoiceError.noMicrophone
         }
+        tapChannels = Int(inFormat.channelCount)
+        tapSampleRate = Int(inFormat.sampleRate)
         guard let converter = AVAudioConverter(from: inFormat, to: target) else {
             throw VoiceError.noFormat
         }
 
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+        let tap = levelTap
         input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { buffer, _ in
+            tap.ingest(buffer)
             let ratio = target.sampleRate / inFormat.sampleRate
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
             guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
@@ -77,9 +89,16 @@ final class SpeechAnalyzerSession: VoiceSession {
                 outStatus.pointee = .haveData
                 return buffer
             }
-            guard status != .error, out.frameLength > 0 else { return }
+            if status == .error {
+                tap.noteConvertFailure()
+                return
+            }
+            guard out.frameLength > 0 else { return }
             continuation.yield(AnalyzerInput(buffer: out))
         }
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [tap] _ in tap.noteConfigChange() }
 
         self.analyzer = analyzer
         self.continuation = continuation
@@ -91,6 +110,7 @@ final class SpeechAnalyzerSession: VoiceSession {
                     if result.isFinal {
                         self?.finals.append(text)
                     } else {
+                        self?.partialCount += 1
                         onPartial(text)
                     }
                 }
@@ -113,11 +133,14 @@ final class SpeechAnalyzerSession: VoiceSession {
     func finish() async throws -> [String] {
         teardownAudio()
         if let analyzer {
+            let startedAt = ProcessInfo.processInfo.systemUptime
             // Cap the wait so the notch can never stick on "Transcribing".
-            let finalized = await TimeoutRace.run(seconds: 5) {
+            let result = await TimeoutRace.run(seconds: 5) {
                 (try? await analyzer.finalizeAndFinishThroughEndOfInput()) != nil
             }
-            if finalized != true {
+            finalizeMs = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
+            finalized = result == true
+            if !finalized {
                 _ = await TimeoutRace.run(seconds: 1) { await analyzer.cancelAndFinishNow() }
             }
         }
@@ -138,7 +161,22 @@ final class SpeechAnalyzerSession: VoiceSession {
         finals.removeAll()
     }
 
+    /// Adds this take's audio and transcript numbers to the report.
+    func fill(_ report: inout TakeReport) {
+        report.tapChannels = tapChannels
+        report.tapSampleRate = tapSampleRate
+        report.finals = finals.count
+        report.partials = partialCount
+        report.finalizeMs = finalizeMs
+        report.volatileTail = false
+        levelTap.fill(&report)
+    }
+
     private func teardownAudio() {
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+            self.configObserver = nil
+        }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         continuation?.finish()
