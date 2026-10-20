@@ -554,7 +554,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             if Defaults[.dictateWithFn] { FnKeyMonitor.shared.start() }
             for await on in Defaults.updates(.dictateWithFn) {
-                on ? FnKeyMonitor.shared.start() : FnKeyMonitor.shared.stop()
+                on ? FnKeyMonitor.shared.start() : FnKeyMonitor.shared.disable()
             }
         }
 

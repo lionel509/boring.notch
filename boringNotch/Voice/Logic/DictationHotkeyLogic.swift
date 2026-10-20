@@ -5,6 +5,7 @@ import Foundation
 /// on its own after `maxTake` seconds, so a forgotten take cannot keep the mic open.
 /// The fn key adds `.latch` (fn+Space turns a running hold hands-free) and `.cancel`
 /// (fn was a modifier, or a quick fn tap): `.cancel` throws the take away with `.discard`.
+/// `.abort` (the setting was turned off) throws away any running take, hands-free included.
 enum DictationHotkeyLogic {
     enum Event: Equatable {
         case keyDown
@@ -12,6 +13,7 @@ enum DictationHotkeyLogic {
         case timeout
         case latch
         case cancel
+        case abort
     }
 
     enum Action: Equatable {
@@ -42,7 +44,7 @@ enum DictationHotkeyLogic {
         case .keyDown:
             state.keyHeld = true
             state.lastDownAt = time
-        case .keyUp, .cancel:
+        case .keyUp, .cancel, .abort:
             state.keyHeld = false
             state.lastDownAt = nil
         case .timeout, .latch:
@@ -94,6 +96,13 @@ enum DictationHotkeyLogic {
         case .cancel:
             track(&state, .cancel, at: time)
             guard state.recording, !state.handsFree else { return .none }
+            state.recording = false
+            state.handsFree = false
+            state.downAt = nil
+            return .discard
+        case .abort:
+            track(&state, .abort, at: time)
+            guard state.recording else { return .none }
             state.recording = false
             state.handsFree = false
             state.downAt = nil

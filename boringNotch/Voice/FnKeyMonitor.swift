@@ -69,10 +69,20 @@ final class FnKeyMonitor: ObservableObject {
         mode = tapMode
     }
 
+    /// Turns the setting off: a running fn take is discarded, then the tap goes away.
+    func disable() {
+        // Queued behind any tap event already dispatched, so those still reach the reducer first.
+        if logic.fnHeld || logic.handsFreeOpen {
+            send(.abort)
+        }
+        logic = FnKeyLogic.State()
+        stop()
+    }
+
     func stop() {
         // A fn hold still open when the tap goes away must not leave a take recording.
         if logic.fnHeld {
-            VoiceDictationManager.shared.fnKey(.cancel)
+            send(.cancel)
         }
         logic = FnKeyLogic.State()
         if let tap {

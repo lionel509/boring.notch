@@ -36,6 +36,8 @@ enum FnKeyLogic {
         var latched = false
         /// The Space keyDown was swallowed, so its keyUp (and repeats) must be too.
         var swallowingSpace = false
+        /// The last fn hold ended as a latched take, so the reducer is still hands-free.
+        var handsFreeOpen = false
 
         init() {}
     }
@@ -64,6 +66,8 @@ enum FnKeyLogic {
                     }
                     s.chorded = false
                     s.emittedDown = true
+                    // A new press starts a fresh take, so no hands-free take is left open.
+                    s.handsFreeOpen = false
                     return Output(event: .keyDown, swallow: false)
                 }
                 if !fn && s.fnHeld {
@@ -115,6 +119,8 @@ enum FnKeyLogic {
         if !s.emittedDown {
             event = nil
         } else if s.latched {
+            // The take stays hands-free after fn is released; only the next fn press or abort ends it.
+            s.handsFreeOpen = true
             event = .keyUp
         } else if s.chorded {
             event = .cancel
