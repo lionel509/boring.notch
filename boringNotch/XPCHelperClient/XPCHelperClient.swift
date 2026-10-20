@@ -241,6 +241,22 @@ final class XPCHelperClient: NSObject {
         }
     }
     
+    nonisolated func postPasteKeystroke() async -> Bool {
+        do {
+            let service = await MainActor.run {
+                ensureRemoteService()
+            }
+            let result: Bool = try await service.withContinuation { service, continuation in
+                service.postPasteKeystroke { posted in
+                    continuation.resume(returning: posted)
+                }
+            }
+            return result
+        } catch {
+            return false
+        }
+    }
+    
     // MARK: - Keyboard Brightness
     
     nonisolated func isKeyboardBrightnessAvailable() async -> Bool {
