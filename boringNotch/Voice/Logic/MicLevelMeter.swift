@@ -2,6 +2,7 @@ import Foundation
 
 /// What the mic delivered for one take.
 enum MicVerdict: String {
+    /// No samples arrived (no buffers, or only empty ones).
     case noBuffers
     case digitalSilence
     case signal
@@ -29,6 +30,8 @@ struct MicLevelMeter {
     static let noBufferSeconds: TimeInterval = 1.5
 
     private(set) var buffers = 0
+    /// Every element passed in, non-finite ones included. A take is only "heard" once this is above zero.
+    private(set) var samples = 0
     private(set) var chunks = 0
     private(set) var voicedChunks = 0
     private(set) var chunksSinceVoiced = 0
@@ -48,6 +51,7 @@ struct MicLevelMeter {
 
     mutating func ingest(_ samples: UnsafeBufferPointer<Float>, sampleRate: Double, channels: Int) {
         buffers += 1
+        self.samples += samples.count
         if buffers == 1 {
             firstChannels = channels
             firstSampleRate = sampleRate
@@ -89,13 +93,13 @@ struct MicLevelMeter {
     }
 
     var verdict: MicVerdict {
-        if buffers == 0 { return .noBuffers }
+        if samples == 0 { return .noBuffers }
         if peak < 1e-6 { return .digitalSilence }
         return .signal
     }
 
     func status(elapsed: TimeInterval) -> MicStatus {
-        if buffers == 0 {
+        if samples == 0 {
             return elapsed >= Self.noBufferSeconds ? .noSignal : .waiting
         }
         if peak < 1e-6 {
