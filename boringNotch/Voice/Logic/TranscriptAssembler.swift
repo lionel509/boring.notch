@@ -9,4 +9,13 @@ enum TranscriptAssembler {
             .flatMap { $0.split(whereSeparator: { $0.isWhitespace }) }
             .joined(separator: " ")
     }
+
+    /// The text to join. The volatile tail (the transcriber's unconfirmed words) is
+    /// added only when finalize did not finish, so a normal finalize never doubles it.
+    static func parts(finals: [String], volatileTail: String, finalized: Bool) -> [String] {
+        if finalized || volatileTail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return finals
+        }
+        return finals + [volatileTail]
+    }
 }
