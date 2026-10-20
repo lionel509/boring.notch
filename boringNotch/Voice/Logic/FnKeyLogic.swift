@@ -50,10 +50,8 @@ enum FnKeyLogic {
                 if fn && s.fnHeld && s.chorded {
                     return Output(event: releaseFn(&s, at: time), swallow: false)
                 }
-                // A fresh fn press while fnHeld means the fn-up was lost: close the stale hold, then start over.
-                if fn && s.fnHeld {
-                    _ = releaseFn(&s, at: time)
-                }
+                // fn already held: a repeated fn flag changes nothing. Only a real fn-up, a chord or a resync closes the hold.
+                if fn && s.fnHeld { return .pass }
                 if fn && !s.fnHeld {
                     s.fnHeld = true
                     s.fnDownAt = time
