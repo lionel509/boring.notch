@@ -106,7 +106,7 @@ final class VoiceDictationManager: ObservableObject {
             DictationSounds.playStart()
             // A take still open here was superseded before it ended. Log it so every take has one line.
             endTake(.discarded)
-            // Cancel the engine of a superseded take here, so no microphone session is left running.
+            // Cancel the stored engine of a superseded take. One still inside analyzer.start is torn down when start returns (begin).
             if let old = session {
                 session = nil
                 Task { await old.cancel() }
