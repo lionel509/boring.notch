@@ -73,6 +73,25 @@ final class MicLevelMeterTests: XCTestCase {
         XCTAssertEqual(m.status(elapsed: 1.5), .noSignal)
     }
 
+    func testEmptyBuffersAreNotSignal() {
+        var m = MicLevelMeter()
+        for _ in 0..<50 { m.ingest([Float](), sampleRate: 48_000, channels: 1) }
+        XCTAssertEqual(m.buffers, 50)
+        XCTAssertEqual(m.verdict, .noBuffers)
+        XCTAssertEqual(m.status(elapsed: 1.0), .waiting)
+        XCTAssertEqual(m.status(elapsed: 1.5), .noSignal)
+    }
+
+    func testEmptyUnsafeBuffersAreNotSignal() {
+        var m = MicLevelMeter()
+        for _ in 0..<50 {
+            m.ingest(UnsafeBufferPointer<Float>(start: nil, count: 0), sampleRate: 48_000, channels: 1)
+        }
+        XCTAssertEqual(m.buffers, 50)
+        XCTAssertEqual(m.verdict, .noBuffers)
+        XCTAssertEqual(m.status(elapsed: 1.5), .noSignal)
+    }
+
     func testSpeechAfterQuietNoiseLevelsToOne() {
         // -60 dB, then -30 dB. The floor follows the quiet part.
         let quiet = sine(48_000, amplitude: 0.001 * Float(2).squareRoot())
