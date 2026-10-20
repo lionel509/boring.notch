@@ -52,6 +52,28 @@ final class PasteboardSnapshotTests: XCTestCase {
         XCTAssertEqual(PasteboardSnapshot.take(from: pb), original)
     }
 
+    /// Eight types in a fixed, non-sorted order. A Dictionary-based restore matches this order by
+    /// chance about once in 40,320 runs, so the test is red on essentially every run before the fix.
+    func testRestoreKeepsTypeOrder() {
+        let pb = makePasteboard()
+        pb.clearContents()
+        let item = NSPasteboardItem()
+        item.setData(Data("{\\rtf1 hi}".utf8), forType: .rtf)
+        item.setString("hi", forType: .string)
+        for name in ["t4", "t1", "t6", "t2", "t5", "t3"] {
+            item.setData(Data(name.utf8), forType: NSPasteboard.PasteboardType("com.example.\(name)"))
+        }
+        pb.writeObjects([item])
+        let originalOrder = pb.pasteboardItems?.first?.types ?? []
+        XCTAssertGreaterThanOrEqual(originalOrder.count, 8)
+
+        let snapshot = PasteboardSnapshot.take(from: pb)
+        let change = PasteboardSnapshot.write("transcript", to: pb)
+        XCTAssertTrue(snapshot.restore(to: pb, ifChangeCountIs: change))
+
+        XCTAssertEqual(pb.pasteboardItems?.first?.types ?? [], originalOrder, "type order changed on restore")
+    }
+
     func testWriteReturnsCurrentChangeCount() {
         let pb = makePasteboard()
         let count = PasteboardSnapshot.write("x", to: pb)
