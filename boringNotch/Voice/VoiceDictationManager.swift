@@ -33,6 +33,8 @@ final class VoiceDictationManager: ObservableObject {
 
     @Published private(set) var state: VoiceDictationState = .idle
     @Published private(set) var liveText: String = ""
+    /// True while the OS installs the speech model on first use.
+    @Published private(set) var downloadingModel = false
 
     private var hotkey = DictationHotkeyLogic.State()
     private var session: (any VoiceSession)?
@@ -105,10 +107,13 @@ final class VoiceDictationManager: ObservableObject {
 
         let started = SpeechAnalyzerSession()
         do {
+            try await started.prepareModel { self.downloadingModel = true }
+            downloadingModel = false
             try await started.start { [weak self] partial in
                 Task { @MainActor in self?.liveText = partial }
             }
         } catch {
+            downloadingModel = false
             fail(error.localizedDescription)
             return
         }

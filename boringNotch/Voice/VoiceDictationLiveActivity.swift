@@ -38,12 +38,21 @@ struct VoiceDictationLiveActivity: View {
         case .idle:
             EmptyView()
         case .recording:
-            Text(voice.liveText.isEmpty ? "Listening" : voice.liveText)
-                .font(.caption2)
-                .foregroundStyle(.gray)
-                .lineLimit(1)
-                .truncationMode(.head)
-            ListeningDots()
+            if voice.downloadingModel {
+                Text("Downloading speech model (one time)")
+                    .font(.caption2)
+                    .foregroundStyle(.gray)
+                    .lineLimit(1)
+                ProgressView()
+                    .controlSize(.mini)
+            } else {
+                Text(voice.liveText.isEmpty ? "Listening" : voice.liveText)
+                    .font(.caption2)
+                    .foregroundStyle(.gray)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                ListeningDots()
+            }
         case .processing:
             Text("Transcribing")
                 .font(.caption2)

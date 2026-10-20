@@ -32,11 +32,21 @@ final class SpeechAnalyzerSession: VoiceSession {
     private var resultsTask: Task<Void, Never>?
     private var finals: [String] = []
 
-    func start(onPartial: @escaping @Sendable (String) -> Void) async throws {
+    /// Makes sure the on-device en_US model is installed. The OS fetches it once.
+    /// `onDownloadStart` runs only when a download is actually needed, so the UI can say so.
+    func prepareModel(onDownloadStart: @MainActor @escaping () -> Void) async throws {
         let transcriber = SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .transcription)
+        self.transcriber = transcriber
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            onDownloadStart()
             try await request.downloadAndInstall()
         }
+    }
+
+    func start(onPartial: @escaping @Sendable (String) -> Void) async throws {
+        let transcriber = self.transcriber
+            ?? SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .transcription)
+        self.transcriber = transcriber
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         guard let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
             throw VoiceError.noFormat
@@ -71,7 +81,6 @@ final class SpeechAnalyzerSession: VoiceSession {
             continuation.yield(AnalyzerInput(buffer: out))
         }
 
-        self.transcriber = transcriber
         self.analyzer = analyzer
         self.continuation = continuation
 
