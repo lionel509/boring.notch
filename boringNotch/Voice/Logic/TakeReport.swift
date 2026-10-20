@@ -49,8 +49,11 @@ struct TakeReport {
         floorDB = meter.floorDB
         voicedChunks = meter.voicedChunks
         verdict = meter.verdict
-        bufferChannels = meter.firstChannels
-        bufferSampleRate = Int(meter.firstSampleRate)
+        // Only a take that got a buffer has a buffer format. Otherwise the fields stay -1.
+        if meter.buffers > 0 {
+            bufferChannels = meter.firstChannels
+            bufferSampleRate = Int(meter.firstSampleRate)
+        }
     }
 
     var line: String {
