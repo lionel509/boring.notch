@@ -105,33 +105,27 @@ final class SpeechAnalyzerSession: VoiceSession {
         teardownAudio()
         if let analyzer {
             // Cap the wait so the notch can never stick on "Transcribing".
-            let finalized = await withTaskGroup(of: Bool.self) { group -> Bool in
-                group.addTask {
-                    try? await analyzer.finalizeAndFinishThroughEndOfInput()
-                    return true
-                }
-                group.addTask {
-                    try? await Task.sleep(for: .seconds(5))
-                    return false
-                }
-                let first = await group.next() ?? false
-                group.cancelAll()
-                return first
+            let finalized = await TimeoutRace.run(seconds: 5) {
+                (try? await analyzer.finalizeAndFinishThroughEndOfInput()) != nil
             }
-            if !finalized {
-                await analyzer.cancelAndFinishNow()
+            if finalized != true {
+                _ = await TimeoutRace.run(seconds: 1) { await analyzer.cancelAndFinishNow() }
             }
         }
-        await resultsTask?.value
+        if let resultsTask {
+            _ = await TimeoutRace.run(seconds: 1) { await resultsTask.value }
+        }
         return finals
     }
 
     func cancel() async {
         teardownAudio()
         if let analyzer {
-            await analyzer.cancelAndFinishNow()
+            _ = await TimeoutRace.run(seconds: 1) { await analyzer.cancelAndFinishNow() }
         }
-        await resultsTask?.value
+        if let resultsTask {
+            _ = await TimeoutRace.run(seconds: 1) { await resultsTask.value }
+        }
         finals.removeAll()
     }
 
