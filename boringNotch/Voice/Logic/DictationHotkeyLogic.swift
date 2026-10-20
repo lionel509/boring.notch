@@ -3,16 +3,21 @@ import Foundation
 /// Pure push-to-talk reducer. Hold = talk, release = stop. A tap shorter than
 /// `tapThreshold` latches hands-free until the next key press. A take also ends
 /// on its own after `maxTake` seconds, so a forgotten take cannot keep the mic open.
+/// The fn key adds `.latch` (fn+Space turns a running hold hands-free) and `.cancel`
+/// (fn was a modifier, or a quick fn tap): `.cancel` throws the take away with `.discard`.
 enum DictationHotkeyLogic {
     enum Event: Equatable {
         case keyDown
         case keyUp
         case timeout
+        case latch
+        case cancel
     }
 
     enum Action: Equatable {
         case start
         case stop
+        case discard
         case none
     }
 
@@ -37,10 +42,10 @@ enum DictationHotkeyLogic {
         case .keyDown:
             state.keyHeld = true
             state.lastDownAt = time
-        case .keyUp:
+        case .keyUp, .cancel:
             state.keyHeld = false
             state.lastDownAt = nil
-        case .timeout:
+        case .timeout, .latch:
             break
         }
     }
@@ -79,6 +84,20 @@ enum DictationHotkeyLogic {
             state.handsFree = false
             state.downAt = nil
             return .stop
+        case .latch:
+            // Only a running hold turns hands-free. When idle, fn+Space must not start a take.
+            if state.recording && !state.handsFree {
+                state.handsFree = true
+                state.downAt = nil
+            }
+            return .none
+        case .cancel:
+            track(&state, .cancel, at: time)
+            guard state.recording, !state.handsFree else { return .none }
+            state.recording = false
+            state.handsFree = false
+            state.downAt = nil
+            return .discard
         }
     }
 }

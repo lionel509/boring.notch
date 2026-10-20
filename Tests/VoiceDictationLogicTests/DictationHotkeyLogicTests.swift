@@ -137,6 +137,8 @@ final class DictationHotkeyLogicTests: XCTestCase {
                 case .stop:
                     XCTAssertTrue(wasRecording, "stop emitted while idle")
                     stops += 1
+                case .discard:
+                    XCTFail("discard emitted without a cancel event")
                 case .none:
                     break
                 }

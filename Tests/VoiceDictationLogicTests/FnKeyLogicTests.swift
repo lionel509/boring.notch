@@ -201,6 +201,11 @@ final class FnKeyLogicTests: XCTestCase {
             var logic = Logic.State()
             var held = Set<Int>()
             var hold = Hold()
+            var holdId = 0
+            // The fn hold that owns the open take, and what that hold did while it was current.
+            var takeHoldId = -1
+            var takeLatched = false
+            var takeChorded = false
             var spaceSwallow: Bool? = nil
             var time: TimeInterval = 0
             var starts = 0
@@ -275,16 +280,10 @@ final class FnKeyLogicTests: XCTestCase {
                     if action == .stop { stops += 1 }
                 }
 
-                // Invariant 2: a fn hold that touched another key or modifier never ends in
-                // a paste (.stop) unless it latched hands-free first. Checked against the
-                // hold as it was before this input.
-                if action == .stop {
-                    XCTAssertTrue(hold.latched || !hold.chorded, "chorded fn take was pasted")
-                }
-
-                // Rebuild the fn hold from the physical stream, for the checks above.
+                // Rebuild the fn hold from the physical stream.
                 if fnPressed {
                     let otherDown = anyOtherModifier(held)
+                    holdId += 1
                     hold = Hold(started: !otherDown, chorded: otherDown, latched: false)
                 } else if fnHeld {
                     if !wasHeld && isModifier && code != fnKey {
@@ -299,6 +298,23 @@ final class FnKeyLogicTests: XCTestCase {
                     if isRepeat && code == space && !hold.latched {
                         hold.chorded = true
                     }
+                }
+
+                // Track the hold that owns the open take. A take latched in an earlier hold
+                // stays open hands-free, so the current hold is not the right one to check.
+                if action == .start {
+                    takeHoldId = holdId
+                    takeLatched = false
+                    takeChorded = false
+                }
+                if takeHoldId == holdId {
+                    takeLatched = takeLatched || hold.latched
+                    takeChorded = takeChorded || hold.chorded
+                }
+                // Invariant 2: a take whose fn hold touched another key or modifier is never
+                // pasted (.stop) unless that hold latched hands-free first.
+                if action == .stop {
+                    XCTAssertTrue(takeLatched || !takeChorded, "chorded fn take was pasted")
                 }
 
                 XCTAssertEqual(starts - closers, logic.recording ? 1 : 0, "start/close pairing broken")
