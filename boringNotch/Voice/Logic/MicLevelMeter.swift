@@ -24,6 +24,9 @@ struct MicLevelMeter {
     static let silenceDB: Float = -90
     static let startFloorCapDB: Float = -50
     static let lowestFloorDB: Float = -80
+    /// How far the floor may climb per chunk (6.25 dB a second), so room noise that
+    /// comes on mid-take is absorbed instead of pinning the bars.
+    static let floorRiseDB: Float = 0.25
     static let voicedMarginDB: Float = 8
     static let noSignalChunks = 25
     static let quietChunks = 125
@@ -75,8 +78,13 @@ struct MicLevelMeter {
         sumSquares = 0
         pending = 0
         if dB > Self.silenceDB {
-            let floor = floorDB.map { min($0, dB) } ?? min(dB, Self.startFloorCapDB)
-            floorDB = max(Self.lowestFloorDB, floor)
+            let floor: Float
+            if let current = floorDB {
+                floor = min(dB, current + Self.floorRiseDB)
+            } else {
+                floor = min(dB, Self.startFloorCapDB)
+            }
+            floorDB = min(Self.startFloorCapDB, max(Self.lowestFloorDB, floor))
         }
         if let floor = floorDB, dB >= floor + Self.voicedMarginDB {
             voicedChunks += 1
