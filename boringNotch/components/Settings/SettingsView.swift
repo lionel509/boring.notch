@@ -1800,6 +1800,9 @@ struct Shortcuts: View {
                 Defaults.Toggle(key: .dictateWithFn) {
                     Text("Hold fn to dictate")
                 }
+                Defaults.Toggle(key: .dictationSounds) {
+                    Text("Start and stop sounds")
+                }
                 switch fnMonitor.mode {
                 case .active:
                     Text("Hold fn to talk. fn+Space keeps listening; press fn to stop.")
@@ -1833,7 +1836,7 @@ struct Shortcuts: View {
                 Text("Voice")
             } footer: {
                 Text(
-                    "Hold fn (or the shortcut) to talk, let go to type what you said into the app you are in. fn+Space, or a quick tap of the shortcut, keeps listening until you press again. If fn also opens emoji or switches input language, set System Settings > Keyboard > \"Press Globe key to\" to \"Do Nothing\", and change the Dictation shortcut if it is \"Press Globe twice\". Keyboards without an Apple fn key use the shortcut. Transcription runs on this Mac and nothing is sent anywhere."
+                    "Hold fn (or the shortcut) to talk, let go to type what you said into the app you are in. fn+Space, or a quick tap of the shortcut, keeps listening until you press again. Releases shorter than half a second are ignored. If fn also opens emoji or switches input language, set System Settings > Keyboard > \"Press Globe key to\" to \"Do Nothing\", and change the Dictation shortcut if it is \"Press Globe twice\". Keyboards without an Apple fn key use the shortcut. Transcription runs on this Mac and nothing is sent anywhere."
                 )
                 .multilineTextAlignment(.trailing)
                 .foregroundStyle(.secondary)

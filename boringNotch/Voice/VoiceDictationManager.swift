@@ -103,6 +103,7 @@ final class VoiceDictationManager: ObservableObject {
         let action = DictationHotkeyLogic.reduce(&hotkey, event, at: now)
         switch action {
         case .start:
+            DictationSounds.playStart()
             // A take still open here was superseded before it ended. Log it so every take has one line.
             endTake(.discarded)
             takeID += 1
@@ -128,6 +129,7 @@ final class VoiceDictationManager: ObservableObject {
             }
             Task { await begin(take) }
         case .stop:
+            DictationSounds.playStop()
             releaseAt = now
             if let started = takeStartedAt {
                 report.holdMs = Int((now - started) * 1000)
@@ -360,7 +362,7 @@ final class VoiceDictationManager: ObservableObject {
         }
         endTake(.pasted)
         state = .done
-        scheduleReset(after: 1.2)
+        scheduleReset(after: 0.6)
         try? await Task.sleep(for: .milliseconds(1000))
         clipboard.restore(to: pasteboard, ifChangeCountIs: change)
     }
@@ -370,7 +372,7 @@ final class VoiceDictationManager: ObservableObject {
         let watched: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
         let deadline = Date().addingTimeInterval(timeout)
         while !NSEvent.modifierFlags.intersection(watched).isEmpty, Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(20))
+            try? await Task.sleep(for: .milliseconds(10))
         }
     }
 
@@ -386,7 +388,7 @@ final class VoiceDictationManager: ObservableObject {
         hotkey.startedAt = nil
         endTake(outcome)
         state = .failed(message)
-        scheduleReset(after: 2.5)
+        scheduleReset(after: 2.0)
     }
 
     private func scheduleReset(after seconds: Double) {
