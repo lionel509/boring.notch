@@ -144,4 +144,105 @@ final class DictationHotkeyLogicTests: XCTestCase {
             XCTAssertEqual(starts - stops, s.recording ? 1 : 0, "start/stop pairing broken")
         }
     }
+
+    // MARK: fn-key events (.latch, .cancel, .discard)
+
+    func testLatchDuringHoldGoesHandsFree() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .latch, at: 0.2), .none)
+        XCTAssertTrue(s.handsFree)
+        XCTAssertTrue(s.recording)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 1.0), .none)
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 3.0), .stop)
+        XCTAssertFalse(s.recording)
+    }
+
+    func testLatchWhenIdleIsNone() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .latch, at: 0), .none)
+        XCTAssertEqual(s, Logic.State())
+    }
+
+    func testLatchDuringHandsFreeIsNone() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.1), .none)
+        XCTAssertEqual(Logic.reduce(&s, .latch, at: 0.5), .none)
+        XCTAssertTrue(s.handsFree)
+        XCTAssertTrue(s.recording)
+    }
+
+    func testCancelDuringHoldDiscards() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .cancel, at: 0.1), .discard)
+        XCTAssertFalse(s.recording)
+        XCTAssertFalse(s.keyHeld)
+    }
+
+    func testCancelDuringHandsFreeIsNone() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.1), .none)
+        XCTAssertEqual(Logic.reduce(&s, .cancel, at: 0.5), .none)
+        XCTAssertTrue(s.recording)
+        XCTAssertTrue(s.handsFree)
+    }
+
+    func testCancelWhenIdleIsNone() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .cancel, at: 0), .none)
+        XCTAssertEqual(s, Logic.State())
+    }
+
+    /// A cancelled hold must not leave keyHeld set, or the 2 s repeat window
+    /// would swallow the next real press.
+    func testFreshPressAfterCancelStarts() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .cancel, at: 0.1), .discard)
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0.5), .start, "press after cancel swallowed as repeat")
+    }
+
+    func testRandomSequencesWithFnEventsPairStartsAndClosers() {
+        var rng = SplitMix64(state: 0x0FA7)
+        for _ in 0..<500 {
+            var s = Logic.State()
+            var time: TimeInterval = 0
+            var starts = 0
+            var closers = 0
+            let count = Int.random(in: 1...40, using: &rng)
+            for _ in 0..<count {
+                time += Double.random(in: 0...2, using: &rng)
+                let event: Logic.Event
+                switch Int.random(in: 0...4, using: &rng) {
+                case 0: event = .keyDown
+                case 1: event = .keyUp
+                case 2: event = .latch
+                case 3: event = .cancel
+                default: event = .timeout
+                }
+                let wasRecording = s.recording
+                let action = Logic.reduce(&s, event, at: time)
+                switch action {
+                case .start:
+                    XCTAssertFalse(wasRecording, "start emitted while recording")
+                    starts += 1
+                case .stop, .discard:
+                    XCTAssertTrue(wasRecording, "\(action) emitted while idle")
+                    closers += 1
+                case .none:
+                    break
+                }
+                if event == .latch {
+                    XCTAssertEqual(action, .none, "latch must never start or stop")
+                }
+                if event == .cancel {
+                    XCTAssertTrue(action == .discard || action == .none, "cancel must only discard")
+                }
+            }
+            XCTAssertEqual(starts - closers, s.recording ? 1 : 0, "start/close pairing broken")
+        }
+    }
 }
