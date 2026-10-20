@@ -168,13 +168,44 @@ final class FnKeyLogicTests: XCTestCase {
         ]), [out(.keyDown), out(.keyUp)])
     }
 
-    func testResyncClearsASpaceWhoseKeyUpWasLost() {
+    /// A resync while Space is still held must not let its auto-repeat through (breaker B2, F1).
+    func testBreakerResyncLetsSpaceRepeatsThroughOnLatchedFnSpace() {
         XCTAssertEqual(run([
             (fnDown(), 0),
             (.keyDown(keyCode: 49, isRepeat: false), 0.1),
-            (fnUp(), 0.2),
-            (.resync(fnDown: false), 0.3),
-            (.keyDown(keyCode: 49, isRepeat: false), 5.0),
+            (.resync(fnDown: true), 0.5),
+            (.keyDown(keyCode: 49, isRepeat: true), 0.6),
+        ]).last, out(nil, swallow: true), "Space auto-repeat of a latched fn+Space must stay swallowed")
+    }
+
+    /// Breaker F1: the same Space auto-repeat after a tap re-enable, from the monitor-side probe.
+    func testBreakSpaceRepeatAfterTapReenableLeaksThrough() {
+        XCTAssertEqual(run([
+            (fnDown(), 0.0),
+            (.keyDown(keyCode: 49, isRepeat: false), 0.1),
+            (.resync(fnDown: true), 0.5),
+            (.keyDown(keyCode: 49, isRepeat: true), 0.6),
+        ]).last, out(nil, swallow: true))
+    }
+
+    /// The Space keyUp after a resync must be swallowed iff its keyDown was (breaker B3).
+    func testBreakerResyncLetsOrphanSpaceKeyUpThrough() {
+        XCTAssertEqual(run([
+            (fnDown(), 0),
+            (.keyDown(keyCode: 49, isRepeat: false), 0.1),
+            (.resync(fnDown: true), 0.5),
+            (.keyUp(keyCode: 49), 0.6),
+        ]).last, out(nil, swallow: true), "a Space keyUp is swallowed iff its keyDown was")
+    }
+
+    /// A Space whose keyUp was lost is cleared by the next fresh Space keyDown, not by resync.
+    func testFreshSpaceAfterLostKeyUpAndResyncPasses() {
+        XCTAssertEqual(run([
+            (fnDown(), 0),
+            (.keyDown(keyCode: 49, isRepeat: false), 0.1),
+            (.resync(fnDown: false), 0.5),
+            (.keyDown(keyCode: 49, isRepeat: false), 1.0),
+            (.keyUp(keyCode: 49), 1.1),
         ]), [out(.keyDown), out(.latch, swallow: true), out(.keyUp), .pass, .pass])
     }
 
