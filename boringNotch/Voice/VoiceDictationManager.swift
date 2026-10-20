@@ -48,6 +48,8 @@ final class VoiceDictationManager: ObservableObject {
     /// Ends a stopped take that never got its engine running within `startGrace` seconds.
     private var startGraceTask: Task<Void, Never>?
     private static let startGrace: Double = 10
+    /// Owns the pending clipboard restore across overlapping takes.
+    private var clipboard = ClipboardKeeper()
 
     private init() {}
 
@@ -191,19 +193,21 @@ final class VoiceDictationManager: ObservableObject {
     /// Puts the text on the pasteboard, presses Cmd-V in the focused app, then puts
     /// the user's previous clipboard back unless they copied something meanwhile.
     /// On every failure path the transcript stays on the clipboard, replacing what was there.
+    /// A take that starts during an earlier take's restore wait inherits that take's saved clipboard, so the user's own clipboard is what comes back.
     private func insert(_ text: String) async {
         let pasteboard = NSPasteboard.general
         let trustedResult = await TimeoutRace.run(seconds: 3) {
             await XPCHelperClient.shared.ensureAccessibilityAuthorization(promptIfNeeded: true)
         }
         // Snapshot after the await, so a copy made during it is kept, not overwritten.
-        let snapshot = PasteboardSnapshot.take(from: pasteboard)
-        let change = PasteboardSnapshot.write(text, to: pasteboard)
+        let change = clipboard.write(text, to: pasteboard)
         guard let trusted = trustedResult else {
+            clipboard.release(change)
             fail("Copied (clipboard replaced). Helper not responding")
             return
         }
         guard trusted else {
+            clipboard.release(change)
             fail("Copied (clipboard replaced). Allow Accessibility to paste")
             return
         }
@@ -211,6 +215,7 @@ final class VoiceDictationManager: ObservableObject {
         await waitForModifiersReleased(timeout: 1.0)
         // Someone copied during the modifier wait: do not paste their copy in place of the transcript.
         guard pasteboard.changeCount == change else {
+            clipboard.release(change)
             fail("Clipboard changed. Not pasted")
             return
         }
@@ -220,10 +225,12 @@ final class VoiceDictationManager: ObservableObject {
             await XPCHelperClient.shared.postPasteKeystroke(keyCode: keyCode)
         }
         guard let posted else {
+            clipboard.release(change)
             fail("Copied (clipboard replaced). Helper slow, paste may still land")
             return
         }
         guard posted else {
+            clipboard.release(change)
             fail("Copied (clipboard replaced). Paste failed")
             return
         }
@@ -231,7 +238,7 @@ final class VoiceDictationManager: ObservableObject {
         state = .done
         scheduleReset(after: 1.2)
         try? await Task.sleep(for: .milliseconds(1000))
-        snapshot.restore(to: pasteboard, ifChangeCountIs: change)
+        clipboard.restore(to: pasteboard, ifChangeCountIs: change)
     }
 
     /// Cmd-V with Option still held would paste as Option-Cmd-V in many apps.
