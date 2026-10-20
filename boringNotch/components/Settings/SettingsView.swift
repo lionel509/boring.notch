@@ -1793,6 +1793,18 @@ struct Shortcuts: View {
             Section {
                 KeyboardShortcuts.Recorder("Toggle Notch Open:", name: .toggleNotchOpen)
             }
+            Section {
+                KeyboardShortcuts.Recorder("Dictate (hold to talk):", name: .dictate)
+            } header: {
+                Text("Voice")
+            } footer: {
+                Text(
+                    "Hold to talk, let go to type what you said into the app you are in. A quick tap starts hands-free; tap again to stop. Transcription runs on this Mac and nothing is sent anywhere."
+                )
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            }
         }
         .accentColor(.effectiveAccent)
         .navigationTitle("Shortcuts")
