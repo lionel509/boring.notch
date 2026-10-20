@@ -38,9 +38,10 @@ struct MicSpectrumView: NSViewRepresentable {
         coordinator.mode = mode
         // The same cadence as the music spectrum: 30 Hz, or 15 Hz in low power mode.
         let interval = ProcessInfo.processInfo.isLowPowerModeEnabled ? 1.0 / 15 : 1.0 / 30
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak spectrum, weak coordinator] _ in
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak spectrum, weak coordinator] timer in
             MainActor.assumeIsolated {
-                guard let spectrum, let coordinator else { return }
+                // The strip is gone: stop ticking instead of firing into nothing.
+                guard let spectrum, let coordinator else { timer.invalidate(); return }
                 let now = ProcessInfo.processInfo.systemUptime
                 let dt = now - coordinator.last
                 coordinator.last = now
