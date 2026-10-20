@@ -114,6 +114,21 @@ final class MicLevelMeterTests: XCTestCase {
         XCTAssertEqual(m.floorDB, -80)
     }
 
+    /// `n` samples alternating +rms and -rms, so every chunk's RMS is exactly `rms`.
+    private func steady(_ n: Int, rms: Float) -> [Float] {
+        (0..<n).map { $0 % 2 == 0 ? rms : -rms }
+    }
+
+    func testNoiseFloorRisesWhenTheRoomGetsLouder() {
+        // A take opens at -75 dB, then sits in -55 dB room noise for 8 s.
+        var m = MicLevelMeter()
+        m.ingest(steady(chunk * 2, rms: Float(pow(10.0, -75.0 / 20))), sampleRate: rate, channels: 1)
+        m.ingest(steady(384_000, rms: Float(pow(10.0, -55.0 / 20))), sampleRate: rate, channels: 1)
+        XCTAssertEqual(m.floorDB ?? 0, -55, accuracy: 0.01)
+        XCTAssertLessThan(m.level, 0.1)
+        XCTAssertEqual(m.status(elapsed: 8.1), .quiet)
+    }
+
     func testSixSecondsOfSteadyQuietNoiseIsQuiet() {
         let m = meter(feeding: sine(288_000, amplitude: 0.001 * Float(2).squareRoot()))
         XCTAssertEqual(m.status(elapsed: 6), .quiet)
