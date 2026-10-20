@@ -42,6 +42,13 @@ final class FnKeyLogicTests: XCTestCase {
         return steps.map { Fn.classify(&s, $0.0, at: $0.1) }
     }
 
+    /// The tests build inputs from these constants, so a wrong constant would stay green. Pin the Apple codes.
+    func testKeyCodesAreTheAppleOnes() {
+        XCTAssertEqual(Fn.fnKeyCode, 63)
+        XCTAssertEqual(Fn.globeKeyCode, 179)
+        XCTAssertEqual(Fn.spaceKeyCode, 49)
+    }
+
     // MARK: fn alone
 
     func testHoldFnEmitsKeyDownThenKeyUp() {
