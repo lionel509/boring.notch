@@ -94,7 +94,6 @@ enum FnKeyLogic {
             return .pass
 
         case let .resync(fnDown):
-            s.swallowingSpace = false
             if s.fnHeld && !fnDown {
                 return Output(event: releaseFn(&s, at: time), swallow: false)
             }
