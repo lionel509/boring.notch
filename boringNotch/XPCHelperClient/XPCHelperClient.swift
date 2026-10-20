@@ -241,13 +241,13 @@ final class XPCHelperClient: NSObject {
         }
     }
     
-    nonisolated func postPasteKeystroke() async -> Bool {
+    nonisolated func postPasteKeystroke(keyCode: UInt16) async -> Bool {
         do {
             let service = await MainActor.run {
                 ensureRemoteService()
             }
             let result: Bool = try await service.withContinuation { service, continuation in
-                service.postPasteKeystroke { posted in
+                service.postPasteKeystroke(Int(keyCode)) { posted in
                     continuation.resume(returning: posted)
                 }
             }

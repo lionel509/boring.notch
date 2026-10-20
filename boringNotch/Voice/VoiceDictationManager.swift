@@ -170,8 +170,10 @@ final class VoiceDictationManager: ObservableObject {
             fail("Clipboard changed. Not pasted")
             return
         }
+        // Read the layout on the main actor, where the TIS calls belong.
+        let keyCode = PasteKeycode.currentV()
         let posted = await TimeoutRace.run(seconds: 3) {
-            await XPCHelperClient.shared.postPasteKeystroke()
+            await XPCHelperClient.shared.postPasteKeystroke(keyCode: keyCode)
         }
         guard posted == true else {
             fail("Copied (clipboard replaced). Paste failed")
