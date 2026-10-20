@@ -43,12 +43,14 @@ final class SpeechAnalyzerSession: VoiceSession {
     private var partialCount = 0
     private var finalizeMs = -1
     private var finalized = false
+    /// The transcriber's latest unconfirmed text. Used only if finalize does not finish in time.
+    private var lastVolatile = ""
     private var configObserver: NSObjectProtocol?
 
     /// Makes sure the on-device en_US model is installed. The OS fetches it once.
     /// `onDownloadStart` runs only when a download is actually needed, so the UI can say so.
     func prepareModel(onDownloadStart: @MainActor @escaping () -> Void) async throws {
-        let transcriber = SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .transcription)
+        let transcriber = SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .progressiveTranscription)
         self.transcriber = transcriber
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
             onDownloadStart()
@@ -58,7 +60,7 @@ final class SpeechAnalyzerSession: VoiceSession {
 
     func start(onPartial: @escaping @Sendable (String) -> Void) async throws {
         let transcriber = self.transcriber
-            ?? SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .transcription)
+            ?? SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .progressiveTranscription)
         self.transcriber = transcriber
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         guard let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
@@ -122,7 +124,9 @@ final class SpeechAnalyzerSession: VoiceSession {
                     let text = String(result.text.characters)
                     if result.isFinal {
                         self?.finals.append(text)
+                        self?.lastVolatile = ""
                     } else {
+                        self?.lastVolatile = text
                         self?.partialCount += 1
                         onPartial(text)
                     }
@@ -160,7 +164,7 @@ final class SpeechAnalyzerSession: VoiceSession {
         if let resultsTask {
             _ = await TimeoutRace.run(seconds: 0.5) { await resultsTask.value }
         }
-        return finals
+        return TranscriptAssembler.parts(finals: finals, volatileTail: lastVolatile, finalized: finalized)
     }
 
     func cancel() async {
@@ -181,7 +185,7 @@ final class SpeechAnalyzerSession: VoiceSession {
         report.finals = finals.count
         report.partials = partialCount
         report.finalizeMs = finalizeMs
-        report.volatileTail = false
+        report.volatileTail = !finalized && !lastVolatile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         levelTap.fill(&report)
     }
 
