@@ -17,6 +17,21 @@ final class TranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(TranscriptAssembler.join(["Hello,", " world "]), "Hello, world")
     }
 
+    func testPartsIgnoresVolatileTailWhenFinalized() {
+        XCTAssertEqual(TranscriptAssembler.parts(finals: ["Hello"], volatileTail: "wor", finalized: true), ["Hello"])
+    }
+
+    func testPartsAppendsVolatileTailWhenNotFinalized() {
+        let parts = TranscriptAssembler.parts(finals: ["Hello"], volatileTail: "world", finalized: false)
+        XCTAssertEqual(parts, ["Hello", "world"])
+        XCTAssertEqual(TranscriptAssembler.join(parts), "Hello world")
+    }
+
+    func testBlankVolatileTailAddsNothing() {
+        XCTAssertEqual(TranscriptAssembler.parts(finals: ["Hello"], volatileTail: "", finalized: false), ["Hello"])
+        XCTAssertEqual(TranscriptAssembler.parts(finals: ["Hello"], volatileTail: "  \n ", finalized: false), ["Hello"])
+    }
+
     func testEmptyPartsGiveEmptyString() {
         XCTAssertEqual(TranscriptAssembler.join(["", "  "]), "")
     }
