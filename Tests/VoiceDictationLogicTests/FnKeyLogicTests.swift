@@ -164,12 +164,13 @@ final class FnKeyLogicTests: XCTestCase {
 
     // MARK: stale fn (a lost fn-up or an arrow chord that left the mask set)
 
-    /// Breaker B1: a lost fn-up must not swallow the next fresh fn press.
-    func testBreakerLostFnUpSwallowsFreshFnPress() {
+    /// Breaker B1: a lost fn-up must not swallow the next fresh fn press. The release after it ends its own hold.
+    func testLostFnUpRecoversOnNextRelease() {
         var s = Fn.State()
-        _ = Fn.classify(&s, fnDown(), at: 0)
-        let second = Fn.classify(&s, fnDown(), at: 5.0)   // fn-up was lost in between
-        XCTAssertEqual(second.event, Logic.Event.keyDown)
+        XCTAssertEqual(Fn.classify(&s, fnDown(), at: 0), out(.keyDown))
+        XCTAssertEqual(Fn.classify(&s, fnDown(), at: 5.0), .pass)   // fn-up was lost in between
+        XCTAssertEqual(Fn.classify(&s, fnUp(), at: 5.5), out(.keyUp))
+        XCTAssertEqual(Fn.classify(&s, fnDown(), at: 7.0), out(.keyDown))
     }
 
     /// Breaker R1: a repeated fn flag during a long hold must not stop the take.
@@ -223,22 +224,24 @@ final class FnKeyLogicTests: XCTestCase {
         ]).last, out(.keyDown))
     }
 
-    /// A stale latched hold is stopped by the next fresh fn press, through the reducer too.
-    func testStaleLatchedHoldIsStoppedByFreshFnPress() {
+    /// A stale latched hold is stopped by the second fn press after a lost fn-up, through the reducer too.
+    func testStaleLatchedHoldIsStoppedBySecondFnPress() {
         var s = Fn.State()
         var r = Logic.State()
         var actions: [Logic.Action] = []
         let steps: [(Fn.Input, TimeInterval)] = [
             (fnDown(), 0),
-            (.keyDown(keyCode: 49, isRepeat: false), 0.2),
-            (fnDown(), 5.0),                               // no fn-up in between
+            (space(), 0.2),                                // latches the take
+            (fnDown(), 5.0),                               // fn-up was lost: this press is ignored
+            (fnUp(), 5.5),                                 // the real release: the take stays hands-free
+            (fnDown(), 7.0),                               // the next fn press stops it
         ]
         for (input, t) in steps {
             if let event = Fn.classify(&s, input, at: t).event {
                 actions.append(Logic.reduce(&r, event, at: t))
             }
         }
-        XCTAssertEqual(actions, [.start, .none, .stop])
+        XCTAssertEqual(actions, [.start, .none, .none, .stop])
     }
 
     /// fn pressed while a chord holds it down releases the chord, and fn is no longer held.
