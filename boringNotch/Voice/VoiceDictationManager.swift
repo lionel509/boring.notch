@@ -39,6 +39,8 @@ final class VoiceDictationManager: ObservableObject {
     /// Key released while `begin()` is still awaiting the mic prompt or the analyzer.
     private var stopRequested = false
     private var resetTask: Task<Void, Never>?
+    /// Ends the take after `DictationHotkeyLogic.maxTake` seconds.
+    private var ceilingTask: Task<Void, Never>?
 
     private init() {}
 
@@ -53,20 +55,29 @@ final class VoiceDictationManager: ObservableObject {
     }
 
     private func handle(_ event: DictationHotkeyLogic.Event) {
-        // A new press during the "Pasted" or error flash starts a fresh take.
-        if event == .keyDown, isResting {
-            resetTask?.cancel()
-            state = .idle
-            liveText = ""
+        let now = ProcessInfo.processInfo.systemUptime
+        // While transcribing, only track the key. The next take starts after the paste.
+        guard state != .processing else {
+            DictationHotkeyLogic.track(&hotkey, event, at: now)
+            return
         }
-        guard state == .idle || state == .recording else { return }
 
-        let action = DictationHotkeyLogic.reduce(
-            &hotkey, event, at: ProcessInfo.processInfo.systemUptime)
+        let action = DictationHotkeyLogic.reduce(&hotkey, event, at: now)
         switch action {
         case .start:
+            // A new press during the "Pasted" or error flash starts a fresh take.
+            resetTask?.cancel()
+            state = .recording
+            liveText = ""
+            stopRequested = false
+            ceilingTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(DictationHotkeyLogic.maxTake))
+                guard !Task.isCancelled else { return }
+                self?.handle(.timeout)
+            }
             Task { await begin() }
         case .stop:
+            ceilingTask?.cancel()
             Task { await finish() }
         case .none:
             break
@@ -83,11 +94,6 @@ final class VoiceDictationManager: ObservableObject {
     // MARK: - Take lifecycle
 
     private func begin() async {
-        guard state == .idle else { return }
-        state = .recording
-        liveText = ""
-        stopRequested = false
-
         guard #available(macOS 26.0, *) else {
             fail("Needs macOS 26")
             return
@@ -121,7 +127,6 @@ final class VoiceDictationManager: ObservableObject {
             return
         }
         state = .processing
-        hotkey = DictationHotkeyLogic.State()
 
         let parts = (try? await current.finish()) ?? []
         session = nil
@@ -169,8 +174,11 @@ final class VoiceDictationManager: ObservableObject {
     }
 
     private func fail(_ message: String) {
+        ceilingTask?.cancel()
         session = nil
-        hotkey = DictationHotkeyLogic.State()
+        hotkey.recording = false
+        hotkey.handsFree = false
+        hotkey.downAt = nil
         state = .failed(message)
         scheduleReset(after: 2.5)
     }
