@@ -144,6 +144,43 @@ final class MicLevelMeterTests: XCTestCase {
         XCTAssertTrue(m.lastDB.isFinite)
     }
 
+    func testChunkClockFollowsTheCurrentRate() {
+        // First buffer at 48 kHz, then 16 kHz audio: 25 chunks a second, not 8.
+        var m = MicLevelMeter()
+        m.ingest([], sampleRate: 48_000, channels: 1)
+        m.ingest(steady(16_000, rms: 0.1), sampleRate: 16_000, channels: 1)
+        XCTAssertEqual(m.chunks, 25)
+    }
+
+    func testZeroRateFirstBufferDoesNotMakeEverySampleAChunk() {
+        var m = MicLevelMeter()
+        m.ingest([], sampleRate: 0, channels: 1)
+        m.ingest(steady(48_000, rms: 0.1), sampleRate: 48_000, channels: 1)
+        XCTAssertEqual(m.chunks, 25)
+    }
+
+    func testNaNRateFirstBufferDoesNotTrap() {
+        var m = MicLevelMeter()
+        m.ingest([0.1, 0.2], sampleRate: .nan, channels: 1)
+        XCTAssertEqual(m.buffers, 1)
+        m.ingest(steady(48_000, rms: 0.1), sampleRate: 48_000, channels: 1)
+        XCTAssertEqual(m.chunks, 25)
+        var report = TakeReport()
+        report.record(meter: m)
+        _ = report.line
+    }
+
+    func testInfiniteRateFirstBufferDoesNotTrap() {
+        var m = MicLevelMeter()
+        m.ingest([0.1, 0.2], sampleRate: .infinity, channels: 1)
+        XCTAssertEqual(m.buffers, 1)
+        m.ingest(steady(48_000, rms: 0.1), sampleRate: 48_000, channels: 1)
+        XCTAssertEqual(m.chunks, 25)
+        var report = TakeReport()
+        report.record(meter: m)
+        _ = report.line
+    }
+
     /// 500 random signals, cut at random points. The invariants must hold for every one.
     func testGenerativeSignalsKeepTheInvariants() {
         var rng = SplitMix64(state: 0x51C0)
