@@ -22,6 +22,11 @@ enum VoiceError: LocalizedError {
     }
 }
 
+/// The tap's converter, built from the first buffer's real format. Only the audio thread uses it.
+private final class ConverterBox: @unchecked Sendable {
+    var converter: AVAudioConverter?
+}
+
 @available(macOS 26.0, *)
 @MainActor
 final class SpeechAnalyzerSession: VoiceSession {
@@ -67,15 +72,23 @@ final class SpeechAnalyzerSession: VoiceSession {
         }
         tapChannels = Int(inFormat.channelCount)
         tapSampleRate = Int(inFormat.sampleRate)
-        guard let converter = AVAudioConverter(from: inFormat, to: target) else {
-            throw VoiceError.noFormat
-        }
 
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         let tap = levelTap
-        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { buffer, _ in
+        let converterBox = ConverterBox()
+        // The format comes from the first buffer, not from the input node at start. CoreAudio can
+        // still be switching devices then, and a tap installed with the stale format delivers nothing.
+        input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, _ in
             tap.ingest(buffer)
-            let ratio = target.sampleRate / inFormat.sampleRate
+            let format = buffer.format
+            if converterBox.converter?.inputFormat != format {
+                converterBox.converter = AVAudioConverter(from: format, to: target)
+            }
+            guard let converter = converterBox.converter else {
+                tap.noteConvertFailure()
+                return
+            }
+            let ratio = target.sampleRate / format.sampleRate
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
             guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
             var consumed = false

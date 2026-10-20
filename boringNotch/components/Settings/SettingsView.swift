@@ -1777,6 +1777,7 @@ struct AccentCircleButton: View {
 
 struct Shortcuts: View {
     @ObservedObject var fnMonitor = FnKeyMonitor.shared
+    @Default(.dictationMicSilent) var dictationMicSilent
 
     var body: some View {
         Form {
@@ -1826,6 +1827,7 @@ struct Shortcuts: View {
                 case .off:
                     EmptyView()
                 }
+                micNote
                 KeyboardShortcuts.Recorder("Or hold this shortcut:", name: .dictate)
             } header: {
                 Text("Voice")
@@ -1845,6 +1847,31 @@ struct Shortcuts: View {
         }
         .accentColor(.effectiveAccent)
         .navigationTitle("Shortcuts")
+    }
+
+    /// Says why dictation heard nothing and how to re-grant the mic. Shown only when there is a reason.
+    @ViewBuilder
+    private var micNote: some View {
+        let access = AVCaptureDevice.authorizationStatus(for: .audio)
+        if access == .denied || access == .restricted {
+            Text("Microphone access is off, so dictation hears nothing.")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            micSettingsButton
+        } else if dictationMicSilent {
+            Text("The last take got only silence from the mic. After a rebuild or update, macOS can keep the permission for the old copy. In Terminal run: tccutil reset Microphone theboringteam.boringnotch, then quit and reopen BoringNotch, dictate once and click Allow.")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            micSettingsButton
+        }
+    }
+
+    private var micSettingsButton: some View {
+        Button("Open Microphone Settings") {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 }
 

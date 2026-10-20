@@ -9,6 +9,7 @@
 
 import AppKit
 import AVFoundation
+import Defaults
 import Foundation
 
 enum VoiceDictationState: Equatable {
@@ -60,6 +61,11 @@ final class VoiceDictationManager: ObservableObject {
     private var releaseAt: TimeInterval?
     /// The mic meter of the take in progress, set once its engine is created.
     private(set) var levelTap: MicLevelTap?
+    /// Live state of the mic for the notch, refreshed while the take records.
+    @Published private(set) var micStatus: MicStatus = .waiting
+    private var statusTask: Task<Void, Never>?
+    /// Uptime when the engine started, so the mic is judged only after it has had time to deliver.
+    private var engineStartedAt: TimeInterval?
 
     private init() {}
 
@@ -112,6 +118,8 @@ final class VoiceDictationManager: ObservableObject {
             releaseAt = nil
             takeStartedAt = now
             takeOpen = true
+            engineStartedAt = nil
+            startStatusPolling(take)
             ceilingTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(DictationHotkeyLogic.maxTake))
                 guard !Task.isCancelled else { return }
@@ -139,6 +147,7 @@ final class VoiceDictationManager: ObservableObject {
         ceilingTask?.cancel()
         startGraceTask?.cancel()
         resetTask?.cancel()
+        statusTask?.cancel()
         stopRequested = false
         downloadingModel = false
         if let captured = session {
@@ -167,6 +176,25 @@ final class VoiceDictationManager: ObservableObject {
         }
     }
 
+    /// Refreshes `micStatus` every 250 ms while this take records. Assigns only on change.
+    private func startStatusPolling(_ take: Int) {
+        statusTask?.cancel()
+        micStatus = .waiting
+        statusTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled, let self, take == self.takeID, self.state == .recording else { return }
+                let next: MicStatus
+                if self.session != nil, let tap = self.levelTap, let started = self.engineStartedAt {
+                    next = tap.status(elapsed: self.now - started)
+                } else {
+                    next = .waiting
+                }
+                if next != self.micStatus { self.micStatus = next }
+            }
+        }
+    }
+
     // MARK: - Take lifecycle
 
     /// Every `await` below is followed by a `take == takeID` check: a superseded or
@@ -177,12 +205,17 @@ final class VoiceDictationManager: ObservableObject {
             return
         }
         guard take == takeID else { return }
-        report.authStatus = AVCaptureDevice.authorizationStatus(for: .audio).rawValue
+        let authorization = AVCaptureDevice.authorizationStatus(for: .audio)
+        report.authStatus = authorization.rawValue
+        guard authorization != .denied, authorization != .restricted else {
+            fail("Mic access off. See Settings", outcome: .accessDenied)
+            return
+        }
         let granted = await AVCaptureDevice.requestAccess(for: .audio)
         guard take == takeID else { return }
         report.granted = granted
         guard granted else {
-            fail("Microphone access denied", outcome: .accessDenied)
+            fail("Mic access off. See Settings", outcome: .accessDenied)
             return
         }
 
@@ -216,6 +249,7 @@ final class VoiceDictationManager: ObservableObject {
         // `session` is only set once the engine runs, so finish() can tell a
         // still-starting take (stopRequested) from a live one.
         session = started
+        engineStartedAt = now
         startGraceTask?.cancel()
         if stopRequested {
             await finish()
@@ -243,14 +277,27 @@ final class VoiceDictationManager: ObservableObject {
             return
         }
         state = .processing
+        statusTask?.cancel()
 
         let parts = (try? await current.finish()) ?? []
         current.fill(&report)
+        let verdict = levelTap?.meter.verdict ?? .noBuffers
         session = nil
+        // A take with real signal proves the mic works, so the warning clears.
+        if verdict == .signal { Defaults[.dictationMicSilent] = false }
 
         let text = TranscriptAssembler.join(parts)
         guard !text.isEmpty else {
-            fail("Nothing heard", outcome: .nothingHeard)
+            switch verdict {
+            case .noBuffers:
+                fail("No audio from the mic", outcome: .noAudio)
+            case .digitalSilence:
+                // The mic opened but only zeros arrived: the stale-grant case.
+                Defaults[.dictationMicSilent] = true
+                fail("Mic blocked. See Settings", outcome: .micSilent)
+            case .signal:
+                fail("Nothing heard", outcome: .nothingHeard)
+            }
             return
         }
         await insert(text)
@@ -329,6 +376,7 @@ final class VoiceDictationManager: ObservableObject {
     private func fail(_ message: String, outcome: TakeOutcome = .failed) {
         ceilingTask?.cancel()
         startGraceTask?.cancel()
+        statusTask?.cancel()
         downloadingModel = false
         session = nil
         hotkey.recording = false
