@@ -162,7 +162,10 @@ final class SpeechAnalyzerSession: VoiceSession {
             }
         }
         if let resultsTask {
-            _ = await TimeoutRace.run(seconds: 0.5) { await resultsTask.value }
+            // A drain that times out may have missed the last final. Treat the take as not
+            // finalized, so the unconfirmed volatile tail is kept instead of dropped.
+            let drained = await TimeoutRace.run(seconds: 0.5) { await resultsTask.value }
+            if drained == nil { finalized = false }
         }
         return TranscriptAssembler.parts(finals: finals, volatileTail: lastVolatile, finalized: finalized)
     }
