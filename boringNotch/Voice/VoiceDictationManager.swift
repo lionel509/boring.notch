@@ -219,7 +219,11 @@ final class VoiceDictationManager: ObservableObject {
         let posted = await TimeoutRace.run(seconds: 3) {
             await XPCHelperClient.shared.postPasteKeystroke(keyCode: keyCode)
         }
-        guard posted == true else {
+        guard let posted else {
+            fail("Copied (clipboard replaced). Helper slow, paste may still land")
+            return
+        }
+        guard posted else {
             fail("Copied (clipboard replaced). Paste failed")
             return
         }
