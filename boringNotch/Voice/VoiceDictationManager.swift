@@ -43,6 +43,11 @@ final class VoiceDictationManager: ObservableObject {
     private var resetTask: Task<Void, Never>?
     /// Ends the take after `DictationHotkeyLogic.maxTake` seconds.
     private var ceilingTask: Task<Void, Never>?
+    /// Identifies the current take, so a `begin()` from an earlier take discards itself.
+    private var takeID = 0
+    /// Ends a stopped take that never got its engine running within `startGrace` seconds.
+    private var startGraceTask: Task<Void, Never>?
+    private static let startGrace: Double = 10
 
     private init() {}
 
@@ -67,6 +72,11 @@ final class VoiceDictationManager: ObservableObject {
         let action = DictationHotkeyLogic.reduce(&hotkey, event, at: now)
         switch action {
         case .start:
+            takeID += 1
+            let take = takeID
+            ceilingTask?.cancel()
+            startGraceTask?.cancel()
+            downloadingModel = false
             // A new press during the "Pasted" or error flash starts a fresh take.
             resetTask?.cancel()
             state = .recording
@@ -77,7 +87,7 @@ final class VoiceDictationManager: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self?.handle(.timeout)
             }
-            Task { await begin() }
+            Task { await begin(take) }
         case .stop:
             ceilingTask?.cancel()
             Task { await finish() }
@@ -95,31 +105,51 @@ final class VoiceDictationManager: ObservableObject {
 
     // MARK: - Take lifecycle
 
-    private func begin() async {
+    /// Every `await` below is followed by a `take == takeID` check: a superseded or
+    /// timed-out take must not write UI state, open a second engine, or call `fail`.
+    private func begin(_ take: Int) async {
         guard #available(macOS 26.0, *) else {
             fail("Needs macOS 26")
             return
         }
-        guard await AVCaptureDevice.requestAccess(for: .audio) else {
+        guard take == takeID else { return }
+        let granted = await AVCaptureDevice.requestAccess(for: .audio)
+        guard take == takeID else { return }
+        guard granted else {
             fail("Microphone access denied")
             return
         }
 
         let started = SpeechAnalyzerSession()
         do {
-            try await started.prepareModel { self.downloadingModel = true }
+            try await started.prepareModel { [weak self] in
+                guard let self, take == self.takeID else { return }
+                self.downloadingModel = true
+            }
+            guard take == takeID else { return }
             downloadingModel = false
             try await started.start { [weak self] partial in
-                Task { @MainActor in self?.liveText = partial }
+                Task { @MainActor in
+                    guard let self, take == self.takeID else { return }
+                    self.liveText = partial
+                }
             }
         } catch {
+            guard take == takeID else { return }
             downloadingModel = false
             fail(error.localizedDescription)
+            return
+        }
+        // The engine has started. If this take was superseded meanwhile, stop it here
+        // so no second microphone session is left running.
+        guard take == takeID else {
+            await started.cancel()
             return
         }
         // `session` is only set once the engine runs, so finish() can tell a
         // still-starting take (stopRequested) from a live one.
         session = started
+        startGraceTask?.cancel()
         if stopRequested {
             await finish()
         }
@@ -129,6 +159,20 @@ final class VoiceDictationManager: ObservableObject {
         guard state == .recording else { return }
         guard let current = session else {
             stopRequested = true
+            // If the engine never starts, end the take instead of leaving "Recording" up.
+            startGraceTask?.cancel()
+            let take = takeID
+            startGraceTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.startGrace))
+                guard !Task.isCancelled, let self, take == self.takeID,
+                      self.session == nil, self.state == .recording else { return }
+                let message = self.downloadingModel
+                    ? "Speech model still downloading. Try again"
+                    : "Speech engine did not start. Try again"
+                // Bumping the take makes a still-pending begin() discard itself.
+                self.takeID += 1
+                self.fail(message)
+            }
             return
         }
         state = .processing
@@ -197,6 +241,8 @@ final class VoiceDictationManager: ObservableObject {
 
     private func fail(_ message: String) {
         ceilingTask?.cancel()
+        startGraceTask?.cancel()
+        downloadingModel = false
         session = nil
         hotkey.recording = false
         hotkey.handsFree = false
