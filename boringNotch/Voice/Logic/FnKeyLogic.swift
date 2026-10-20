@@ -46,11 +46,7 @@ enum FnKeyLogic {
         switch input {
         case let .flags(keyCode, fn, otherModifiers):
             if keyCode == fnKeyCode {
-                // fn-up of a chord whose fn mask is still set: the chord's hold ends here.
-                if fn && s.fnHeld && s.chorded {
-                    return Output(event: releaseFn(&s, at: time), swallow: false)
-                }
-                // fn already held: a repeated fn flag changes nothing. Only a real fn-up, a chord or a resync closes the hold.
+                // fn already held: a repeated fn flag changes nothing. Only a real fn-up, a resync or the Space self-heal closes a hold.
                 if fn && s.fnHeld { return .pass }
                 if fn && !s.fnHeld {
                     s.fnHeld = true
