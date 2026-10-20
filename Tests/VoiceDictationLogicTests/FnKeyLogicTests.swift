@@ -46,6 +46,19 @@ final class FnKeyLogicTests: XCTestCase {
         return steps.map { Fn.classify(&s, $0.0, at: $0.1) }
     }
 
+    /// Feeds timed inputs through the classifier and the reducer. Nil events are skipped, so only real take actions show.
+    private func reduced(_ steps: [(Fn.Input, TimeInterval)]) -> [Logic.Action] {
+        var s = Fn.State()
+        var r = Logic.State()
+        var actions: [Logic.Action] = []
+        for (input, t) in steps {
+            if let event = Fn.classify(&s, input, at: t).event {
+                actions.append(Logic.reduce(&r, event, at: t))
+            }
+        }
+        return actions
+    }
+
     /// The tests build inputs from these constants, so a wrong constant would stay green. Pin the Apple codes.
     func testKeyCodesAreTheAppleOnes() {
         XCTAssertEqual(Fn.fnKeyCode, 63)
@@ -213,15 +226,17 @@ final class FnKeyLogicTests: XCTestCase {
         XCTAssertFalse(s.fnHeld)
     }
 
-    /// Breaker F2: an arrow still down when fn is released leaves the fn mask set on the fn-up.
-    func testBreakStaleFnAfterArrowChordBlocksNextHold() {
-        XCTAssertEqual(run([
-            (fnDown(), 0.0),
-            (.keyDown(keyCode: 124, isRepeat: false), 0.2),
-            (.flags(keyCode: Fn.fnKeyCode, fn: true, otherModifiers: false), 0.4),
-            (.keyUp(keyCode: 124), 0.5),
-            (fnDown(), 5.0),
-        ]).last, out(.keyDown))
+    /// Breaker F2: an arrow still down when fn is released leaves the fn mask set on the fn-up. The stale hold
+    /// ignores repeats while it stays down, and the next real release closes it.
+    func testStaleFnAfterArrowChordRecoversOnNextRelease() {
+        var s = Fn.State()
+        _ = Fn.classify(&s, fnDown(), at: 0.0)
+        _ = Fn.classify(&s, .keyDown(keyCode: 124, isRepeat: false), at: 0.2)
+        XCTAssertEqual(Fn.classify(&s, .flags(keyCode: Fn.fnKeyCode, fn: true, otherModifiers: false), at: 0.4), .pass)
+        _ = Fn.classify(&s, .keyUp(keyCode: 124), at: 0.5)
+        XCTAssertEqual(Fn.classify(&s, fnDown(), at: 5.0), .pass)
+        XCTAssertEqual(Fn.classify(&s, fnUp(), at: 5.5), out(.cancel))
+        XCTAssertEqual(Fn.classify(&s, fnDown(), at: 7.0), out(.keyDown))
     }
 
     /// A stale latched hold is stopped by the second fn press after a lost fn-up, through the reducer too.
@@ -244,14 +259,36 @@ final class FnKeyLogicTests: XCTestCase {
         XCTAssertEqual(actions, [.start, .none, .none, .stop])
     }
 
-    /// fn pressed while a chord holds it down releases the chord, and fn is no longer held.
-    func testFnDownWhileChordedHoldReleasesIt() {
+    /// A repeated fn flag during a chorded hold changes nothing. Only the real fn-up closes the hold.
+    func testRepeatedFnFlagDuringChordedHoldIsIgnored() {
         var s = Fn.State()
         _ = Fn.classify(&s, fnDown(), at: 0)
         _ = Fn.classify(&s, .keyDown(keyCode: 124, isRepeat: false), at: 0.2)
-        let out = Fn.classify(&s, .flags(keyCode: Fn.fnKeyCode, fn: true, otherModifiers: false), at: 0.4)
-        XCTAssertEqual(out.event, .cancel)
+        XCTAssertEqual(Fn.classify(&s, .flags(keyCode: Fn.fnKeyCode, fn: true, otherModifiers: false), at: 0.4), .pass)
+        XCTAssertTrue(s.fnHeld)
+        XCTAssertEqual(Fn.classify(&s, fnUp(), at: 0.6), out(.cancel))
         XCTAssertFalse(s.fnHeld)
+    }
+
+    /// Breaker BF1: a repeated fn flag after fn+Command must not start a take.
+    func testFnCmdThenRepeatFlagsDoNotRestart() {
+        XCTAssertEqual(reduced([
+            (fnDown(other: true), 0),   // fn pressed while Command held: chord, no take
+            (fnDown(), 0.5),            // Command released; repeated fn flag
+            (fnDown(), 1.0),            // another repeated fn flag, fn still held
+            (fnUp(), 3.0),              // real fn-up
+        ]), [], "a repeated fn flag restarted a take mid-hold")
+    }
+
+    /// Breaker BF2: repeated fn flags after an fn+arrow chord must not start a new take.
+    func testFnArrowChordThenRepeatFlagsDoNotRestart() {
+        XCTAssertEqual(reduced([
+            (fnDown(), 0),
+            (.keyDown(keyCode: 123, isRepeat: false), 0.2),   // left arrow under fn: chord cancels
+            (fnDown(), 0.5),                                  // repeated fn flag
+            (fnDown(), 1.0),                                  // second repeated fn flag
+            (fnUp(), 3.0),                                    // real fn-up: the chorded hold ends, no take left
+        ]), [.start, .discard, .none], "a repeated fn flag restarted a take after a chord")
     }
 
     // MARK: resync (tap re-enabled after a timeout)
