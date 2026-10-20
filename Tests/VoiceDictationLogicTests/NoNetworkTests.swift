@@ -3,7 +3,8 @@ import XCTest
 /// Invariant 1: audio and transcripts never leave the Mac. The voice code may
 /// reach Speech.framework, NSPasteboard and the XPC helper, and nothing networked.
 final class NoNetworkTests: XCTestCase {
-    static let forbidden = ["URLSession", "NWConnection", "Network", "http://", "https://", "URLRequest"]
+    static let forbidden = ["URLSession", "NWConnection", "Network", "URLRequest", "://", "NSURL", "CFHTTP", "SFSpeech", "URL(string", "Data(contentsOf", "String(contentsOf", "socket("]
+    static let scannedExtensions: Set<String> = ["swift", "m", "mm", "h", "c", "cpp"]
 
     func testNoNetworkingSymbolsUnderVoice() throws {
         for file in try voiceSources() {
@@ -59,7 +60,7 @@ final class NoNetworkTests: XCTestCase {
     }
 
     static func isScanned(_ url: URL) -> Bool {
-        url.pathExtension == "swift"
+        scannedExtensions.contains(url.pathExtension)
     }
 
     private func voiceSources() throws -> [URL] {
@@ -72,7 +73,7 @@ final class NoNetworkTests: XCTestCase {
 
         let files = (FileManager.default.enumerator(at: voice, includingPropertiesForKeys: nil)?
             .compactMap { $0 as? URL } ?? [])
-            .filter { $0.pathExtension == "swift" }
+            .filter { Self.isScanned($0) }
         XCTAssertGreaterThanOrEqual(files.count, 5, "expected the voice sources, found \(files.count)")
         return files
     }
