@@ -312,6 +312,22 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
             reply(AXIsProcessTrusted())
         }
     }
+
+    /// Cmd-V into whatever has focus. Here, not in the app: the sandbox cannot post events,
+    /// and Accessibility trust lives on this process. `keyCode` is the key that types V on
+    /// the active layout, found by the app (PasteKeycode).
+    @objc func postPasteKeystroke(_ keyCode: Int, with reply: @escaping (Bool) -> Void) {
+        guard AXIsProcessTrusted(), (0...127).contains(keyCode) else { return reply(false) }
+        let source = CGEventSource(stateID: .combinedSessionState)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: false)
+        else { return reply(false) }
+        down.flags = .maskCommand   // explicit: never inherit whatever modifiers are still physically held
+        up.flags = .maskCommand
+        down.post(tap: .cgSessionEventTap)
+        up.post(tap: .cgSessionEventTap)
+        reply(true)
+    }
     
     private class KeyboardBrightnessClient {
         private static let keyboardID: UInt64 = 1

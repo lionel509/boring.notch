@@ -22,6 +22,8 @@
 	</dict>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>boringNotch reads the audio of the app you are playing so the notch visualiser can follow the music.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hold the dictation shortcut and the notch listens. What you say is transcribed on this Mac and typed into the app you are in; audio never leaves the machine.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Reads the battery level of your connected Bluetooth devices, so the notch can show it. Nothing is transmitted.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

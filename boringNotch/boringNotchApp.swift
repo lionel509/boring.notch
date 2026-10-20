@@ -539,6 +539,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Push-to-talk dictation. Deliberately outside the showDictationActivity gate
+        // (see the warning comment in the mic-watcher startup above).
+        Task { @MainActor in
+            for await event in KeyboardShortcuts.events(for: .dictate) {
+                switch event {
+                case .keyDown: VoiceDictationManager.shared.hotkeyDown()
+                case .keyUp: VoiceDictationManager.shared.hotkeyUp()
+                }
+            }
+        }
+
+        // Hold-fn dictation. start() is idempotent, so the initial emit of updates() is harmless.
+        Task { @MainActor in
+            if Defaults[.dictateWithFn] { FnKeyMonitor.shared.start() }
+            for await on in Defaults.updates(.dictateWithFn) {
+                on ? FnKeyMonitor.shared.start() : FnKeyMonitor.shared.disable()
+            }
+        }
+        // An Accessibility grant made in System Settings while the app runs is picked up on return.
+        Task { @MainActor in
+            for await _ in NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification) {
+                if Defaults[.dictateWithFn] && FnKeyMonitor.shared.mode != .active {
+                    FnKeyMonitor.shared.restart()
+                }
+            }
+        }
+
         if !Defaults[.showOnAllDisplays] {
             let viewModel = self.vm
             let window = createBoringNotchWindow(

@@ -1776,6 +1776,8 @@ struct AccentCircleButton: View {
 }
 
 struct Shortcuts: View {
+    @ObservedObject var fnMonitor = FnKeyMonitor.shared
+
     var body: some View {
         Form {
             Section {
@@ -1792,6 +1794,53 @@ struct Shortcuts: View {
             }
             Section {
                 KeyboardShortcuts.Recorder("Toggle Notch Open:", name: .toggleNotchOpen)
+            }
+            Section {
+                Defaults.Toggle(key: .dictateWithFn) {
+                    Text("Hold fn to dictate")
+                }
+                switch fnMonitor.mode {
+                case .active:
+                    Text("Hold fn to talk. fn+Space keeps listening; press fn to stop.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                case .listenOnly:
+                    Text("fn works, but fn+Space also types a space. Allow Accessibility to fix that.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                case .denied:
+                    Text("fn needs Accessibility permission. The shortcut below still works.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                    Button("Allow") {
+                        Task { @MainActor in
+                            let granted = await XPCHelperClient.shared.ensureAccessibilityAuthorization(promptIfNeeded: true)
+                            fnMonitor.restart()
+                            if granted && fnMonitor.mode == .denied {
+                                // Accessibility is granted but the tap still fails: ask for Input Monitoring, then retry.
+                                _ = CGRequestListenEventAccess()
+                                fnMonitor.restart()
+                            }
+                        }
+                    }
+                case .off:
+                    EmptyView()
+                }
+                KeyboardShortcuts.Recorder("Or hold this shortcut:", name: .dictate)
+            } header: {
+                Text("Voice")
+            } footer: {
+                Text(
+                    "Hold fn (or the shortcut) to talk, let go to type what you said into the app you are in. fn+Space, or a quick tap of the shortcut, keeps listening until you press again. If fn also opens emoji or switches input language, set System Settings > Keyboard > \"Press Globe key to\" to \"Do Nothing\", and change the Dictation shortcut if it is \"Press Globe twice\". Keyboards without an Apple fn key use the shortcut. Transcription runs on this Mac and nothing is sent anywhere."
+                )
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            }
+            .onAppear {
+                if Defaults[.dictateWithFn] && fnMonitor.mode != .active {
+                    fnMonitor.restart()
+                }
             }
         }
         .accentColor(.effectiveAccent)
