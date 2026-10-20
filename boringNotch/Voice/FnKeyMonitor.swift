@@ -1,0 +1,146 @@
+//
+//  FnKeyMonitor.swift
+//  boringNotch
+//
+
+import AppKit
+import ApplicationServices
+import Defaults
+
+/// Owns the session event tap that turns holding fn into push-to-talk. It tries an active
+/// tap first and falls back to listen-only. The decisions are in `FnKeyLogic`, and this
+/// class only creates the tap and forwards what the classifier says.
+@MainActor
+final class FnKeyMonitor: ObservableObject {
+    static let shared = FnKeyMonitor()
+
+    enum Mode: Equatable {
+        case off
+        case active
+        case listenOnly
+        case denied
+    }
+
+    @Published private(set) var mode: Mode = .off
+
+    private var tap: CFMachPort?
+    private var source: CFRunLoopSource?
+    private var logic = FnKeyLogic.State()
+
+    private init() {}
+
+    func start() {
+        guard tap == nil, Defaults[.dictateWithFn] else { return }
+        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.keyUp.rawValue)
+            | (1 << CGEventType.flagsChanged.rawValue)
+        let userInfo = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+
+        var created = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: fnTapCallback,
+            userInfo: userInfo
+        )
+        var tapMode = Mode.active
+        if created == nil {
+            created = CGEvent.tapCreate(
+                tap: .cgSessionEventTap,
+                place: .headInsertEventTap,
+                options: .listenOnly,
+                eventsOfInterest: mask,
+                callback: fnTapCallback,
+                userInfo: userInfo
+            )
+            tapMode = .listenOnly
+        }
+        guard let created else {
+            mode = .denied
+            return
+        }
+
+        tap = created
+        let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, created, 0)
+        source = runLoopSource
+        CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        CGEvent.tapEnable(tap: created, enable: true)
+        mode = tapMode
+    }
+
+    func stop() {
+        // A fn hold still open when the tap goes away must not leave a take recording.
+        if logic.fnHeld {
+            VoiceDictationManager.shared.fnKey(.cancel)
+        }
+        logic = FnKeyLogic.State()
+        if let tap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
+        }
+        if let source {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        tap = nil
+        source = nil
+        mode = .off
+    }
+
+    func restart() {
+        stop()
+        start()
+    }
+
+    fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        let now = ProcessInfo.processInfo.systemUptime
+        let input: FnKeyLogic.Input
+        switch type {
+        case .tapDisabledByTimeout, .tapDisabledByUserInput:
+            // Re-enable at once, then resync fn in case a fn-up was lost while the tap was off.
+            if let tap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+            let fnDown = CGEventSource.flagsState(.combinedSessionState).contains(.maskSecondaryFn)
+            input = .resync(fnDown: fnDown)
+        case .flagsChanged:
+            let flags = event.flags
+            let otherModifiers = !flags.intersection([.maskShift, .maskControl, .maskAlternate, .maskCommand]).isEmpty
+            input = .flags(
+                keyCode: Int(event.getIntegerValueField(.keyboardEventKeycode)),
+                fn: flags.contains(.maskSecondaryFn),
+                otherModifiers: otherModifiers
+            )
+        case .keyDown:
+            input = .keyDown(
+                keyCode: Int(event.getIntegerValueField(.keyboardEventKeycode)),
+                isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            )
+        case .keyUp:
+            input = .keyUp(keyCode: Int(event.getIntegerValueField(.keyboardEventKeycode)))
+        default:
+            return Unmanaged.passUnretained(event)
+        }
+
+        let output = FnKeyLogic.classify(&logic, input, at: now)
+        if let dictationEvent = output.event {
+            DispatchQueue.main.async {
+                VoiceDictationManager.shared.fnKey(dictationEvent)
+            }
+        }
+        // Only the Space of an fn+Space chord is ever swallowed, and only with an active tap.
+        if output.swallow && mode == .active {
+            return nil
+        }
+        return Unmanaged.passUnretained(event)
+    }
+}
+
+private let fnTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
+    guard let userInfo else { return Unmanaged.passUnretained(event) }
+    let monitor = Unmanaged<FnKeyMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+    // The tap is on the main run loop, so this callback always runs on the main actor.
+    return MainActor.assumeIsolated {
+        monitor.handle(type: type, event: event)
+    }
+}

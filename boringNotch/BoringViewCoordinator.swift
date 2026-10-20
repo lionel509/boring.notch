@@ -175,6 +175,9 @@ class BoringViewCoordinator: ObservableObject {
                 if Defaults[.hudReplacement] {
                     await MediaKeyInterceptor.shared.start(promptIfNeeded: false)
                 }
+                if Defaults[.dictateWithFn] && FnKeyMonitor.shared.mode != .active {
+                    FnKeyMonitor.shared.restart()
+                }
             }
         }
 

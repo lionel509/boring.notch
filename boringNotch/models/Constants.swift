@@ -137,6 +137,7 @@ extension Defaults.Keys {
     /// process listeners are never registered, so the feature costs nothing at all until
     /// it is asked for.
     static let showDictationActivity = Key<Bool>("showDictationActivity", default: false)
+    static let dictateWithFn = Key<Bool>("dictateWithFn", default: true)
 
     static let dictationDiagnostic = Key<String>("dictationDiagnostic", default: "not started")
 

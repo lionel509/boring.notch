@@ -63,6 +63,11 @@ final class VoiceDictationManager: ObservableObject {
         handle(.keyUp)
     }
 
+    /// Entry point for the fn-key tap (`FnKeyMonitor`). Named apart from the `hotkey` state property.
+    func fnKey(_ event: DictationHotkeyLogic.Event) {
+        handle(event)
+    }
+
     private func handle(_ event: DictationHotkeyLogic.Event) {
         let now = ProcessInfo.processInfo.systemUptime
         // While transcribing, only track the key. The next take starts after the paste.
@@ -93,9 +98,28 @@ final class VoiceDictationManager: ObservableObject {
         case .stop:
             ceilingTask?.cancel()
             Task { await finish() }
+        case .discard:
+            discard()
         case .none:
             break
         }
+    }
+
+    /// fn was a modifier, or a quick fn tap: stop the mic and drop the take. Nothing is
+    /// pasted and the clipboard is not touched.
+    private func discard() {
+        takeID += 1
+        ceilingTask?.cancel()
+        startGraceTask?.cancel()
+        resetTask?.cancel()
+        stopRequested = false
+        downloadingModel = false
+        if let captured = session {
+            session = nil
+            Task { await captured.cancel() }
+        }
+        state = .idle
+        liveText = ""
     }
 
     private var isResting: Bool {
@@ -243,7 +267,7 @@ final class VoiceDictationManager: ObservableObject {
 
     /// Cmd-V with Option still held would paste as Option-Cmd-V in many apps.
     private func waitForModifiersReleased(timeout: TimeInterval) async {
-        let watched: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+        let watched: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
         let deadline = Date().addingTimeInterval(timeout)
         while !NSEvent.modifierFlags.intersection(watched).isEmpty, Date() < deadline {
             try? await Task.sleep(for: .milliseconds(20))

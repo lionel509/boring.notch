@@ -550,6 +550,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Hold-fn dictation. start() is idempotent, so the initial emit of updates() is harmless.
+        Task { @MainActor in
+            if Defaults[.dictateWithFn] { FnKeyMonitor.shared.start() }
+            for await on in Defaults.updates(.dictateWithFn) {
+                on ? FnKeyMonitor.shared.start() : FnKeyMonitor.shared.stop()
+            }
+        }
+
         if !Defaults[.showOnAllDisplays] {
             let viewModel = self.vm
             let window = createBoringNotchWindow(
