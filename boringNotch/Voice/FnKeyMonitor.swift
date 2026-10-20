@@ -73,7 +73,7 @@ final class FnKeyMonitor: ObservableObject {
     func disable() {
         // Queued behind any tap event already dispatched, so those still reach the reducer first.
         if logic.fnHeld || logic.handsFreeOpen {
-            send(.abort)
+            send(.abort, at: ProcessInfo.processInfo.systemUptime)
         }
         logic = FnKeyLogic.State()
         stop()
@@ -82,7 +82,7 @@ final class FnKeyMonitor: ObservableObject {
     func stop() {
         // A fn hold still open when the tap goes away must not leave a take recording.
         if logic.fnHeld {
-            send(.cancel)
+            send(.cancel, at: ProcessInfo.processInfo.systemUptime)
         }
         logic = FnKeyLogic.State()
         if let tap {
@@ -103,10 +103,11 @@ final class FnKeyMonitor: ObservableObject {
     }
 
     fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        let now = ProcessInfo.processInfo.systemUptime
+        let now: TimeInterval
         let input: FnKeyLogic.Input
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
+            now = ProcessInfo.processInfo.systemUptime
             // Re-enable at once, then resync fn in case a fn-up was lost while the tap was off.
             if let tap {
                 CGEvent.tapEnable(tap: tap, enable: true)
@@ -114,6 +115,7 @@ final class FnKeyMonitor: ObservableObject {
             let fnDown = CGEventSource.flagsState(.combinedSessionState).contains(.maskSecondaryFn)
             input = .resync(fnDown: fnDown)
         case .flagsChanged:
+            now = eventTime(event)
             let flags = event.flags
             let otherModifiers = !flags.intersection([.maskShift, .maskControl, .maskAlternate, .maskCommand]).isEmpty
             input = .flags(
@@ -122,21 +124,23 @@ final class FnKeyMonitor: ObservableObject {
                 otherModifiers: otherModifiers
             )
         case .keyDown:
+            now = eventTime(event)
             let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
             let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
             // A fresh Space keyDown whose flags lack fn means a fn-up was lost: resync before classifying.
             if keyCode == FnKeyLogic.spaceKeyCode && !isRepeat && logic.fnHeld && !event.flags.contains(.maskSecondaryFn) {
-                send(FnKeyLogic.classify(&logic, .resync(fnDown: false), at: now).event)
+                send(FnKeyLogic.classify(&logic, .resync(fnDown: false), at: now).event, at: now)
             }
             input = .keyDown(keyCode: keyCode, isRepeat: isRepeat)
         case .keyUp:
+            now = eventTime(event)
             input = .keyUp(keyCode: Int(event.getIntegerValueField(.keyboardEventKeycode)))
         default:
             return Unmanaged.passUnretained(event)
         }
 
         let output = FnKeyLogic.classify(&logic, input, at: now)
-        send(output.event)
+        send(output.event, at: now)
         // Only the Space of an fn+Space chord is ever swallowed, and only with an active tap.
         if output.swallow && mode == .active {
             return nil
@@ -144,11 +148,17 @@ final class FnKeyMonitor: ObservableObject {
         return Unmanaged.passUnretained(event)
     }
 
-    /// Hands a classifier event to the manager on the next main-queue turn.
-    private func send(_ event: DictationHotkeyLogic.Event?) {
+    /// The event's own time, on the same since-boot clock as `systemUptime`. A late callback
+    /// must not stretch a short tap into a hold, or a hold into a tap.
+    private func eventTime(_ event: CGEvent) -> TimeInterval {
+        NSEvent(cgEvent: event)?.timestamp ?? ProcessInfo.processInfo.systemUptime
+    }
+
+    /// Hands a classifier event to the manager on the next main-queue turn, with its own time.
+    private func send(_ event: DictationHotkeyLogic.Event?, at time: TimeInterval) {
         guard let event else { return }
         DispatchQueue.main.async {
-            VoiceDictationManager.shared.fnKey(event)
+            VoiceDictationManager.shared.fnKey(event, at: time)
         }
     }
 }

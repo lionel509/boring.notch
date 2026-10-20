@@ -64,12 +64,13 @@ final class VoiceDictationManager: ObservableObject {
     }
 
     /// Entry point for the fn-key tap (`FnKeyMonitor`). Named apart from the `hotkey` state property.
-    func fnKey(_ event: DictationHotkeyLogic.Event) {
-        handle(event)
+    /// `time` is the event's own time, so a late dispatch does not change how long the key was held.
+    func fnKey(_ event: DictationHotkeyLogic.Event, at time: TimeInterval) {
+        handle(event, at: time)
     }
 
-    private func handle(_ event: DictationHotkeyLogic.Event) {
-        let now = ProcessInfo.processInfo.systemUptime
+    private func handle(_ event: DictationHotkeyLogic.Event, at time: TimeInterval? = nil) {
+        let now = time ?? ProcessInfo.processInfo.systemUptime
         // While transcribing, only track the key. The next take starts after the paste.
         guard state != .processing else {
             DictationHotkeyLogic.track(&hotkey, event, at: now)
