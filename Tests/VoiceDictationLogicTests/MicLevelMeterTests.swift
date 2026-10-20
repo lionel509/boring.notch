@@ -120,13 +120,24 @@ final class MicLevelMeterTests: XCTestCase {
     }
 
     func testNoiseFloorRisesWhenTheRoomGetsLouder() {
-        // A take opens at -75 dB, then sits in -55 dB room noise for 8 s.
+        // A take opens at -75 dB, then sits in -55 dB room noise for 20 s.
+        // At 1.25 dB a second the floor needs 16 s to reach -55.
         var m = MicLevelMeter()
         m.ingest(steady(chunk * 2, rms: Float(pow(10.0, -75.0 / 20))), sampleRate: rate, channels: 1)
-        m.ingest(steady(384_000, rms: Float(pow(10.0, -55.0 / 20))), sampleRate: rate, channels: 1)
+        m.ingest(steady(960_000, rms: Float(pow(10.0, -55.0 / 20))), sampleRate: rate, channels: 1)
         XCTAssertEqual(m.floorDB ?? 0, -55, accuracy: 0.01)
         XCTAssertLessThan(m.level, 0.1)
-        XCTAssertEqual(m.status(elapsed: 8.1), .quiet)
+        XCTAssertEqual(m.status(elapsed: 20.1), .quiet)
+    }
+
+    func testTenSecondsOfLoudSoundAfterAQuietStartStillReadsHigh() {
+        // A take opens at -75 dB, then holds -45 dB for 10 s. The floor climbs only
+        // 12.5 dB in that time, so the level stays near full and the take is never quiet.
+        var m = MicLevelMeter()
+        m.ingest(steady(chunk * 2, rms: Float(pow(10.0, -75.0 / 20))), sampleRate: rate, channels: 1)
+        m.ingest(steady(480_000, rms: Float(pow(10.0, -45.0 / 20))), sampleRate: rate, channels: 1)
+        XCTAssertTrue((0.85...0.90).contains(m.level), "level \(m.level)")
+        XCTAssertNotEqual(m.status(elapsed: 10.1), .quiet)
     }
 
     func testOneSecondOfAQuietToneIsSignal() {
