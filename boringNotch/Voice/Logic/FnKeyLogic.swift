@@ -44,6 +44,14 @@ enum FnKeyLogic {
         switch input {
         case let .flags(keyCode, fn, otherModifiers):
             if keyCode == fnKeyCode {
+                // fn-up of a chord whose fn mask is still set: the chord's hold ends here.
+                if fn && s.fnHeld && s.chorded {
+                    return Output(event: releaseFn(&s, at: time), swallow: false)
+                }
+                // A fresh fn press while fnHeld means the fn-up was lost: close the stale hold, then start over.
+                if fn && s.fnHeld {
+                    _ = releaseFn(&s, at: time)
+                }
                 if fn && !s.fnHeld {
                     s.fnHeld = true
                     s.fnDownAt = time
