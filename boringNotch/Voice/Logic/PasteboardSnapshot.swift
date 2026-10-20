@@ -1,21 +1,30 @@
 import AppKit
 
-/// Everything on a pasteboard, as (type, bytes) per item, so it can be put back exactly.
+/// Everything on a pasteboard, as (type, bytes) per item, so it can be put back exactly,
+/// with each item's types kept in their original order.
 struct PasteboardSnapshot: Equatable {
     /// One dictionary per NSPasteboardItem. Types whose data reads nil are skipped.
     let items: [[NSPasteboard.PasteboardType: Data]]
+    /// The kept types of each item, in pasteboard order. Apps that take the first type they can
+    /// read depend on this order, so restore writes the types back in it.
+    let types: [[NSPasteboard.PasteboardType]]
 
     static func take(from pb: NSPasteboard) -> PasteboardSnapshot {
-        let items: [[NSPasteboard.PasteboardType: Data]] = (pb.pasteboardItems ?? []).map { item in
+        var items: [[NSPasteboard.PasteboardType: Data]] = []
+        var types: [[NSPasteboard.PasteboardType]] = []
+        for item in pb.pasteboardItems ?? [] {
             var dict: [NSPasteboard.PasteboardType: Data] = [:]
+            var order: [NSPasteboard.PasteboardType] = []
             for type in item.types {
                 if let data = item.data(forType: type) {
                     dict[type] = data
+                    order.append(type)
                 }
             }
-            return dict
+            items.append(dict)
+            types.append(order)
         }
-        return PasteboardSnapshot(items: items)
+        return PasteboardSnapshot(items: items, types: types)
     }
 
     /// Replaces the pasteboard contents with `text` and returns the changeCount after the write.
@@ -32,10 +41,12 @@ struct PasteboardSnapshot: Equatable {
     func restore(to pb: NSPasteboard, ifChangeCountIs expected: Int) -> Bool {
         guard pb.changeCount == expected else { return false }
         pb.clearContents()
-        let restored: [NSPasteboardItem] = items.map { dict in
+        let restored: [NSPasteboardItem] = zip(items, types).map { dict, order in
             let item = NSPasteboardItem()
-            for (type, data) in dict {
-                item.setData(data, forType: type)
+            for type in order {
+                if let data = dict[type] {
+                    item.setData(data, forType: type)
+                }
             }
             return item
         }
