@@ -44,9 +44,66 @@ final class DictationHotkeyLogicTests: XCTestCase {
     func testRepeatKeyDownDuringHoldIsIgnored() {
         var s = Logic.State()
         _ = Logic.reduce(&s, .keyDown, at: 0)
-        let before = s
         XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0.05), .none)
-        XCTAssertEqual(s, before)
+        XCTAssertEqual(s.recording, true)
+        XCTAssertEqual(s.handsFree, false)
+        XCTAssertEqual(s.downAt, 0)
+    }
+
+    /// Breaker U1-B1: the key is still down when the hands-free take is stopped.
+    func testAutoRepeatWhileStoppingHandsFreeDoesNotRestart() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.1), .none)
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 1.0), .stop)
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 1.5), .none, "repeat restarted recording")
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 1.6), .none)
+        XCTAssertFalse(s.recording)
+    }
+
+    /// Breaker U3-B2: a repeat 30 ms after the stop tap must not start a new take.
+    func testRepeatAfterHandsFreeStopIsIgnored() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.1), .none)
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 2.0), .stop)
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 2.03), .none, "repeat restarted recording")
+        XCTAssertFalse(s.recording)
+    }
+
+    /// Breaker U1-B2: a lost keyUp must not swallow the next press. A fresh press
+    /// during a stuck hold-take ends that take (ruling for FIX 1c).
+    func testLostKeyUpDoesNotSwallowNextPress() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 10), .stop)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 10.1), .none)
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 12), .start, "second press swallowed")
+    }
+
+    func testRepeatsDuringLongHoldAreIgnored() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        for step in 1...10 {
+            XCTAssertEqual(Logic.reduce(&s, .keyDown, at: Double(step) * 0.5), .none)
+        }
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 5.1), .stop)
+        XCTAssertFalse(s.recording)
+    }
+
+    func testTimeoutEndsHandsFreeTake() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.1), .none)
+        XCTAssertEqual(Logic.reduce(&s, .timeout, at: 180), .stop)
+        XCTAssertFalse(s.recording)
+        XCTAssertFalse(s.handsFree)
+    }
+
+    func testTimeoutWhileIdleIsNone() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .timeout, at: 180), .none)
+        XCTAssertEqual(s, Logic.State())
     }
 
     func testKeyUpWhenIdleIsNone() {
@@ -65,7 +122,12 @@ final class DictationHotkeyLogicTests: XCTestCase {
             let count = Int.random(in: 1...40, using: &rng)
             for _ in 0..<count {
                 time += Double.random(in: 0...2, using: &rng)
-                let event: Logic.Event = Bool.random(using: &rng) ? .keyDown : .keyUp
+                let event: Logic.Event
+                switch Int.random(in: 0...2, using: &rng) {
+                case 0: event = .keyDown
+                case 1: event = .keyUp
+                default: event = .timeout
+                }
                 let wasRecording = s.recording
                 let action = Logic.reduce(&s, event, at: time)
                 switch action {
