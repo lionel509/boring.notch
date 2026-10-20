@@ -140,9 +140,9 @@ final class VoiceDictationManager: ObservableObject {
                 report.holdMs = Int((now - started) * 1000)
             }
             ceilingTask?.cancel()
-            // Bind the stop to this take: a later press must not be stopped by a stale Task.
-            let take = takeID
-            Task { await finish(take) }
+            // Stop now, not in a queued Task: a press handled before that Task would see
+            // the take still recording and could be stopped or pasted into the wrong take.
+            stop(takeID)
         case .discard:
             discard()
         case .none:
@@ -256,17 +256,19 @@ final class VoiceDictationManager: ObservableObject {
             await started.cancel()
             return
         }
-        // `session` is only set once the engine runs, so finish() can tell a
+        // `session` is only set once the engine runs, so stop() can tell a
         // still-starting take (stopRequested) from a live one.
         session = started
         engineStartedAt = now
         startGraceTask?.cancel()
         if stopRequested {
-            await finish(take)
+            stop(take)
         }
     }
 
-    private func finish(_ take: Int) async {
+    /// Ends the take at key release. Not async: `state` is `.processing` before this returns,
+    /// so a key event handled before any queued Task runs is only tracked. `complete` does the rest.
+    private func stop(_ take: Int) {
         guard take == takeID, state == .recording else { return }
         guard let current = session else {
             stopRequested = true
@@ -288,7 +290,11 @@ final class VoiceDictationManager: ObservableObject {
         }
         state = .processing
         statusTask?.cancel()
+        Task { await complete(current) }
+    }
 
+    /// The slow half of a stop: waits for the engine's last results, then pastes or reports.
+    private func complete(_ current: any VoiceSession) async {
         let parts = (try? await current.finish()) ?? []
         current.fill(&report)
         let verdict = levelTap?.meter.verdict ?? .noBuffers
