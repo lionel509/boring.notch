@@ -55,9 +55,10 @@ struct MicLevelMeter {
     mutating func ingest(_ samples: UnsafeBufferPointer<Float>, sampleRate: Double, channels: Int) {
         buffers += 1
         self.samples += samples.count
-        // The chunk clock follows the rate of the current buffer. A NaN, infinite or zero rate
-        // keeps the last good size, or 48 kHz (1920 samples) if none has arrived yet.
-        let rateIsValid = sampleRate.isFinite && sampleRate > 0
+        // The chunk clock follows the rate of the current buffer. A NaN, infinite, zero or
+        // absurdly large rate (above 1 MHz, where Int() would trap) keeps the last good size,
+        // or 48 kHz (1920 samples) if none has arrived yet.
+        let rateIsValid = sampleRate.isFinite && sampleRate > 0 && sampleRate <= 1_000_000
         if rateIsValid {
             chunkSize = max(1, Int((sampleRate * Self.chunkSeconds).rounded()))
         }
