@@ -151,6 +151,55 @@ final class FnKeyLogicTests: XCTestCase {
         ]), [out(.keyDown), out(.latch, swallow: true), out(.keyUp), .pass, .pass])
     }
 
+    // MARK: stale fn (a lost fn-up or an arrow chord that left the mask set)
+
+    /// Breaker B1: a lost fn-up must not swallow the next fresh fn press.
+    func testBreakerLostFnUpSwallowsFreshFnPress() {
+        var s = Fn.State()
+        _ = Fn.classify(&s, fnDown(), at: 0)
+        let second = Fn.classify(&s, fnDown(), at: 5.0)   // fn-up was lost in between
+        XCTAssertEqual(second.event, Logic.Event.keyDown)
+    }
+
+    /// Breaker F2: an arrow still down when fn is released leaves the fn mask set on the fn-up.
+    func testBreakStaleFnAfterArrowChordBlocksNextHold() {
+        XCTAssertEqual(run([
+            (fnDown(), 0.0),
+            (.keyDown(keyCode: 124, isRepeat: false), 0.2),
+            (.flags(keyCode: Fn.fnKeyCode, fn: true, otherModifiers: false), 0.4),
+            (.keyUp(keyCode: 124), 0.5),
+            (fnDown(), 5.0),
+        ]).last, out(.keyDown))
+    }
+
+    /// A stale latched hold is stopped by the next fresh fn press, through the reducer too.
+    func testStaleLatchedHoldIsStoppedByFreshFnPress() {
+        var s = Fn.State()
+        var r = Logic.State()
+        var actions: [Logic.Action] = []
+        let steps: [(Fn.Input, TimeInterval)] = [
+            (fnDown(), 0),
+            (.keyDown(keyCode: 49, isRepeat: false), 0.2),
+            (fnDown(), 5.0),                               // no fn-up in between
+        ]
+        for (input, t) in steps {
+            if let event = Fn.classify(&s, input, at: t).event {
+                actions.append(Logic.reduce(&r, event, at: t))
+            }
+        }
+        XCTAssertEqual(actions, [.start, .none, .stop])
+    }
+
+    /// fn pressed while a chord holds it down releases the chord, and fn is no longer held.
+    func testFnDownWhileChordedHoldReleasesIt() {
+        var s = Fn.State()
+        _ = Fn.classify(&s, fnDown(), at: 0)
+        _ = Fn.classify(&s, .keyDown(keyCode: 124, isRepeat: false), at: 0.2)
+        let out = Fn.classify(&s, .flags(keyCode: Fn.fnKeyCode, fn: true, otherModifiers: false), at: 0.4)
+        XCTAssertEqual(out.event, .cancel)
+        XCTAssertFalse(s.fnHeld)
+    }
+
     // MARK: resync (tap re-enabled after a timeout)
 
     func testResyncWhileHeldDoesNothing() {
