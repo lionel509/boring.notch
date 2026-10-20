@@ -3,14 +3,12 @@ import XCTest
 /// Invariant 1: audio and transcripts never leave the Mac. The voice code may
 /// reach Speech.framework, NSPasteboard and the XPC helper, and nothing networked.
 final class NoNetworkTests: XCTestCase {
-    private let forbidden = ["URLSession", "NWConnection", "Network", "http://", "https://", "URLRequest"]
+    static let forbidden = ["URLSession", "NWConnection", "Network", "http://", "https://", "URLRequest"]
 
     func testNoNetworkingSymbolsUnderVoice() throws {
         for file in try voiceSources() {
             let text = try String(contentsOf: file, encoding: .utf8)
-            for token in forbidden {
-                XCTAssertFalse(text.contains(token), "\(file.lastPathComponent) contains \(token)")
-            }
+            XCTAssertEqual(Self.violations(in: text), [], file.lastPathComponent)
         }
     }
 
@@ -28,6 +26,40 @@ final class NoNetworkTests: XCTestCase {
                 XCTAssertFalse(text.contains("downloadAndInstall"), "\(file.lastPathComponent) contains downloadAndInstall")
             }
         }
+    }
+
+    /// Each probe is a cloud-call route the old token list missed (breaker B3 to B9).
+    func testScannerFlagsKnownCloudRoutes() {
+        let probes = [
+            "import Foundation\nfunc p() { _ = NSURLConnection.self }\n",
+            "import Foundation\nlet m = CFHTTPMessageCreateRequest(nil, \"GET\" as CFString, nil, kCFHTTPVersion1_1)\n",
+            "import Speech\nlet r = SFSpeechRecognizer()\nlet q = SFSpeechURLRecognitionRequest(url: u)\nq.requiresOnDeviceRecognition = false\n",
+            "import Darwin\nlet fd = socket(AF_INET, SOCK_STREAM, 0)\n",
+            "let base = \"ht\" + \"tps://api.example.invalid/v1\"\n",
+            "import Foundation\nlet d = try? Data(contentsOf: URL(string: remoteString)!)\n",
+            "#import <Foundation/Foundation.h>\n@interface P : NSObject @end\n[NSURLSession sharedSession];\n",
+        ]
+        for probe in probes {
+            XCTAssertFalse(Self.violations(in: probe).isEmpty, probe)
+        }
+        XCTAssertEqual(Self.violations(in: "let x = 1\n"), [])
+    }
+
+    /// Objective-C and header sources under Voice are scanned too, not only .swift.
+    func testScannerReadsNonSwiftSources() {
+        XCTAssertTrue(Self.isScanned(URL(fileURLWithPath: "/x/P.swift")))
+        XCTAssertTrue(Self.isScanned(URL(fileURLWithPath: "/x/P.m")))
+        XCTAssertTrue(Self.isScanned(URL(fileURLWithPath: "/x/P.mm")))
+        XCTAssertTrue(Self.isScanned(URL(fileURLWithPath: "/x/P.h")))
+        XCTAssertFalse(Self.isScanned(URL(fileURLWithPath: "/x/README.md")))
+    }
+
+    static func violations(in text: String) -> [String] {
+        forbidden.filter { text.contains($0) }
+    }
+
+    static func isScanned(_ url: URL) -> Bool {
+        url.pathExtension == "swift"
     }
 
     private func voiceSources() throws -> [URL] {
