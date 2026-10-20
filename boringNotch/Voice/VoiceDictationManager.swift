@@ -228,10 +228,10 @@ final class VoiceDictationManager: ObservableObject {
             return
         }
 
-        try? await Task.sleep(for: .milliseconds(1000))
-        snapshot.restore(to: pasteboard, ifChangeCountIs: change)
         state = .done
         scheduleReset(after: 1.2)
+        try? await Task.sleep(for: .milliseconds(1000))
+        snapshot.restore(to: pasteboard, ifChangeCountIs: change)
     }
 
     /// Cmd-V with Option still held would paste as Option-Cmd-V in many apps.
