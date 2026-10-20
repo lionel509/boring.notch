@@ -259,6 +259,34 @@ final class FnKeyLogicTests: XCTestCase {
     }
 
 
+    // MARK: hands-free still open (so turning the setting off can end it)
+
+    func testHandsFreeOpenAfterLatchedRelease() {
+        var s = Fn.State()
+        _ = Fn.classify(&s, fnDown(), at: 0)
+        _ = Fn.classify(&s, .keyDown(keyCode: 49, isRepeat: false), at: 0.2)
+        _ = Fn.classify(&s, .keyUp(keyCode: 49), at: 0.3)
+        XCTAssertEqual(Fn.classify(&s, fnUp(), at: 1.0).event, .keyUp)
+        XCTAssertTrue(s.handsFreeOpen)
+    }
+
+    func testHandsFreeOpenClearedByNextFnPress() {
+        var s = Fn.State()
+        _ = Fn.classify(&s, fnDown(), at: 0)
+        _ = Fn.classify(&s, .keyDown(keyCode: 49, isRepeat: false), at: 0.2)
+        _ = Fn.classify(&s, .keyUp(keyCode: 49), at: 0.3)
+        _ = Fn.classify(&s, fnUp(), at: 1.0)
+        XCTAssertEqual(Fn.classify(&s, fnDown(), at: 3.0).event, .keyDown)
+        XCTAssertFalse(s.handsFreeOpen)
+    }
+
+    func testPlainHoldNeverSetsHandsFreeOpen() {
+        var s = Fn.State()
+        _ = Fn.classify(&s, fnDown(), at: 0)
+        _ = Fn.classify(&s, fnUp(), at: 1.0)
+        XCTAssertFalse(s.handsFreeOpen)
+    }
+
     // MARK: random physical streams
 
     /// Generates only what a real keyboard produces and checks the plan's invariants on

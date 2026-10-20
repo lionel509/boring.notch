@@ -207,6 +207,29 @@ final class DictationHotkeyLogicTests: XCTestCase {
         XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0.5), .start, "press after cancel swallowed as repeat")
     }
 
+    /// Turning the setting off during a fn take ends it: a hands-free take discards too.
+    func testAbortDuringHandsFreeDiscards() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.1), .none)   // tap: hands-free
+        XCTAssertEqual(Logic.reduce(&s, .abort, at: 1.0), .discard)
+        XCTAssertFalse(s.recording)
+        XCTAssertFalse(s.keyHeld)
+    }
+
+    func testAbortDuringHoldDiscards() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .abort, at: 0.5), .discard)
+        XCTAssertFalse(s.recording)
+    }
+
+    func testAbortWhenIdleIsNone() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .abort, at: 0), .none)
+        XCTAssertFalse(s.recording)
+    }
+
     func testRandomSequencesWithFnEventsPairStartsAndClosers() {
         var rng = SplitMix64(state: 0x0FA7)
         for _ in 0..<500 {
@@ -218,12 +241,13 @@ final class DictationHotkeyLogicTests: XCTestCase {
             for _ in 0..<count {
                 time += Double.random(in: 0...2, using: &rng)
                 let event: Logic.Event
-                switch Int.random(in: 0...4, using: &rng) {
+                switch Int.random(in: 0...5, using: &rng) {
                 case 0: event = .keyDown
                 case 1: event = .keyUp
                 case 2: event = .latch
                 case 3: event = .cancel
-                default: event = .timeout
+                case 4: event = .timeout
+                default: event = .abort
                 }
                 let wasRecording = s.recording
                 let action = Logic.reduce(&s, event, at: time)
