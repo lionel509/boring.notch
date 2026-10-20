@@ -128,7 +128,7 @@ final class FnKeyMonitor: ObservableObject {
             let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
             let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
             // A fresh Space keyDown whose flags lack fn means a fn-up was lost: resync before classifying.
-            if keyCode == FnKeyLogic.spaceKeyCode && !isRepeat && logic.fnHeld && !event.flags.contains(.maskSecondaryFn) {
+            if keyCode == FnKeyLogic.spaceKeyCode && !isRepeat && logic.fnHeld && !event.flags.contains(.maskSecondaryFn) && !CGEventSource.flagsState(.combinedSessionState).contains(.maskSecondaryFn) {
                 send(FnKeyLogic.classify(&logic, .resync(fnDown: false), at: now).event, at: now)
             }
             input = .keyDown(keyCode: keyCode, isRepeat: isRepeat)
