@@ -218,6 +218,24 @@ final class MicLevelMeterTests: XCTestCase {
         _ = report.line
     }
 
+    /// A finite rate this large used to trap in `Int(sampleRate * chunkSeconds)`.
+    func testCrash_hugeFiniteRateDoesNotTrapInMeter() {
+        var m = MicLevelMeter()
+        m.ingest([0.1, 0.2], sampleRate: 1e300, channels: 1)
+        XCTAssertEqual(m.buffers, 1)
+        m.ingest(steady(48_000, rms: 0.1), sampleRate: 48_000, channels: 1)
+        XCTAssertEqual(m.chunks, 25)
+    }
+
+    func testCrash_hugeFiniteRateDoesNotTrapInReport() {
+        var m = MicLevelMeter()
+        m.ingest([0.1, 0.2], sampleRate: 1e300, channels: 1)
+        var report = TakeReport()
+        report.record(meter: m)
+        XCTAssertEqual(report.bufferSampleRate, 0)
+        XCTAssertFalse(report.line.isEmpty)
+    }
+
     /// 500 random signals, cut at random points. The invariants must hold for every one.
     func testGenerativeSignalsKeepTheInvariants() {
         var rng = SplitMix64(state: 0x51C0)
