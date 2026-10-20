@@ -106,6 +106,11 @@ final class VoiceDictationManager: ObservableObject {
             DictationSounds.playStart()
             // A take still open here was superseded before it ended. Log it so every take has one line.
             endTake(.discarded)
+            // Cancel the engine of a superseded take here, so no microphone session is left running.
+            if let old = session {
+                session = nil
+                Task { await old.cancel() }
+            }
             takeID += 1
             let take = takeID
             ceilingTask?.cancel()
@@ -135,7 +140,9 @@ final class VoiceDictationManager: ObservableObject {
                 report.holdMs = Int((now - started) * 1000)
             }
             ceilingTask?.cancel()
-            Task { await finish() }
+            // Bind the stop to this take: a later press must not be stopped by a stale Task.
+            let take = takeID
+            Task { await finish(take) }
         case .discard:
             discard()
         case .none:
@@ -255,12 +262,12 @@ final class VoiceDictationManager: ObservableObject {
         engineStartedAt = now
         startGraceTask?.cancel()
         if stopRequested {
-            await finish()
+            await finish(take)
         }
     }
 
-    private func finish() async {
-        guard state == .recording else { return }
+    private func finish(_ take: Int) async {
+        guard take == takeID, state == .recording else { return }
         guard let current = session else {
             stopRequested = true
             // If the engine never starts, end the take instead of leaving "Recording" up.
