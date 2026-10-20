@@ -95,4 +95,24 @@ final class MicBarsTests: XCTestCase {
         let fall = 1 - MicBars.smooth(1, toward: 0, dt: 1.0 / 30.0)
         XCTAssertGreaterThan(rise, fall)
     }
+
+    // Literal values on purpose: these must go red if the constants they check are changed.
+
+    func testRippleAtTheCentreIsFullAmplitude() {
+        XCTAssertEqual(MicBars.ripple(3, count: 7, time: 0.25), 0.12, accuracy: 1e-5)
+    }
+
+    func testOuterRippleLagsTheCentre() {
+        XCTAssertEqual(MicBars.ripple(0, count: 7, time: 0.25), 0.0415, accuracy: 1e-3)
+    }
+
+    func testRippleMovesAnIdleStrip() {
+        XCTAssertEqual(MicBars.levels(level: 0, time: 0.25, count: 7, ripple: true)[3], 0.12, accuracy: 1e-5)
+    }
+
+    func testLongFrameGapDoesNotOvershoot() {
+        let long = MicBars.smooth(0, toward: 1, dt: 10)
+        XCTAssertEqual(long, MicBars.smooth(0, toward: 1, dt: 0.25), accuracy: 1e-6)
+        XCTAssertLessThan(long, 0.95)
+    }
 }

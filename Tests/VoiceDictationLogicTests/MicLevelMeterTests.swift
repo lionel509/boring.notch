@@ -129,6 +129,32 @@ final class MicLevelMeterTests: XCTestCase {
         XCTAssertEqual(m.status(elapsed: 8.1), .quiet)
     }
 
+    func testOneSecondOfAQuietToneIsSignal() {
+        // Amplitude 0.1 is far above the 1e-6 digital-silence line.
+        XCTAssertEqual(meter(feeding: sine(48_000, amplitude: 0.1)).verdict, .signal)
+    }
+
+    func testTenDBAboveTheFloorReadsHalfLevel() {
+        var m = MicLevelMeter()
+        m.ingest(steady(48_000, rms: Float(pow(10.0, -60.0 / 20))), sampleRate: rate, channels: 1)
+        m.ingest(steady(chunk, rms: Float(pow(10.0, -50.0 / 20))), sampleRate: rate, channels: 1)
+        XCTAssertTrue((0.47...0.51).contains(m.level), "level \(m.level)")
+    }
+
+    func testFiveChunksFifteenDBAboveTheFloorAreVoiced() {
+        var m = MicLevelMeter()
+        m.ingest(steady(48_000, rms: Float(pow(10.0, -60.0 / 20))), sampleRate: rate, channels: 1)
+        m.ingest(steady(chunk * 5, rms: Float(pow(10.0, -45.0 / 20))), sampleRate: rate, channels: 1)
+        XCTAssertEqual(m.voicedChunks, 5)
+    }
+
+    func testFiveChunksFiveDBAboveTheFloorAreNotVoiced() {
+        var m = MicLevelMeter()
+        m.ingest(steady(48_000, rms: Float(pow(10.0, -60.0 / 20))), sampleRate: rate, channels: 1)
+        m.ingest(steady(chunk * 5, rms: Float(pow(10.0, -55.0 / 20))), sampleRate: rate, channels: 1)
+        XCTAssertEqual(m.voicedChunks, 0)
+    }
+
     func testSixSecondsOfSteadyQuietNoiseIsQuiet() {
         let m = meter(feeding: sine(288_000, amplitude: 0.001 * Float(2).squareRoot()))
         XCTAssertEqual(m.status(elapsed: 6), .quiet)
