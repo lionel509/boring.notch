@@ -32,6 +32,10 @@ final class FnKeyLogicTests: XCTestCase {
         .flags(keyCode: Fn.fnKeyCode, fn: false, otherModifiers: other)
     }
 
+    private func space() -> Fn.Input {
+        .keyDown(keyCode: Fn.spaceKeyCode, isRepeat: false)
+    }
+
     private func out(_ event: Logic.Event?, swallow: Bool = false) -> Out {
         Out(event: event, swallow: swallow)
     }
@@ -166,6 +170,46 @@ final class FnKeyLogicTests: XCTestCase {
         _ = Fn.classify(&s, fnDown(), at: 0)
         let second = Fn.classify(&s, fnDown(), at: 5.0)   // fn-up was lost in between
         XCTAssertEqual(second.event, Logic.Event.keyDown)
+    }
+
+    /// Breaker R1: a repeated fn flag during a long hold must not stop the take.
+    func testR1_duplicateFnFlagDuringLongHoldDoesNotStopTake() {
+        var s = Fn.State()
+        var r = Logic.State()
+        var actions: [Logic.Action] = []
+        let steps: [(Fn.Input, TimeInterval)] = [(fnDown(), 0), (fnDown(), 2.5), (fnUp(), 3.0)]
+        for (input, t) in steps {
+            if let event = Fn.classify(&s, input, at: t).event {
+                actions.append(Logic.reduce(&r, event, at: t))
+            }
+        }
+        XCTAssertEqual(actions, [.start, .stop], "only the real fn-up may stop the take")
+    }
+
+    /// Breaker R2: a repeated fn flag during a hands-free (latched) take must not stop it.
+    func testR2_duplicateFnFlagDuringLatchedHoldDoesNotStopTake() {
+        var s = Fn.State()
+        var r = Logic.State()
+        var actions: [Logic.Action] = []
+        let steps: [(Fn.Input, TimeInterval)] = [(fnDown(), 0), (space(), 0.1), (fnDown(), 2.5)]
+        for (input, t) in steps {
+            if let event = Fn.classify(&s, input, at: t).event {
+                actions.append(Logic.reduce(&r, event, at: t))
+            }
+        }
+        XCTAssertEqual(actions, [.start, .none], "a repeated fn flag must not stop a hands-free take")
+    }
+
+    /// A repeated fn flag during a hold changes nothing. Only the real fn-up closes the hold.
+    func testRepeatedFnFlagsDuringHoldAreIgnored() {
+        var s = Fn.State()
+        var outputs: [Out] = []
+        let steps: [(Fn.Input, TimeInterval)] = [(fnDown(), 0), (fnDown(), 0.5), (fnDown(), 1.0), (fnDown(), 2.5), (fnUp(), 3.0)]
+        for (input, t) in steps {
+            outputs.append(Fn.classify(&s, input, at: t))
+        }
+        XCTAssertEqual(outputs.map { $0.event }, [.keyDown, nil, nil, nil, .keyUp])
+        XCTAssertFalse(s.fnHeld)
     }
 
     /// Breaker F2: an arrow still down when fn is released leaves the fn mask set on the fn-up.
