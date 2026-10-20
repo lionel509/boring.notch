@@ -112,21 +112,29 @@ final class DictationHotkeyLogicTests: XCTestCase {
         XCTAssertEqual(s, Logic.State())
     }
 
+    /// Replaces the old "no discard without cancel" check: a release shorter than
+    /// `minHold` now ends in `.discard`. The check is that every pasted release is at
+    /// least `minHold` long, every discard is shorter, and both branches are reached.
     func testRandomSequencesPairStartsAndStops() {
         var rng = SplitMix64(state: 0x3D1C)
+        var totalStops = 0
+        var totalDiscards = 0
         for _ in 0..<500 {
             var s = Logic.State()
             var time: TimeInterval = 0
+            var startedAt: TimeInterval = 0
             var starts = 0
             var stops = 0
+            var discards = 0
             let count = Int.random(in: 1...40, using: &rng)
             for _ in 0..<count {
-                time += Double.random(in: 0...2, using: &rng)
+                time += Double.random(in: 0...1, using: &rng)
                 let event: Logic.Event
-                switch Int.random(in: 0...2, using: &rng) {
+                switch Int.random(in: 0...3, using: &rng) {
                 case 0: event = .keyDown
                 case 1: event = .keyUp
-                default: event = .timeout
+                case 2: event = .timeout
+                default: event = .latch
                 }
                 let wasRecording = s.recording
                 let action = Logic.reduce(&s, event, at: time)
@@ -134,17 +142,82 @@ final class DictationHotkeyLogicTests: XCTestCase {
                 case .start:
                     XCTAssertFalse(wasRecording, "start emitted while recording")
                     starts += 1
+                    startedAt = time
                 case .stop:
                     XCTAssertTrue(wasRecording, "stop emitted while idle")
                     stops += 1
+                    if event != .timeout {
+                        XCTAssertGreaterThanOrEqual(time - startedAt, Logic.minHold, "release shorter than minHold was pasted")
+                    }
                 case .discard:
-                    XCTFail("discard emitted without a cancel event")
+                    XCTAssertTrue(wasRecording, "discard emitted while idle")
+                    discards += 1
+                    XCTAssertLessThan(time - startedAt, Logic.minHold, "take at least minHold was discarded")
                 case .none:
                     break
                 }
+                XCTAssertEqual(starts - stops - discards, s.recording ? 1 : 0, "start/stop pairing broken")
             }
-            XCTAssertEqual(starts - stops, s.recording ? 1 : 0, "start/stop pairing broken")
+            totalStops += stops
+            totalDiscards += discards
         }
+        XCTAssertGreaterThan(totalStops, 0, "no take was ever pasted, so the checks pass vacuously")
+        XCTAssertGreaterThan(totalDiscards, 0, "no take was ever discarded, so the checks pass vacuously")
+    }
+
+    // MARK: minimum hold (a release before minHold never pastes)
+
+    func testMinHoldIsHalfASecondAndAboveTheTapLatch() {
+        XCTAssertEqual(Logic.minHold, 0.5)
+        XCTAssertGreaterThan(Logic.minHold, Logic.tapThreshold)
+    }
+
+    func testReleaseBeforeMinHoldDiscards() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.4), .discard)
+        XCTAssertFalse(s.recording)
+        XCTAssertFalse(s.handsFree)
+    }
+
+    func testShortTapStillLatchesHandsFree() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.29), .none)
+        XCTAssertTrue(s.handsFree)
+        XCTAssertTrue(s.recording)
+    }
+
+    func testTapThenShortPressDiscards() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.1), .none)
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0.4), .discard)
+        XCTAssertFalse(s.recording)
+    }
+
+    func testTapThenLongPressStops() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.1), .none)
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 2.0), .stop)
+        XCTAssertFalse(s.recording)
+    }
+
+    func testLatchThenShortPressDiscards() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .latch, at: 0.1), .none)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.2), .none)
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0.45), .discard)
+        XCTAssertFalse(s.recording)
+    }
+
+    func testTimeoutAfterShortStartStillStops() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .timeout, at: 0.2), .stop)
+        XCTAssertFalse(s.recording)
     }
 
     // MARK: fn-key events (.latch, .cancel, .discard)

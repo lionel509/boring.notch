@@ -73,6 +73,11 @@ final class FnKeyLogicTests: XCTestCase {
                        [out(.keyDown), out(.keyUp)])
     }
 
+    /// A release between the tap latch and minHold reaches the reducer as keyUp and discards.
+    func testFnHoldReleasedBeforeMinHoldDiscards() {
+        XCTAssertEqual(reduced([(fnDown(), 0), (fnUp(), 0.4)]), [.start, .discard])
+    }
+
     func testFnTapUnderThresholdCancels() {
         XCTAssertEqual(run([(fnDown(), 0), (fnUp(), 0.1)]),
                        [out(.keyDown), out(.cancel)])
@@ -411,6 +416,7 @@ final class FnKeyLogicTests: XCTestCase {
             var time: TimeInterval = 0
             var starts = 0
             var closers = 0
+            var takeStartTime: TimeInterval = 0
 
             for _ in 0..<Int.random(in: 1...60, using: &rng) {
                 time += Double.random(in: 0.01...1.0, using: &rng)
@@ -479,6 +485,11 @@ final class FnKeyLogicTests: XCTestCase {
                     if event == .cancel { cancels += 1 }
                     if action == .discard { discards += 1 }
                     if action == .stop { stops += 1 }
+                    if action == .start { takeStartTime = time }
+                    // Invariant 3: a released take pastes only after minHold. A timeout may stop earlier.
+                    if action == .stop && event != .timeout {
+                        XCTAssertGreaterThanOrEqual(time - takeStartTime, Logic.minHold, "take released before minHold was pasted")
+                    }
                 }
 
                 // Rebuild the fn hold from the physical stream.

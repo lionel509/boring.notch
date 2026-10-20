@@ -6,6 +6,9 @@ import Foundation
 /// The fn key adds `.latch` (fn+Space turns a running hold hands-free) and `.cancel`
 /// (fn was a modifier, or a quick fn tap): `.cancel` throws the take away with `.discard`.
 /// `.abort` (the setting was turned off) throws away any running take, hands-free included.
+/// A release, or a press that ends a take, less than `minHold` after the take started
+/// discards it instead of stopping it, so a short accidental press never pastes.
+/// `.timeout` always stops. A latched take keeps its start time.
 enum DictationHotkeyLogic {
     enum Event: Equatable {
         case keyDown
@@ -31,9 +34,13 @@ enum DictationHotkeyLogic {
         /// key still held after a stop is not read as a new press.
         var keyHeld = false
         var lastDownAt: TimeInterval? = nil
+        /// When the running take started. Kept through a latch, cleared when the take ends.
+        var startedAt: TimeInterval? = nil
     }
 
     static let tapThreshold: TimeInterval = 0.3
+    /// A take released sooner than this after it started is discarded, never pasted.
+    static let minHold: TimeInterval = 0.5
     /// Auto-repeat of a held key arrives well inside this gap.
     static let repeatGap: TimeInterval = 2.0
     static let maxTake: TimeInterval = 180
@@ -52,6 +59,16 @@ enum DictationHotkeyLogic {
         }
     }
 
+    /// Ends a running take on a release or a press. Shorter than `minHold` discards.
+    private static func closeAfterHold(_ state: inout State, at time: TimeInterval) -> Action {
+        let tooShort = state.startedAt.map { time - $0 < minHold } == true
+        state.recording = false
+        state.handsFree = false
+        state.downAt = nil
+        state.startedAt = nil
+        return tooShort ? .discard : .stop
+    }
+
     static func reduce(_ state: inout State, _ event: Event, at time: TimeInterval) -> Action {
         switch event {
         case .keyDown:
@@ -62,13 +79,11 @@ enum DictationHotkeyLogic {
                 state.recording = true
                 state.handsFree = false
                 state.downAt = time
+                state.startedAt = time
                 return .start
             }
             // Hands-free stop, or a fresh press after a lost keyUp: either way one press ends the take.
-            state.recording = false
-            state.handsFree = false
-            state.downAt = nil
-            return .stop
+            return closeAfterHold(&state, at: time)
         case .keyUp:
             track(&state, .keyUp, at: time)
             guard state.recording, !state.handsFree, let down = state.downAt else { return .none }
@@ -77,14 +92,13 @@ enum DictationHotkeyLogic {
                 state.downAt = nil
                 return .none
             }
-            state.recording = false
-            state.downAt = nil
-            return .stop
+            return closeAfterHold(&state, at: time)
         case .timeout:
             guard state.recording else { return .none }
             state.recording = false
             state.handsFree = false
             state.downAt = nil
+            state.startedAt = nil
             return .stop
         case .latch:
             // Only a running hold turns hands-free. When idle, fn+Space must not start a take.
@@ -99,6 +113,7 @@ enum DictationHotkeyLogic {
             state.recording = false
             state.handsFree = false
             state.downAt = nil
+            state.startedAt = nil
             return .discard
         case .abort:
             track(&state, .abort, at: time)
@@ -106,6 +121,7 @@ enum DictationHotkeyLogic {
             state.recording = false
             state.handsFree = false
             state.downAt = nil
+            state.startedAt = nil
             return .discard
         }
     }

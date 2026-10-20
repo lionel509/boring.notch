@@ -22,6 +22,11 @@ enum VoiceError: LocalizedError {
     }
 }
 
+/// The tap's converter, built from the first buffer's real format. Only the audio thread uses it.
+private final class ConverterBox: @unchecked Sendable {
+    var converter: AVAudioConverter?
+}
+
 @available(macOS 26.0, *)
 @MainActor
 final class SpeechAnalyzerSession: VoiceSession {
@@ -31,11 +36,21 @@ final class SpeechAnalyzerSession: VoiceSession {
     private var continuation: AsyncStream<AnalyzerInput>.Continuation?
     private var resultsTask: Task<Void, Never>?
     private var finals: [String] = []
+    /// Measures what the mic delivers. Read by the manager's verdict and by the take report.
+    let levelTap = MicLevelTap()
+    private(set) var tapChannels = -1
+    private(set) var tapSampleRate = -1
+    private var partialCount = 0
+    private var finalizeMs = -1
+    private var finalized = false
+    /// The transcriber's latest unconfirmed text. Used only if finalize does not finish in time.
+    private var lastVolatile = ""
+    private var configObserver: NSObjectProtocol?
 
     /// Makes sure the on-device en_US model is installed. The OS fetches it once.
     /// `onDownloadStart` runs only when a download is actually needed, so the UI can say so.
     func prepareModel(onDownloadStart: @MainActor @escaping () -> Void) async throws {
-        let transcriber = SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .transcription)
+        let transcriber = SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .progressiveTranscription)
         self.transcriber = transcriber
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
             onDownloadStart()
@@ -45,7 +60,7 @@ final class SpeechAnalyzerSession: VoiceSession {
 
     func start(onPartial: @escaping @Sendable (String) -> Void) async throws {
         let transcriber = self.transcriber
-            ?? SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .transcription)
+            ?? SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .progressiveTranscription)
         self.transcriber = transcriber
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         guard let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
@@ -57,13 +72,25 @@ final class SpeechAnalyzerSession: VoiceSession {
         guard inFormat.channelCount > 0, inFormat.sampleRate > 0 else {
             throw VoiceError.noMicrophone
         }
-        guard let converter = AVAudioConverter(from: inFormat, to: target) else {
-            throw VoiceError.noFormat
-        }
+        tapChannels = Int(inFormat.channelCount)
+        tapSampleRate = Int(inFormat.sampleRate)
 
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
-        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { buffer, _ in
-            let ratio = target.sampleRate / inFormat.sampleRate
+        let tap = levelTap
+        let converterBox = ConverterBox()
+        // The format comes from the first buffer, not from the input node at start. CoreAudio can
+        // still be switching devices then, and a tap installed with the stale format delivers nothing.
+        input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, _ in
+            tap.ingest(buffer)
+            let format = buffer.format
+            if converterBox.converter?.inputFormat != format {
+                converterBox.converter = AVAudioConverter(from: format, to: target)
+            }
+            guard let converter = converterBox.converter else {
+                tap.noteConvertFailure()
+                return
+            }
+            let ratio = target.sampleRate / format.sampleRate
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
             guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
             var consumed = false
@@ -77,9 +104,16 @@ final class SpeechAnalyzerSession: VoiceSession {
                 outStatus.pointee = .haveData
                 return buffer
             }
-            guard status != .error, out.frameLength > 0 else { return }
+            if status == .error {
+                tap.noteConvertFailure()
+                return
+            }
+            guard out.frameLength > 0 else { return }
             continuation.yield(AnalyzerInput(buffer: out))
         }
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [tap] _ in tap.noteConfigChange() }
 
         self.analyzer = analyzer
         self.continuation = continuation
@@ -90,7 +124,10 @@ final class SpeechAnalyzerSession: VoiceSession {
                     let text = String(result.text.characters)
                     if result.isFinal {
                         self?.finals.append(text)
+                        self?.lastVolatile = ""
                     } else {
+                        self?.lastVolatile = text
+                        self?.partialCount += 1
                         onPartial(text)
                     }
                 }
@@ -113,32 +150,53 @@ final class SpeechAnalyzerSession: VoiceSession {
     func finish() async throws -> [String] {
         teardownAudio()
         if let analyzer {
+            let startedAt = ProcessInfo.processInfo.systemUptime
             // Cap the wait so the notch can never stick on "Transcribing".
-            let finalized = await TimeoutRace.run(seconds: 5) {
+            let result = await TimeoutRace.run(seconds: 2) {
                 (try? await analyzer.finalizeAndFinishThroughEndOfInput()) != nil
             }
-            if finalized != true {
-                _ = await TimeoutRace.run(seconds: 1) { await analyzer.cancelAndFinishNow() }
+            finalizeMs = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
+            finalized = result == true
+            if !finalized {
+                _ = await TimeoutRace.run(seconds: 0.5) { await analyzer.cancelAndFinishNow() }
             }
         }
         if let resultsTask {
-            _ = await TimeoutRace.run(seconds: 1) { await resultsTask.value }
+            // A drain that times out may have missed the last final. Treat the take as not
+            // finalized, so the unconfirmed volatile tail is kept instead of dropped.
+            let drained = await TimeoutRace.run(seconds: 0.5) { await resultsTask.value }
+            if drained == nil { finalized = false }
         }
-        return finals
+        return TranscriptAssembler.parts(finals: finals, volatileTail: lastVolatile, finalized: finalized)
     }
 
     func cancel() async {
         teardownAudio()
         if let analyzer {
-            _ = await TimeoutRace.run(seconds: 1) { await analyzer.cancelAndFinishNow() }
+            _ = await TimeoutRace.run(seconds: 0.5) { await analyzer.cancelAndFinishNow() }
         }
         if let resultsTask {
-            _ = await TimeoutRace.run(seconds: 1) { await resultsTask.value }
+            _ = await TimeoutRace.run(seconds: 0.5) { await resultsTask.value }
         }
         finals.removeAll()
     }
 
+    /// Adds this take's audio and transcript numbers to the report.
+    func fill(_ report: inout TakeReport) {
+        report.tapChannels = tapChannels
+        report.tapSampleRate = tapSampleRate
+        report.finals = finals.count
+        report.partials = partialCount
+        report.finalizeMs = finalizeMs
+        report.volatileTail = !finalized && !lastVolatile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        levelTap.fill(&report)
+    }
+
     private func teardownAudio() {
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+            self.configObserver = nil
+        }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         continuation?.finish()

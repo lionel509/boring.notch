@@ -9,6 +9,7 @@
 
 import AppKit
 import AVFoundation
+import Defaults
 import Foundation
 
 enum VoiceDictationState: Equatable {
@@ -22,9 +23,11 @@ enum VoiceDictationState: Equatable {
 /// One dictation take. The engine (SpeechAnalyzerSession) implements it; the
 /// manager only drives it, so the state machine stays testable.
 protocol VoiceSession: AnyObject {
+    var levelTap: MicLevelTap { get }
     func start(onPartial: @escaping @Sendable (String) -> Void) async throws
     func finish() async throws -> [String]
     func cancel() async
+    func fill(_ report: inout TakeReport)
 }
 
 @MainActor
@@ -32,7 +35,8 @@ final class VoiceDictationManager: ObservableObject {
     static let shared = VoiceDictationManager()
 
     @Published private(set) var state: VoiceDictationState = .idle
-    @Published private(set) var liveText: String = ""
+    /// The partial transcript. Kept for the engine callbacks; the notch no longer shows it.
+    private(set) var liveText: String = ""
     /// True while the OS installs the speech model on first use.
     @Published private(set) var downloadingModel = false
 
@@ -50,8 +54,27 @@ final class VoiceDictationManager: ObservableObject {
     private static let startGrace: Double = 10
     /// Owns the pending clipboard restore across overlapping takes.
     private var clipboard = ClipboardKeeper()
+    /// The numbers for the take in progress. Logged once, when the take ends.
+    private var report = TakeReport()
+    private var takeOpen = false
+    /// Uptime when the take started and when its key was released, for the timing numbers.
+    private var takeStartedAt: TimeInterval?
+    private var releaseAt: TimeInterval?
+    /// The mic meter of the take in progress, set once its engine is created.
+    private(set) var levelTap: MicLevelTap?
+    /// Live state of the mic for the notch, refreshed while the take records.
+    @Published private(set) var micStatus: MicStatus = .waiting
+    private var statusTask: Task<Void, Never>?
+    /// Uptime when the engine started, so the mic is judged only after it has had time to deliver.
+    private var engineStartedAt: TimeInterval?
 
     private init() {}
+
+    private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    private func elapsedMs(since start: TimeInterval) -> Int {
+        Int((now - start) * 1000)
+    }
 
     // MARK: - Hotkey
 
@@ -80,6 +103,14 @@ final class VoiceDictationManager: ObservableObject {
         let action = DictationHotkeyLogic.reduce(&hotkey, event, at: now)
         switch action {
         case .start:
+            DictationSounds.playStart()
+            // A take still open here was superseded before it ended. Log it so every take has one line.
+            endTake(.discarded)
+            // Cancel the stored engine of a superseded take. One still inside analyzer.start is torn down when start returns (begin).
+            if let old = session {
+                session = nil
+                Task { await old.cancel() }
+            }
             takeID += 1
             let take = takeID
             ceilingTask?.cancel()
@@ -90,6 +121,12 @@ final class VoiceDictationManager: ObservableObject {
             state = .recording
             liveText = ""
             stopRequested = false
+            report = TakeReport()
+            releaseAt = nil
+            takeStartedAt = now
+            takeOpen = true
+            engineStartedAt = nil
+            startStatusPolling(take)
             ceilingTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(DictationHotkeyLogic.maxTake))
                 guard !Task.isCancelled else { return }
@@ -97,8 +134,15 @@ final class VoiceDictationManager: ObservableObject {
             }
             Task { await begin(take) }
         case .stop:
+            DictationSounds.playStop()
+            releaseAt = now
+            if let started = takeStartedAt {
+                report.holdMs = Int((now - started) * 1000)
+            }
             ceilingTask?.cancel()
-            Task { await finish() }
+            // Stop now, not in a queued Task: a press handled before that Task would see
+            // the take still recording and could be stopped or pasted into the wrong take.
+            stop(takeID)
         case .discard:
             discard()
         case .none:
@@ -113,6 +157,7 @@ final class VoiceDictationManager: ObservableObject {
         ceilingTask?.cancel()
         startGraceTask?.cancel()
         resetTask?.cancel()
+        statusTask?.cancel()
         stopRequested = false
         downloadingModel = false
         if let captured = session {
@@ -121,12 +166,42 @@ final class VoiceDictationManager: ObservableObject {
         }
         state = .idle
         liveText = ""
+        hotkey.startedAt = nil
+        endTake(.discarded)
+    }
+
+    /// Logs the take's report once, when the take ends with `outcome`, and drops its meter.
+    private func endTake(_ outcome: TakeOutcome) {
+        levelTap = nil
+        guard takeOpen else { return }
+        takeOpen = false
+        report.outcome = outcome
+        DictationLog.take(report)
     }
 
     private var isResting: Bool {
         switch state {
         case .done, .failed: return true
         default: return false
+        }
+    }
+
+    /// Refreshes `micStatus` every 250 ms while this take records. Assigns only on change.
+    private func startStatusPolling(_ take: Int) {
+        statusTask?.cancel()
+        micStatus = .waiting
+        statusTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled, let self, take == self.takeID, self.state == .recording else { return }
+                let next: MicStatus
+                if self.session != nil, let tap = self.levelTap, let started = self.engineStartedAt {
+                    next = tap.status(elapsed: self.now - started)
+                } else {
+                    next = .waiting
+                }
+                if next != self.micStatus { self.micStatus = next }
+            }
         }
     }
 
@@ -140,14 +215,22 @@ final class VoiceDictationManager: ObservableObject {
             return
         }
         guard take == takeID else { return }
+        let authorization = AVCaptureDevice.authorizationStatus(for: .audio)
+        report.authStatus = authorization.rawValue
+        guard authorization != .denied, authorization != .restricted else {
+            fail("Mic access off. See Settings", outcome: .accessDenied)
+            return
+        }
         let granted = await AVCaptureDevice.requestAccess(for: .audio)
         guard take == takeID else { return }
+        report.granted = granted
         guard granted else {
-            fail("Microphone access denied")
+            fail("Mic access off. See Settings", outcome: .accessDenied)
             return
         }
 
         let started = SpeechAnalyzerSession()
+        levelTap = started.levelTap
         do {
             try await started.prepareModel { [weak self] in
                 guard let self, take == self.takeID else { return }
@@ -173,17 +256,20 @@ final class VoiceDictationManager: ObservableObject {
             await started.cancel()
             return
         }
-        // `session` is only set once the engine runs, so finish() can tell a
+        // `session` is only set once the engine runs, so stop() can tell a
         // still-starting take (stopRequested) from a live one.
         session = started
+        engineStartedAt = now
         startGraceTask?.cancel()
         if stopRequested {
-            await finish()
+            stop(take)
         }
     }
 
-    private func finish() async {
-        guard state == .recording else { return }
+    /// Ends the take at key release. Not async: `state` is `.processing` before this returns,
+    /// so a key event handled before any queued Task runs is only tracked. `complete` does the rest.
+    private func stop(_ take: Int) {
+        guard take == takeID, state == .recording else { return }
         guard let current = session else {
             stopRequested = true
             // If the engine never starts, end the take instead of leaving "Recording" up.
@@ -203,13 +289,31 @@ final class VoiceDictationManager: ObservableObject {
             return
         }
         state = .processing
+        statusTask?.cancel()
+        Task { await complete(current) }
+    }
 
+    /// The slow half of a stop: waits for the engine's last results, then pastes or reports.
+    private func complete(_ current: any VoiceSession) async {
         let parts = (try? await current.finish()) ?? []
+        current.fill(&report)
+        let verdict = levelTap?.meter.verdict ?? .noBuffers
         session = nil
+        // A take with real signal proves the mic works, so the warning clears.
+        if verdict == .signal { Defaults[.dictationMicSilent] = false }
 
         let text = TranscriptAssembler.join(parts)
         guard !text.isEmpty else {
-            fail("Nothing heard")
+            switch verdict {
+            case .noBuffers:
+                fail("No audio from the mic", outcome: .noAudio)
+            case .digitalSilence:
+                // The mic opened but only zeros arrived: the stale-grant case.
+                Defaults[.dictationMicSilent] = true
+                fail("Mic blocked. See Settings", outcome: .micSilent)
+            case .signal:
+                fail("Nothing heard", outcome: .nothingHeard)
+            }
             return
         }
         await insert(text)
@@ -221,9 +325,11 @@ final class VoiceDictationManager: ObservableObject {
     /// A take that starts during an earlier take's restore wait inherits that take's saved clipboard, so the user's own clipboard is what comes back.
     private func insert(_ text: String) async {
         let pasteboard = NSPasteboard.general
+        let axStart = now
         let trustedResult = await TimeoutRace.run(seconds: 3) {
             await XPCHelperClient.shared.ensureAccessibilityAuthorization(promptIfNeeded: true)
         }
+        report.axMs = elapsedMs(since: axStart)
         // Snapshot after the await, so a copy made during it is kept, not overwritten.
         let change = clipboard.write(text, to: pasteboard)
         guard let trusted = trustedResult else {
@@ -237,7 +343,9 @@ final class VoiceDictationManager: ObservableObject {
             return
         }
 
+        let modStart = now
         await waitForModifiersReleased(timeout: 1.0)
+        report.modWaitMs = elapsedMs(since: modStart)
         // Someone copied during the modifier wait: do not paste their copy in place of the transcript.
         guard pasteboard.changeCount == change else {
             clipboard.release(change)
@@ -246,9 +354,11 @@ final class VoiceDictationManager: ObservableObject {
         }
         // Read the layout on the main actor, where the TIS calls belong.
         let keyCode = PasteKeycode.currentV()
+        let pasteStart = now
         let posted = await TimeoutRace.run(seconds: 3) {
             await XPCHelperClient.shared.postPasteKeystroke(keyCode: keyCode)
         }
+        report.pasteMs = elapsedMs(since: pasteStart)
         guard let posted else {
             clipboard.release(change)
             fail("Copied (clipboard replaced). Helper slow, paste may still land")
@@ -260,8 +370,12 @@ final class VoiceDictationManager: ObservableObject {
             return
         }
 
+        if let released = releaseAt {
+            report.releaseToPasteMs = Int((now - released) * 1000)
+        }
+        endTake(.pasted)
         state = .done
-        scheduleReset(after: 1.2)
+        scheduleReset(after: 0.6)
         try? await Task.sleep(for: .milliseconds(1000))
         clipboard.restore(to: pasteboard, ifChangeCountIs: change)
     }
@@ -271,20 +385,23 @@ final class VoiceDictationManager: ObservableObject {
         let watched: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
         let deadline = Date().addingTimeInterval(timeout)
         while !NSEvent.modifierFlags.intersection(watched).isEmpty, Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(20))
+            try? await Task.sleep(for: .milliseconds(10))
         }
     }
 
-    private func fail(_ message: String) {
+    private func fail(_ message: String, outcome: TakeOutcome = .failed) {
         ceilingTask?.cancel()
         startGraceTask?.cancel()
+        statusTask?.cancel()
         downloadingModel = false
         session = nil
         hotkey.recording = false
         hotkey.handsFree = false
         hotkey.downAt = nil
+        hotkey.startedAt = nil
+        endTake(outcome)
         state = .failed(message)
-        scheduleReset(after: 2.5)
+        scheduleReset(after: 2.0)
     }
 
     private func scheduleReset(after seconds: Double) {

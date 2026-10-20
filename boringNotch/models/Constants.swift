@@ -138,6 +138,11 @@ extension Defaults.Keys {
     /// it is asked for.
     static let showDictationActivity = Key<Bool>("showDictationActivity", default: false)
     static let dictateWithFn = Key<Bool>("dictateWithFn", default: true)
+    /// Set when the last take reached the mic but it delivered only silence (a stale mic grant
+    /// after a rebuild). Cleared by the next take that hears signal. Drives the Settings hint.
+    static let dictationMicSilent = Key<Bool>("dictationMicSilent", default: false)
+    /// Subtle start and stop sounds for dictation.
+    static let dictationSounds = Key<Bool>("dictationSounds", default: true)
 
     static let dictationDiagnostic = Key<String>("dictationDiagnostic", default: "not started")
 
