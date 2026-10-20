@@ -224,7 +224,7 @@ final class VoiceDictationManager: ObservableObject {
             return
         }
 
-        try? await Task.sleep(for: .milliseconds(250))
+        try? await Task.sleep(for: .milliseconds(1000))
         snapshot.restore(to: pasteboard, ifChangeCountIs: change)
         state = .done
         scheduleReset(after: 1.2)
