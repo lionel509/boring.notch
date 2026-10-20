@@ -557,6 +557,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 on ? FnKeyMonitor.shared.start() : FnKeyMonitor.shared.disable()
             }
         }
+        // An Accessibility grant made in System Settings while the app runs is picked up on return.
+        Task { @MainActor in
+            for await _ in NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification) {
+                if Defaults[.dictateWithFn] && FnKeyMonitor.shared.mode != .active {
+                    FnKeyMonitor.shared.restart()
+                }
+            }
+        }
 
         if !Defaults[.showOnAllDisplays] {
             let viewModel = self.vm
