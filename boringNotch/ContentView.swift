@@ -73,6 +73,9 @@ struct ContentView: View {
             && vm.notchState == .closed && Defaults[.showPowerStatusNotifications]
         {
             chinWidth = 640
+        } else if vm.notchState == .closed && voiceDictation.state != .idle && !vm.hideOnClosed {
+            // Same two-cell strip as music: an icon on the left and the mic bars on the right.
+            chinWidth += (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
         } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music)
             && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle)
             && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed
@@ -222,6 +225,7 @@ struct ContentView: View {
                         return view
                             .animation(vm.notchState == .open ? openAnimation : closeAnimation, value: vm.notchState)
                             .animation(.smooth, value: gestureProgress)
+                            .animation(.timingCurve(0.05, 0.6, 0.4, 0.95, duration: 0.12), value: voiceDictation.state)
                     }
                     .contentShape(Rectangle())
                     .onHover { hovering in

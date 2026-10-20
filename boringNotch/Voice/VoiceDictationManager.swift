@@ -35,7 +35,8 @@ final class VoiceDictationManager: ObservableObject {
     static let shared = VoiceDictationManager()
 
     @Published private(set) var state: VoiceDictationState = .idle
-    @Published private(set) var liveText: String = ""
+    /// The partial transcript. Kept for the engine callbacks; the notch no longer shows it.
+    private(set) var liveText: String = ""
     /// True while the OS installs the speech model on first use.
     @Published private(set) var downloadingModel = false
 
