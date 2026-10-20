@@ -146,20 +146,35 @@ final class VoiceDictationManager: ObservableObject {
 
     /// Puts the text on the pasteboard, presses Cmd-V in the focused app, then puts
     /// the user's previous clipboard back unless they copied something meanwhile.
+    /// On every failure path the transcript stays on the clipboard, replacing what was there.
     private func insert(_ text: String) async {
         let pasteboard = NSPasteboard.general
+        let trustedResult = await TimeoutRace.run(seconds: 3) {
+            await XPCHelperClient.shared.ensureAccessibilityAuthorization(promptIfNeeded: true)
+        }
+        // Snapshot after the await, so a copy made during it is kept, not overwritten.
         let snapshot = PasteboardSnapshot.take(from: pasteboard)
-        let trusted = await XPCHelperClient.shared.ensureAccessibilityAuthorization(promptIfNeeded: true)
         let change = PasteboardSnapshot.write(text, to: pasteboard)
+        guard let trusted = trustedResult else {
+            fail("Copied (clipboard replaced). Helper not responding")
+            return
+        }
         guard trusted else {
-            // The text stays on the clipboard so nothing is lost.
-            fail("Copied. Allow Accessibility to auto-paste")
+            fail("Copied (clipboard replaced). Allow Accessibility to paste")
             return
         }
 
         await waitForModifiersReleased(timeout: 1.0)
-        guard await XPCHelperClient.shared.postPasteKeystroke() else {
-            fail("Copied. Paste failed")
+        // Someone copied during the modifier wait: do not paste their copy in place of the transcript.
+        guard pasteboard.changeCount == change else {
+            fail("Clipboard changed. Not pasted")
+            return
+        }
+        let posted = await TimeoutRace.run(seconds: 3) {
+            await XPCHelperClient.shared.postPasteKeystroke()
+        }
+        guard posted == true else {
+            fail("Copied (clipboard replaced). Paste failed")
             return
         }
 
