@@ -195,9 +195,11 @@ final class FnKeyLogicTests: XCTestCase {
         for (input, t) in steps {
             if let event = Fn.classify(&s, input, at: t).event {
                 actions.append(Logic.reduce(&r, event, at: t))
+            } else {
+                actions.append(.none)   // a nil event is recorded, so an early stop cannot hide in the gap
             }
         }
-        XCTAssertEqual(actions, [.start, .stop], "only the real fn-up may stop the take")
+        XCTAssertEqual(actions, [.start, .none, .stop], "only the real fn-up may stop the take")
     }
 
     /// Breaker R2: a repeated fn flag during a hands-free (latched) take must not stop it.
