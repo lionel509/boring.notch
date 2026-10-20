@@ -112,10 +112,13 @@ final class FnKeyMonitor: ObservableObject {
                 otherModifiers: otherModifiers
             )
         case .keyDown:
-            input = .keyDown(
-                keyCode: Int(event.getIntegerValueField(.keyboardEventKeycode)),
-                isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-            )
+            let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+            let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            // A fresh Space keyDown whose flags lack fn means a fn-up was lost: resync before classifying.
+            if keyCode == FnKeyLogic.spaceKeyCode && !isRepeat && logic.fnHeld && !event.flags.contains(.maskSecondaryFn) {
+                send(FnKeyLogic.classify(&logic, .resync(fnDown: false), at: now).event)
+            }
+            input = .keyDown(keyCode: keyCode, isRepeat: isRepeat)
         case .keyUp:
             input = .keyUp(keyCode: Int(event.getIntegerValueField(.keyboardEventKeycode)))
         default:
@@ -123,16 +126,20 @@ final class FnKeyMonitor: ObservableObject {
         }
 
         let output = FnKeyLogic.classify(&logic, input, at: now)
-        if let dictationEvent = output.event {
-            DispatchQueue.main.async {
-                VoiceDictationManager.shared.fnKey(dictationEvent)
-            }
-        }
+        send(output.event)
         // Only the Space of an fn+Space chord is ever swallowed, and only with an active tap.
         if output.swallow && mode == .active {
             return nil
         }
         return Unmanaged.passUnretained(event)
+    }
+
+    /// Hands a classifier event to the manager on the next main-queue turn.
+    private func send(_ event: DictationHotkeyLogic.Event?) {
+        guard let event else { return }
+        DispatchQueue.main.async {
+            VoiceDictationManager.shared.fnKey(event)
+        }
     }
 }
 
