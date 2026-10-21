@@ -232,8 +232,32 @@ final class MicLevelMeterTests: XCTestCase {
         m.ingest([0.1, 0.2], sampleRate: 1e300, channels: 1)
         var report = TakeReport()
         report.record(meter: m)
-        XCTAssertEqual(report.bufferSampleRate, 0)
+        XCTAssertEqual(report.bufferSampleRate, -1)
         XCTAssertFalse(report.line.isEmpty)
+    }
+
+    /// F15: a first buffer with a bad rate logs the unset marker, not a 0 Hz device.
+    func testInvalidFirstRateLogsUnsetMarker() {
+        var m = MicLevelMeter()
+        m.ingest([0.1, 0.2], sampleRate: .nan, channels: 1)
+        var report = TakeReport()
+        report.record(meter: m)
+        XCTAssertTrue(report.line.contains("buf=1ch/-1Hz"), report.line)
+    }
+
+    /// F14: the guard that keeps Int(rate) from trapping. Bad rates are invalid, not a crash.
+    func testUsableRateGuard() {
+        XCTAssertTrue(MicLevelMeter.isUsableRate(48_000))
+        XCTAssertTrue(MicLevelMeter.isUsableRate(1_000))
+        XCTAssertTrue(MicLevelMeter.isUsableRate(1_000_000))
+        XCTAssertFalse(MicLevelMeter.isUsableRate(999.999))
+        XCTAssertFalse(MicLevelMeter.isUsableRate(0.5))
+        XCTAssertFalse(MicLevelMeter.isUsableRate(5e-324))
+        XCTAssertFalse(MicLevelMeter.isUsableRate(1_000_001))
+        XCTAssertFalse(MicLevelMeter.isUsableRate(0))
+        XCTAssertFalse(MicLevelMeter.isUsableRate(-48_000))
+        XCTAssertFalse(MicLevelMeter.isUsableRate(.nan))
+        XCTAssertFalse(MicLevelMeter.isUsableRate(.infinity))
     }
 
     /// 500 random signals, cut at random points. The invariants must hold for every one.
