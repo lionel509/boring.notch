@@ -66,6 +66,15 @@ struct ContentView: View {
         )
     }
 
+    /// Failures and the model download are the only dictation states that show words.
+    private var dictationShowsMessage: Bool {
+        switch voiceDictation.state {
+        case .failed: return true
+        case .recording: return voiceDictation.downloadingModel
+        default: return false
+        }
+    }
+
     private var computedChinWidth: CGFloat {
         var chinWidth: CGFloat = vm.closedNotchSize.width
 
@@ -75,7 +84,8 @@ struct ContentView: View {
             chinWidth = 640
         } else if vm.notchState == .closed && voiceDictation.state != .idle && !vm.hideOnClosed {
             // Same two-cell strip as music: an icon on the left and the mic bars on the right.
-            chinWidth += (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
+            chinWidth += DictationStrip.extraWidth(
+                side: max(0, vm.effectiveClosedNotchHeight - 12), showsMessage: dictationShowsMessage)
         } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music)
             && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle)
             && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed
@@ -225,7 +235,7 @@ struct ContentView: View {
                         return view
                             .animation(vm.notchState == .open ? openAnimation : closeAnimation, value: vm.notchState)
                             .animation(.smooth, value: gestureProgress)
-                            .animation(.timingCurve(0.05, 0.6, 0.4, 0.95, duration: 0.12), value: voiceDictation.state)
+                            .animation(voiceDictation.state == .idle ? DictationMotion.collapse : DictationMotion.expand, value: voiceDictation.state)
                     }
                     .contentShape(Rectangle())
                     .onHover { hovering in
@@ -412,7 +422,8 @@ struct ContentView: View {
                       } else if vm.notchState == .closed && voiceDictation.state != .idle && !vm.hideOnClosed {
                           // Momentary states only, so ranking above music is right.
                           VoiceDictationLiveActivity()
-                              .transition(.opacity)
+                              .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                              .animation(DictationMotion.content, value: voiceDictation.state)
                       } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music) && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle) && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed {
                           MusicLiveActivity()
                               .frame(alignment: .center)
