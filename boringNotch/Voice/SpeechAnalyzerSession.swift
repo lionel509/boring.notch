@@ -83,6 +83,11 @@ final class SpeechAnalyzerSession: VoiceSession {
         input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, _ in
             tap.ingest(buffer)
             let format = buffer.format
+            // The device can change after start, so a buffer may carry a rate the start check never saw.
+            guard MicLevelMeter.isUsableRate(format.sampleRate) else {
+                tap.noteConvertFailure()
+                return
+            }
             if converterBox.converter?.inputFormat != format {
                 converterBox.converter = AVAudioConverter(from: format, to: target)
             }

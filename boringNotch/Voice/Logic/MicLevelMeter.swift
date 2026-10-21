@@ -49,10 +49,10 @@ struct MicLevelMeter {
     private var pending = 0
     private var chunkSize = 0
 
-    /// A rate that is finite, above zero and at most 1 MHz. Anything else is invalid, and
-    /// converting it with Int() would trap.
+    /// A rate that is finite, between 1 kHz and 1 MHz. Anything else is invalid: converting it
+    /// with Int() would trap, and a sub-kHz rate makes the converter's frame capacity overflow.
     static func isUsableRate(_ rate: Double) -> Bool {
-        rate.isFinite && rate > 0 && rate <= 1_000_000
+        rate.isFinite && rate >= 1_000 && rate <= 1_000_000
     }
 
     mutating func ingest(_ samples: [Float], sampleRate: Double, channels: Int) {

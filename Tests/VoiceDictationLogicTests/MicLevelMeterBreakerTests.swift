@@ -15,6 +15,8 @@ final class MicLevelMeterBreakerTests: XCTestCase {
         report.record(meter: m)
         XCTAssertFalse(report.line.contains("buf=1ch/0Hz"), "got: \(report.line)")
         XCTAssertNotEqual(report.bufferSampleRate, 0, "a usable rate must not log as 0 Hz")
+        XCTAssertTrue(report.line.contains("buf=1ch/-1Hz"), "got: \(report.line)")
+        XCTAssertEqual(report.bufferSampleRate, -1)
     }
 
     /// Break 2: the converter in SpeechAnalyzerSession's tap callback computes
@@ -26,12 +28,17 @@ final class MicLevelMeterBreakerTests: XCTestCase {
     func testBreaker_usableRateMustKeepConverterCapacityInUInt32() {
         let frames = 4096.0
         let target = 48_000.0
-        for rate in [0.01, 0.001, 1e-6, 5e-324] where MicLevelMeter.isUsableRate(rate) {
+        var checked = 0
+        for rate in [0.01, 0.001, 1e-6, 5e-324, 1_000, 8_000] where MicLevelMeter.isUsableRate(rate) {
+            checked += 1
             let capacity = frames * (target / rate) + 64
             XCTAssertLessThanOrEqual(
                 capacity, Double(UInt32.max),
                 "rate \(rate) is usable but the converter capacity \(capacity) overflows UInt32 and would trap"
             )
         }
+        // Guard against a vacuous pass: the real-device rates must reach the assertion.
+        XCTAssertGreaterThan(checked, 0)
+        XCTAssertTrue(MicLevelMeter.isUsableRate(8_000))
     }
 }

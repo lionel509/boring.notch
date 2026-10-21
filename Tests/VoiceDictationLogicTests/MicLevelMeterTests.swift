@@ -248,7 +248,11 @@ final class MicLevelMeterTests: XCTestCase {
     /// F14: the guard that keeps Int(rate) from trapping. Bad rates are invalid, not a crash.
     func testUsableRateGuard() {
         XCTAssertTrue(MicLevelMeter.isUsableRate(48_000))
+        XCTAssertTrue(MicLevelMeter.isUsableRate(1_000))
         XCTAssertTrue(MicLevelMeter.isUsableRate(1_000_000))
+        XCTAssertFalse(MicLevelMeter.isUsableRate(999.999))
+        XCTAssertFalse(MicLevelMeter.isUsableRate(0.5))
+        XCTAssertFalse(MicLevelMeter.isUsableRate(5e-324))
         XCTAssertFalse(MicLevelMeter.isUsableRate(1_000_001))
         XCTAssertFalse(MicLevelMeter.isUsableRate(0))
         XCTAssertFalse(MicLevelMeter.isUsableRate(-48_000))
