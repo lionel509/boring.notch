@@ -55,6 +55,53 @@ final class NoNetworkTests: XCTestCase {
         XCTAssertFalse(Self.isScanned(URL(fileURLWithPath: "/x/README.md")))
     }
 
+    /// v2-6 (amended by v4): the OpenRouter host lives in exactly one file, the cloud client. URLSession
+    /// and URLRequest stay out of the voice and cloud folders except in that file.
+    func testOpenRouterHostLivesInOneFile() throws {
+        let root = Self.repoRoot()
+        let client = "boringNotch/Cloud/OpenRouterClient.swift"
+        var hosting: [String] = []
+        for dir in ["boringNotch", "BoringNotchXPCHelper"] {
+            guard let walk = FileManager.default.enumerator(at: root.appendingPathComponent(dir), includingPropertiesForKeys: nil) else {
+                XCTFail("cannot walk \(dir)")
+                continue
+            }
+            for case let url as URL in walk where url.pathExtension == "swift" {
+                let text = try String(contentsOf: url, encoding: .utf8)
+                if text.contains("openrouter.ai") {
+                    hosting.append(String(url.path.dropFirst(root.path.count + 1)))
+                }
+            }
+        }
+        XCTAssertEqual(hosting.sorted(), [client])
+
+        let text = try String(contentsOf: root.appendingPathComponent(client), encoding: .utf8)
+        for literal in text.components(separatedBy: "\"https://").dropFirst() {
+            XCTAssertTrue(literal.hasPrefix("openrouter.ai/"), "\(client) reaches \(literal.prefix(40))")
+        }
+
+        for dir in ["boringNotch/Voice", "boringNotch/Cloud"] {
+            for file in Self.swiftFiles(under: root.appendingPathComponent(dir)) where !file.hasSuffix("/" + client) {
+                let source = try String(contentsOf: URL(fileURLWithPath: file), encoding: .utf8)
+                XCTAssertFalse(source.contains("URLSession"), file)
+                XCTAssertFalse(source.contains("URLRequest"), file)
+            }
+        }
+    }
+
+    private static func repoRoot() -> URL {
+        // #filePath: <root>/Tests/VoiceDictationLogicTests/NoNetworkTests.swift
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private static func swiftFiles(under dir: URL) -> [String] {
+        guard let walk = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil) else { return [] }
+        return walk.compactMap { ($0 as? URL)?.path }.filter { $0.hasSuffix(".swift") }
+    }
+
     static func violations(in text: String) -> [String] {
         forbidden.filter { text.contains($0) }
     }
