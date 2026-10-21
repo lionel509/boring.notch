@@ -53,3 +53,6 @@ build/
 *.xcarchive
 *.dSYM
 
+
+# Dictation demo output (scripts/dictation-demo.sh)
+scripts/out/
