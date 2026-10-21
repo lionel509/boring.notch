@@ -43,10 +43,17 @@ struct MicLevelMeter {
     private(set) var maxDB: Float = -100
     private(set) var floorDB: Float? = nil
     private(set) var firstChannels = 0
-    private(set) var firstSampleRate: Double = 0
+    /// -1 until a first buffer arrives, and when its rate is unusable.
+    private(set) var firstSampleRate: Double = -1
     private var sumSquares: Double = 0
     private var pending = 0
     private var chunkSize = 0
+
+    /// A rate that is finite, above zero and at most 1 MHz. Anything else is invalid, and
+    /// converting it with Int() would trap.
+    static func isUsableRate(_ rate: Double) -> Bool {
+        rate.isFinite && rate > 0 && rate <= 1_000_000
+    }
 
     mutating func ingest(_ samples: [Float], sampleRate: Double, channels: Int) {
         samples.withUnsafeBufferPointer { ingest($0, sampleRate: sampleRate, channels: channels) }
@@ -55,17 +62,16 @@ struct MicLevelMeter {
     mutating func ingest(_ samples: UnsafeBufferPointer<Float>, sampleRate: Double, channels: Int) {
         buffers += 1
         self.samples += samples.count
-        // The chunk clock follows the rate of the current buffer. A NaN, infinite, zero or
-        // absurdly large rate (above 1 MHz, where Int() would trap) keeps the last good size,
-        // or 48 kHz (1920 samples) if none has arrived yet.
-        let rateIsValid = sampleRate.isFinite && sampleRate > 0 && sampleRate <= 1_000_000
+        // The chunk clock follows the rate of the current buffer. An invalid rate keeps the last
+        // good size, or 48 kHz (1920 samples) if none has arrived yet.
+        let rateIsValid = Self.isUsableRate(sampleRate)
         if rateIsValid {
             chunkSize = max(1, Int((sampleRate * Self.chunkSeconds).rounded()))
         }
         if chunkSize == 0 { chunkSize = 1920 }
         if buffers == 1 {
             firstChannels = channels
-            firstSampleRate = rateIsValid ? sampleRate : 0
+            firstSampleRate = rateIsValid ? sampleRate : -1
         }
         for raw in samples {
             let s: Float = raw.isFinite ? raw : 0

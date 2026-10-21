@@ -69,7 +69,7 @@ final class SpeechAnalyzerSession: VoiceSession {
 
         let input = engine.inputNode
         let inFormat = input.outputFormat(forBus: 0)
-        guard inFormat.channelCount > 0, inFormat.sampleRate > 0 else {
+        guard inFormat.channelCount > 0, MicLevelMeter.isUsableRate(inFormat.sampleRate) else {
             throw VoiceError.noMicrophone
         }
         tapChannels = Int(inFormat.channelCount)
