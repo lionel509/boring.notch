@@ -91,8 +91,9 @@ enum RewriteReducer {
         }
 
         switch e {
-        case .sttArrived(let text, let source):
+        case .sttArrived(let raw, let source):
             guard s.stage == .awaitingSTT else { return [] }
+            let text = RewritePlanner.normalize(raw)
             if isBlank(text) { return reduce(&s, .sttFailed) }
             s.sttSource = source
             return start(&s, text: text)
@@ -104,7 +105,7 @@ enum RewriteReducer {
 
         case .appleFinal(let text):
             guard s.stage == .awaitingSTT else { return [] }
-            s.applePending = text
+            s.applePending = RewritePlanner.normalize(text)
             return settleFromApple(&s)
 
         case .tokens(let text):

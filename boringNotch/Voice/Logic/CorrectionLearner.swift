@@ -4,6 +4,8 @@ import Foundation
 /// dictated word. Only short alphabetic words are kept, so junk never reaches the dictionary.
 enum CorrectionLearner {
     static let maxCandidates = 5
+    /// Above this many token pairs the alignment is skipped: it would stall the caller on a long field.
+    static let maxPairs = 200_000
 
     /// `pasted` is what we inserted. `current` is the field's text now. Returns at most
     /// `maxCandidates` words in the order they appear in `current`, without duplicates.
@@ -11,11 +13,17 @@ enum CorrectionLearner {
         let pastedTokens = tokens(pasted)
         let currentTokens = tokens(current)
         guard !pastedTokens.isEmpty, !currentTokens.isEmpty else { return [] }
+        guard pastedTokens.count * currentTokens.count <= maxPairs else { return [] }
 
-        let window = bestWindow(pasted: pastedTokens, current: currentTokens)
+        // Each token is normalized once here; the alignment compares the keys only.
+        let pastedKeys = pastedTokens.map(normalized)
+        let currentKeys = currentTokens.map(normalized)
+        let range = bestWindow(pasted: pastedKeys, current: currentKeys)
         var found: [String] = []
         var seen = Set<String>()
-        for word in replacedWords(pasted: pastedTokens, window: window) {
+        let window = currentTokens[range]
+        let windowKeys = currentKeys[range]
+        for word in replacedWords(pasted: pastedKeys, windowKeys: windowKeys, window: window) {
             guard let clean = accepted(word, pasted: pasted, current: current) else { continue }
             guard seen.insert(clean.lowercased()).inserted else { continue }
             found.append(clean)
@@ -31,8 +39,8 @@ enum CorrectionLearner {
     }
 
     /// The window of `current` (length within 3 of the pasted length) with the highest
-    /// LCS against `pasted`. Ties go to the latest start, then the longer window.
-    private static func bestWindow(pasted: [String], current: [String]) -> ArraySlice<String> {
+    /// LCS against `pasted`. Ties go to the latest start, then the longer window. Both arrays hold keys.
+    private static func bestWindow(pasted: [String], current: [String]) -> Range<Int> {
         let m = pasted.count
         var best = 0
         var bestStart = 0
@@ -48,15 +56,15 @@ enum CorrectionLearner {
                 }
             }
         }
-        guard best > 0 else { return [] }
-        return current[bestStart..<(bestStart + bestLength)]
+        guard best > 0 else { return 0..<0 }
+        return bestStart..<(bestStart + bestLength)
     }
 
     /// Words in `window` that sit where a pasted word was replaced: an unmatched run that has
     /// pasted words and window words on both sides, paired from the left.
-    private static func replacedWords(pasted: [String], window: ArraySlice<String>) -> [String] {
+    private static func replacedWords(pasted: [String], windowKeys: ArraySlice<String>, window: ArraySlice<String>) -> [String] {
         let w = Array(window)
-        let steps = alignment(pasted, w)
+        let steps = alignment(pasted, Array(windowKeys))
         var result: [String] = []
         var pendingPasted = 0
         var pendingWindow: [String] = []
@@ -86,14 +94,14 @@ enum CorrectionLearner {
         case windowOnly(Int)
     }
 
-    /// Backtracks the LCS table into an ordered list of steps.
+    /// Backtracks the LCS table into an ordered list of steps. Inputs are normalized keys.
     private static func alignment(_ pasted: [String], _ window: [String]) -> [Step] {
         let table = lcsTable(pasted, window)
         var steps: [Step] = []
         var i = pasted.count
         var j = window.count
         while i > 0 || j > 0 {
-            if i > 0, j > 0, equal(pasted[i - 1], window[j - 1]), table[i][j] == table[i - 1][j - 1] + 1 {
+            if i > 0, j > 0, pasted[i - 1] == window[j - 1], table[i][j] == table[i - 1][j - 1] + 1 {
                 steps.append(.match)
                 i -= 1
                 j -= 1
@@ -112,11 +120,12 @@ enum CorrectionLearner {
         lcsTable(pasted, window)[pasted.count][window.count]
     }
 
+    /// Inputs are normalized keys.
     private static func lcsTable(_ pasted: [String], _ window: [String]) -> [[Int]] {
         var table = Array(repeating: Array(repeating: 0, count: window.count + 1), count: pasted.count + 1)
         for i in pasted.indices {
             for j in window.indices {
-                table[i + 1][j + 1] = equal(pasted[i], window[j])
+                table[i + 1][j + 1] = pasted[i] == window[j]
                     ? table[i][j] + 1
                     : max(table[i][j + 1], table[i + 1][j])
             }
@@ -125,10 +134,6 @@ enum CorrectionLearner {
     }
 
     /// Tokens match ignoring case and surrounding punctuation ("tomorrow." is "tomorrow").
-    private static func equal(_ a: String, _ b: String) -> Bool {
-        normalized(a) == normalized(b)
-    }
-
     private static func normalized(_ token: String) -> String {
         token.trimmingCharacters(in: .punctuationCharacters).lowercased()
     }

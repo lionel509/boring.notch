@@ -393,10 +393,10 @@ final class VoiceDictationManager: ObservableObject {
 
         var text = rawNow
         if text.isEmpty {
-            if let attempt = await sttTask.value, !attempt.text.isEmpty {
-                text = attempt.text
+            if let attempt = await sttTask.value, !RewritePlanner.normalize(attempt.text).isEmpty {
+                text = RewritePlanner.normalize(attempt.text)
             } else {
-                text = TranscriptAssembler.join(await finalTask.value)
+                text = RewritePlanner.normalize(TranscriptAssembler.join(await finalTask.value))
             }
             guard !text.isEmpty else {
                 engine.fill(&report)
@@ -583,8 +583,11 @@ final class VoiceDictationManager: ObservableObject {
             try? await Task.sleep(for: .seconds(8))
             guard !Task.isCancelled, let self, self.state == .idle,
                   NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundle else { return }
-            let current = await XPCHelperClient.shared.focusedTextValue()
-            let found = CorrectionLearner.candidates(pasted: text, current: current ?? "")
+            let current = await XPCHelperClient.shared.focusedTextValue() ?? ""
+            // The alignment is quadratic in the take and the field, so it runs off the main actor.
+            let found = await Task.detached(priority: .utility) {
+                CorrectionLearner.candidates(pasted: text, current: current)
+            }.value
             guard !found.isEmpty else { return }
             var learned = Defaults[.dictationLearnedWords]
             PersonalDictionary.learn(found, into: &learned)
