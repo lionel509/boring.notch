@@ -32,10 +32,16 @@ final class BreakerR4Tests: XCTestCase {
         let vdm = try appSource("boringNotch/Voice/VoiceDictationManager.swift")
         let afterRun = section(vdm, from: "await running.run(", to: "closeRewrite(running)")
         XCTAssertFalse(afterRun.isEmpty, "the post-rewrite section of insertAndRefine was not found")
-        guard let finalWait = afterRun.range(of: "await finalTask.value") else {
+        // Scope to the code after the `running.run(...)` call: its closing paren sits on the 8-space indent. The
+        // Apple final wait must be searched from there, because `appleFinal:` inside the call also contains the text.
+        guard let callEnd = afterRun.range(of: "\n        )\n") else {
+            return XCTFail("the TakeRewriter run call moved; re-check the exit path this test pins")
+        }
+        let afterCall = afterRun[callEnd.upperBound...]
+        guard let finalWait = afterCall.range(of: "await finalTask.value") else {
             return XCTFail("the Apple final wait moved; re-check the ordering this test pins")
         }
-        let beforeWait = afterRun[..<finalWait.lowerBound]
+        let beforeWait = afterCall[..<finalWait.lowerBound]
         XCTAssertTrue(
             beforeWait.contains("sttTask.cancel()"),
             "sttTask is cancelled only when insertAndRefine returns, after `await finalTask.value` (up to ~3 s). A take the user ended mid-rewrite keeps its cloud STT request alive through that wait, so the second STT model can be billed for an abandoned take.")
