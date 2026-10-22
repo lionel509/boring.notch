@@ -72,7 +72,7 @@ final class RewriteBreakerTests: XCTestCase {
     /// sentence is one "word". Any change to it shares 0 of 1 words and is rejected. Every Chinese cleanup is
     /// discarded, so the stage-B rewrite never happens for Chinese.
     func testBreakCjkCleanupIsAlwaysRejectedByTheGuard() throws {
-        try XCTSkip("out of scope per review r1: English-only take; CJK in FOLLOWUPS")
+        throw XCTSkip("out of scope per review r1: English-only take; CJK in FOLLOWUPS")
         XCTAssertTrue(
             CleanupGuard.accept(raw: "我想明天去北京开会", cleaned: "我明天去北京开会。"),
             "a one-character cleanup of a Chinese sentence must be accepted")
@@ -81,7 +81,7 @@ final class RewriteBreakerTests: XCTestCase {
     /// B7. `SentenceSplitter` only ends sentences at ASCII . ! ? and the ellipsis. Chinese uses 。！？, so the
     /// streamed cleanup never swaps sentence by sentence, and it waits for the end of the stream.
     func testBreakCjkSentencesAreNeverSplit() throws {
-        try XCTSkip("out of scope per review r1: English-only take; CJK in FOLLOWUPS")
+        throw XCTSkip("out of scope per review r1: English-only take; CJK in FOLLOWUPS")
         let result = SentenceSplitter.completeSentences(in: "我明天去北京开会。我们讨论预算。", streamEnded: false)
         XCTAssertEqual(result.sentences.count, 2)
     }
@@ -93,7 +93,7 @@ final class RewriteBreakerTests: XCTestCase {
     /// then holds 1 UTF-16 unit less than `committed`, so the next swap's caret check returns 4 and the take
     /// aborts with the text half cleaned.
     func testBreakNfdTargetOverNfcTextDriftsTheCaretBookkeeping() throws {
-        try XCTSkip("not a bug per review r1 for realistic NFC input; NFC normalize in FOLLOWUPS")
+        throw XCTSkip("not a bug per review r1 for realistic NFC input; NFC normalize in FOLLOWUPS")
         let committed = "café x"
         let target = "cafe\u{301} y"
         guard let step = RewritePlanner.step(from: committed, to: target) else {
