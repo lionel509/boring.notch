@@ -21,11 +21,16 @@ enum DictationStrip {
     }
 
     /// The part of a message before the first "." or ":", trimmed. The whole message when
-    /// it has neither.
+    /// it has neither. Capped at `headlineMax` characters, the last one an ellipsis, so runtime
+    /// error text cannot overflow the cell.
     static func headline(_ message: String) -> String {
-        guard let cut = message.firstIndex(where: { $0 == "." || $0 == ":" }) else {
-            return message.trimmingCharacters(in: .whitespaces)
+        let head: String
+        if let cut = message.firstIndex(where: { $0 == "." || $0 == ":" }) {
+            head = String(message[..<cut]).trimmingCharacters(in: .whitespaces)
+        } else {
+            head = message.trimmingCharacters(in: .whitespaces)
         }
-        return String(message[..<cut]).trimmingCharacters(in: .whitespaces)
+        guard head.count > headlineMax else { return head }
+        return String(head.prefix(headlineMax - 1)) + "…"
     }
 }
