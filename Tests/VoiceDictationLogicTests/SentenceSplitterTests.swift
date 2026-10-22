@@ -34,4 +34,12 @@ final class SentenceSplitterTests: XCTestCase {
         XCTAssertEqual(SentenceSplitter.completeSentences(in: "The price is 3.", streamEnded: true).sentences,
                        ["The price is 3."])
     }
+
+    /// A "." that closes an abbreviation does not end a sentence while the stream is open.
+    func testAbbreviationPointDoesNotEndASentence() {
+        XCTAssertEqual(SentenceSplitter.completeSentences(in: "Tell Dr. Lee about it", streamEnded: false).sentences, [])
+        let result = SentenceSplitter.completeSentences(in: "I met Dr. Lee. Then I left.", streamEnded: true)
+        XCTAssertEqual(result.sentences, ["I met Dr. Lee.", "Then I left."])
+        XCTAssertEqual(SentenceSplitter.completeSentences(in: "Hi there.", streamEnded: false).sentences, ["Hi there."])
+    }
 }
