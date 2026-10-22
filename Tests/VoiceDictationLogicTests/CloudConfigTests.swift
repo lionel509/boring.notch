@@ -12,8 +12,10 @@ final class CloudConfigTests: XCTestCase {
         XCTAssertEqual(CloudConfig.sttModels, ["assemblyai/universal-3-6-pro", "mistralai/voxtral-mini-transcribe-3-0"])
     }
 
-    func testCleanupModelsGeminiFlashLiteFirstThenNano() {
-        XCTAssertEqual(CloudConfig.cleanupModels, ["google/gemini-2.5-flash-lite", "openai/gpt-4.1-nano"])
+    /// Final order (main session, after benchmark round 2): Haiku 5.5 alone; Gemini Flash Lite
+    /// obeyed an injected instruction in 3/3 runs and DeepSeek answered a dictated question.
+    func testCleanupModelsHaikuOnly() {
+        XCTAssertEqual(CloudConfig.cleanupModels, ["anthropic/claude-haiku-5.5"])
     }
 
     func testBudgetsMatchThePlan() {

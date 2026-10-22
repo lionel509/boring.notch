@@ -111,10 +111,14 @@ final class LogPrivacyTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        let voice = root.appendingPathComponent("boringNotch/Voice")
-        let files = (FileManager.default.enumerator(at: voice, includingPropertiesForKeys: nil)?
-            .compactMap { $0 as? URL } ?? [])
-            .filter { ["swift", "m", "h"].contains($0.pathExtension) }
+        // v2-5: the cloud client is a source root too (same banned tokens).
+        var files: [URL] = []
+        for dir in ["boringNotch/Voice", "boringNotch/Cloud"] {
+            let root = root.appendingPathComponent(dir)
+            files += (FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
+                .compactMap { $0 as? URL } ?? [])
+                .filter { ["swift", "m", "h"].contains($0.pathExtension) }
+        }
         XCTAssertGreaterThanOrEqual(files.count, 5, "expected the voice sources, found \(files.count)")
         return files
     }
