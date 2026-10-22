@@ -23,14 +23,32 @@ struct SSEParser {
 
 /// Reads one streamed chat-completion payload.
 enum CleanupStream {
-    /// The content piece in `choices[0].delta.content`, or nil.
+    /// The content piece in `choices[0].delta.content`, or nil. An error frame carries no content.
     static func delta(_ payload: String) -> String? {
+        guard !failed(payload) else { return nil }
         guard let json = object(payload),
               let choices = json["choices"] as? [[String: Any]],
               let delta = choices.first?["delta"] as? [String: Any],
               let content = delta["content"] as? String
         else { return nil }
         return content
+    }
+
+    /// True when the frame is a mid-stream provider failure: a top-level `error` object, or
+    /// `choices[0].finish_reason` set to `error`. OpenRouter sends these inside a 200 stream.
+    static func failed(_ payload: String) -> Bool {
+        guard let json = object(payload) else { return false }
+        if json["error"] != nil { return true }
+        return finishReason(payload) == "error"
+    }
+
+    /// `choices[0].finish_reason` when the frame sets one, or nil.
+    static func finishReason(_ payload: String) -> String? {
+        guard let json = object(payload),
+              let choices = json["choices"] as? [[String: Any]],
+              let reason = choices.first?["finish_reason"] as? String
+        else { return nil }
+        return reason
     }
 
     /// Token counts from the final usage chunk, or nil.

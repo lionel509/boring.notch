@@ -34,4 +34,22 @@ final class SSEParserTests: XCTestCase {
         XCTAssertEqual(usage.completion, 60)
         XCTAssertNil(CleanupStream.usage("{\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}"))
     }
+
+    func testErrorFrameIsFailedAndCarriesNoDelta() {
+        let frame = #"{"error":{"message":"Provider disconnected","code":502},"choices":[{"delta":{"content":""},"finish_reason":"error"}]}"#
+        XCTAssertTrue(CleanupStream.failed(frame))
+        XCTAssertNil(CleanupStream.delta(frame))
+    }
+
+    func testNormalDeltaIsNotFailed() {
+        let payload = "{\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}"
+        XCTAssertFalse(CleanupStream.failed(payload))
+        XCTAssertEqual(CleanupStream.delta(payload), "Hi")
+    }
+
+    func testFinishReasonReadsStop() {
+        let payload = "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}"
+        XCTAssertEqual(CleanupStream.finishReason(payload), "stop")
+        XCTAssertNil(CleanupStream.finishReason("{\"choices\":[],\"usage\":{}}"))
+    }
 }

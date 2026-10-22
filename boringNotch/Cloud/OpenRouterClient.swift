@@ -43,11 +43,22 @@ final class OpenRouterClient {
         var request = try makeRequest(path: "audio/transcriptions", timeout: timeout)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
+        // The URLRequest timeout is idle-only, so the whole call also gets an overall cap.
+        let sent = request
+        let outcome = await TimeoutRace.run(seconds: timeout) { [session] () -> Result<(Data, URLResponse), Error> in
+            do {
+                return .success(try await session.data(for: sent))
+            } catch {
+                return .failure(error)
+            }
+        }
+        guard let outcome else { throw Failure.timeout }
         let data: Data
         let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
+        switch outcome {
+        case .success(let pair):
+            (data, response) = pair
+        case .failure(let error):
             throw Self.map(error)
         }
         guard let http = response as? HTTPURLResponse else { throw Failure.decode }
@@ -91,9 +102,12 @@ final class OpenRouterClient {
                     }
 
                     var parser = SSEParser()
+                    var finishReason: String?
                     for try await line in bytes.lines {
                         try Task.checkCancellation()
                         for payload in parser.feed(line + "\n") {
+                            if CleanupStream.failed(payload) { throw Failure.http(502) }
+                            if let reason = CleanupStream.finishReason(payload) { finishReason = reason }
                             if let piece = CleanupStream.delta(payload) {
                                 continuation.yield(.delta(piece))
                             }
@@ -102,6 +116,8 @@ final class OpenRouterClient {
                             }
                         }
                     }
+                    // Anything but a clean "stop" (cut off, length-capped, or no finish reason) is not a full cleanup.
+                    guard finishReason == "stop" else { throw Failure.decode }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: Self.map(error))
