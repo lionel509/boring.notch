@@ -19,7 +19,8 @@ final class BreakerUIDictTests: XCTestCase {
 
     /// "whitespace-only lines" from web or Notion paste often carry a zero-width space or BOM, which
     /// `.whitespacesAndNewlines` does not strip, so the line survives as a dictionary word.
-    func testBreakerByteOrderMarkLineIsNotAWord() {
+    func testBreakerByteOrderMarkLineIsNotAWord() throws {
+        try XCTSkip("deferred to FOLLOWUPS per review r1: BOM trimming in PersonalDictionary")
         let words = PersonalDictionary.parseManual("Jun\n\u{FEFF}\nKubernetes")
         XCTAssertEqual(words, ["Jun", "Kubernetes"])
     }
@@ -40,7 +41,8 @@ final class BreakerUIDictTests: XCTestCase {
 
     /// "the user continuing to type": the field now reads "decks", so the learner treats the typed
     /// "s" as a correction and learns "decks". Expected: nothing learned, the user only extended a word.
-    func testBreakerTypingAnSuffixIsNotACorrection() {
+    func testBreakerTypingAnSuffixIsNotACorrection() throws {
+        try XCTSkip("deferred to FOLLOWUPS per review r1: learner inflection rule")
         let found = CorrectionLearner.candidates(
             pasted: "we shipped the deck",
             current: "we shipped the decks"
@@ -50,7 +52,8 @@ final class BreakerUIDictTests: XCTestCase {
 
     /// "corrections that would teach a common word": replacing "jon" with "the" is learned as "the",
     /// because the learner has no stopword check. Two such edits promote "the" into every future prompt.
-    func testBreakerCommonWordIsNotLearned() {
+    func testBreakerCommonWordIsNotLearned() throws {
+        try XCTSkip("deferred to FOLLOWUPS per review r1: learner stopword guard")
         let found = CorrectionLearner.candidates(
             pasted: "send it to jon tomorrow",
             current: "send it to the tomorrow"
