@@ -46,6 +46,11 @@ final class SpeechAnalyzerSession: VoiceSession {
     /// The transcriber's latest unconfirmed text. Used only if finalize does not finish in time.
     private var lastVolatile = ""
     private var configObserver: NSObjectProtocol?
+    /// The take's audio as 16 kHz PCM, for the cloud transcript.
+    private let audio = TakeAudioBuffer()
+    /// Uptime when the engine started and when the first partial arrived, for the take report.
+    private var engineStartedAt: TimeInterval?
+    private var firstPartialAt: TimeInterval?
 
     /// Makes sure the on-device en_US model is installed. The OS fetches it once.
     /// `onDownloadStart` runs only when a download is actually needed, so the UI can say so.
@@ -58,13 +63,20 @@ final class SpeechAnalyzerSession: VoiceSession {
         }
     }
 
-    func start(onPartial: @escaping @Sendable (String) -> Void) async throws {
+    func start(contextualStrings: [String], onPartial: @escaping @Sendable (String) -> Void) async throws {
         let transcriber = self.transcriber
             ?? SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .progressiveTranscription)
         self.transcriber = transcriber
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         guard let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
             throw VoiceError.noFormat
+        }
+
+        // Dictionary words bias Apple's recognizer toward the spelling the user typed.
+        if !contextualStrings.isEmpty {
+            let context = AnalysisContext()
+            context.contextualStrings = [.general: contextualStrings]
+            try await analyzer.setContext(context)
         }
 
         let input = engine.inputNode
@@ -78,10 +90,12 @@ final class SpeechAnalyzerSession: VoiceSession {
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         let tap = levelTap
         let converterBox = ConverterBox()
+        let takeAudio = audio
         // The format comes from the first buffer, not from the input node at start. CoreAudio can
         // still be switching devices then, and a tap installed with the stale format delivers nothing.
         input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, _ in
             tap.ingest(buffer)
+            takeAudio.ingest(buffer)
             let format = buffer.format
             // The device can change after start, so a buffer may carry a rate the start check never saw.
             guard MicLevelMeter.isUsableRate(format.sampleRate) else {
@@ -133,6 +147,7 @@ final class SpeechAnalyzerSession: VoiceSession {
                     } else {
                         self?.lastVolatile = text
                         self?.partialCount += 1
+                        if self?.firstPartialAt == nil { self?.firstPartialAt = ProcessInfo.processInfo.systemUptime }
                         onPartial(text)
                     }
                 }
@@ -143,6 +158,7 @@ final class SpeechAnalyzerSession: VoiceSession {
 
         do {
             engine.prepare()
+            engineStartedAt = ProcessInfo.processInfo.systemUptime
             try engine.start()
             try await analyzer.start(inputSequence: stream)
         } catch {
@@ -175,6 +191,18 @@ final class SpeechAnalyzerSession: VoiceSession {
         return TranscriptAssembler.parts(finals: finals, volatileTail: lastVolatile, finalized: finalized)
     }
 
+    /// Stops the microphone at key release without waiting for the analyzer. Returns the transcript so far.
+    /// `finish()` still runs afterwards for the final results.
+    func stopNow() -> [String] {
+        teardownAudio()
+        return TranscriptAssembler.parts(finals: finals, volatileTail: lastVolatile, finalized: false)
+    }
+
+    /// The take's audio as a WAV file, or nil when no audio arrived.
+    func takeWAV() -> Data? {
+        audio.wav()
+    }
+
     func cancel() async {
         teardownAudio()
         if let analyzer {
@@ -194,6 +222,9 @@ final class SpeechAnalyzerSession: VoiceSession {
         report.partials = partialCount
         report.finalizeMs = finalizeMs
         report.volatileTail = !finalized && !lastVolatile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if let engineStartedAt, let firstPartialAt {
+            report.firstPartialMs = Int((firstPartialAt - engineStartedAt) * 1000)
+        }
         levelTap.fill(&report)
     }
 
