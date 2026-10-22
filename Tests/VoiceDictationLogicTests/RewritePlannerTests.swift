@@ -117,9 +117,11 @@ final class RewritePlannerTests: XCTestCase {
                 }
                 committed = target
 
-                for sentence in SentenceSplitter.completeSentences(in: previousTarget, streamEnded: false).sentences {
-                    XCTAssertTrue(target.hasPrefix(sentence), "\(target) lost \(sentence)")
-                }
+                // Prefix-stable: the earlier target's complete sentences, run together, start the later target.
+                // (Per sentence would be unsatisfiable: only the first sentence can be a prefix.)
+                let completedText = SentenceSplitter.completeSentences(in: previousTarget, streamEnded: false).sentences
+                    .joined(separator: " ")
+                XCTAssertTrue(target.hasPrefix(completedText), "\(target) lost \(completedText)")
 
                 if cleanedSoFar.hasSuffix(".") {
                     let expectedTail = RewritePlanner.normalize(

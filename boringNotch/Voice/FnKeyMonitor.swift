@@ -23,6 +23,10 @@ final class FnKeyMonitor: ObservableObject {
 
     @Published private(set) var mode: Mode = .off
 
+    /// Every untagged key or mouse event the tap sees, before the fn logic. The rewrite uses it to abort
+    /// when the user touches the text. Tagged events (ours) never reach it.
+    var userInput: ((CGEventType) -> Void)?
+
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var logic = FnKeyLogic.State()
@@ -34,6 +38,10 @@ final class FnKeyMonitor: ObservableObject {
         let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.keyUp.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
+            | (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << CGEventType.rightMouseDown.rawValue)
+            | (1 << CGEventType.otherMouseDown.rawValue)
+            | (1 << CGEventType.scrollWheel.rawValue)
         let userInfo = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
 
         var created = CGEvent.tapCreate(
@@ -103,6 +111,16 @@ final class FnKeyMonitor: ObservableObject {
     }
 
     fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // Our own synthesized events (the rewrite's keystrokes and paste) are not user input.
+        if event.getIntegerValueField(.eventSourceUserData) == DictationEvents.tag {
+            return Unmanaged.passUnretained(event)
+        }
+        switch type {
+        case .keyDown, .keyUp, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel:
+            userInput?(type)
+        default:
+            break
+        }
         let now: TimeInterval
         let input: FnKeyLogic.Input
         switch type {

@@ -257,6 +257,116 @@ final class XPCHelperClient: NSObject {
         }
     }
     
+    // MARK: - Dictation rewrite (U4)
+
+    nonisolated func openRouterKey() async -> String? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let key: String? = try await service.withContinuation { service, continuation in
+                service.openRouterKey { key in continuation.resume(returning: key) }
+            }
+            return key
+        } catch {
+            return nil
+        }
+    }
+
+    nonisolated func focusedTextValue() async -> String? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let value: String? = try await service.withContinuation { service, continuation in
+                service.focusedTextValue { value in continuation.resume(returning: value) }
+            }
+            return value
+        } catch {
+            return nil
+        }
+    }
+
+    nonisolated func beginTracking() async -> FocusedField? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let json: String? = try await service.withContinuation { service, continuation in
+                service.beginTracking { json in continuation.resume(returning: json) }
+            }
+            guard let json, let data = json.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(FocusedField.self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
+    /// -1 unknown, -2 focus moved or nothing tracked.
+    nonisolated func caretLocation() async -> Int {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let caret: Int = try await service.withContinuation { service, continuation in
+                service.caretLocation { caret in continuation.resume(returning: caret) }
+            }
+            return caret
+        } catch {
+            return -1
+        }
+    }
+
+    nonisolated func stringForRange(_ location: Int, _ length: Int) async -> String? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let text: String? = try await service.withContinuation { service, continuation in
+                service.stringForRange(location, length) { text in continuation.resume(returning: text) }
+            }
+            return text
+        } catch {
+            return nil
+        }
+    }
+
+    /// Swap reply codes as in the helper protocol. 6 when the helper cannot be reached, which changes nothing.
+    nonisolated func axReplace(_ location: Int, _ length: Int, _ text: String) async -> Int {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let code: Int = try await service.withContinuation { service, continuation in
+                service.axReplace(location, length, text) { code in continuation.resume(returning: code) }
+            }
+            return code
+        } catch {
+            return 6
+        }
+    }
+
+    nonisolated func axSelectThenType(_ location: Int, _ length: Int, _ text: String, caretAfter: Int) async -> Int {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let code: Int = try await service.withContinuation { service, continuation in
+                service.axSelectThenType(location, length, text, caretAfter) { code in
+                    continuation.resume(returning: code)
+                }
+            }
+            return code
+        } catch {
+            return 6
+        }
+    }
+
+    nonisolated func typeSwap(suffixGraphemes: Int, oldGraphemes: Int, text: String) async -> Int {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let code: Int = try await service.withContinuation { service, continuation in
+                service.typeSwap(suffixGraphemes, oldGraphemes, text) { code in continuation.resume(returning: code) }
+            }
+            return code
+        } catch {
+            return 6
+        }
+    }
+
+    nonisolated func endTracking() async {
+        let service = await MainActor.run { ensureRemoteService() }
+        try? await service.withService { service in
+            service.endTracking()
+        }
+    }
+
     // MARK: - Keyboard Brightness
     
     nonisolated func isKeyboardBrightnessAvailable() async -> Bool {
