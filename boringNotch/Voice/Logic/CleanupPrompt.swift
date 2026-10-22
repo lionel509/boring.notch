@@ -21,7 +21,15 @@ enum CleanupPrompt {
     }
 
     /// The user message: the raw transcript wrapped so the model treats it as data.
+    /// The dictated text in its data block. Any `<transcript>` or `</transcript>` inside the speech is removed
+    /// first, repeatedly, so the speech cannot close the block early or open a second one.
     static func userMessage(_ raw: String) -> String {
-        "<transcript>" + raw + "</transcript>"
+        var clean = raw
+        for tag in ["</transcript>", "<transcript>"] {
+            while let range = clean.range(of: tag, options: .caseInsensitive) {
+                clean.removeSubrange(range)
+            }
+        }
+        return "<transcript>" + clean + "</transcript>"
     }
 }
