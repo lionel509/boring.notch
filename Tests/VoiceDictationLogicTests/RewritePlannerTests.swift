@@ -175,4 +175,12 @@ private struct PlannerRNG {
     mutating func int(_ lo: Int, _ hi: Int) -> Int {
         lo + Int(next() % UInt64(hi - lo + 1))
     }
+
+    /// "so" is in the filler set so a leading filler can be skipped, but it stays matchable mid-sentence.
+    func testMidSentenceSoStillAlignsAndSurvives() {
+        var state = AlignState()
+        let target = RewritePlanner.target(
+            cleaned: "I'm so", streamEnded: false, raw: "I'm so tired now", state: &state)
+        XCTAssertEqual(target, "I'm so tired now", "mid-sentence 'so' must align and stay in the target")
+    }
 }

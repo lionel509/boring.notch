@@ -51,7 +51,7 @@ enum RewritePlanner {
     ]
 
     /// Filler sounds the raw text may contain that cleanup drops. They never count against a match's skip budget.
-    private static let fillers: Set<String> = ["um", "uh", "er", "ah", "hmm", "mm"]
+    private static let fillers: Set<String> = ["um", "uh", "er", "ah", "hmm", "mm", "so"]
 
     /// Collapses every whitespace run, newlines included, to one space. A typed Return would send a message.
     static func normalize(_ s: String) -> String {
