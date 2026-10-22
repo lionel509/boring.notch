@@ -56,7 +56,8 @@ final class BreakerCloudTests: XCTestCase {
         let client = try String(
             contentsOf: root.appendingPathComponent("boringNotch/Cloud/OpenRouterClient.swift"), encoding: .utf8
         )
-        XCTAssertTrue(client.contains("\"error\""), "streamCleanup never reads an error object from a frame")
+        XCTAssertTrue(client.contains("CleanupStream.failed("), "streamCleanup never checks a frame for an error")
+        XCTAssertTrue(client.contains("finishReason"), "streamCleanup never checks finish_reason before committing")
     }
 
     // B6: SSE allows a bare CR as the line terminator. The parser only splits on LF, so a CR-only stream

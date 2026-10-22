@@ -22,7 +22,7 @@ final class RewriteBreakerTests: XCTestCase {
         var state = AlignState()
         let target = RewritePlanner.target(
             cleaned: "I'm going to", streamEnded: false, raw: "im gonna send it", state: &state)
-        XCTAssertEqual(target, "I'm going to send it", "'send it' has not been cleaned yet and must stay")
+        XCTAssertEqual(target, "im gonna send it", "hold with no word lost: 'send it' has not been cleaned yet and must stay")
     }
 
     /// B3. A sentence that was completed early ("3." at the end of the stream so far) moves the raw cursor.
