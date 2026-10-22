@@ -32,6 +32,9 @@ final class BreakerCloudTests: XCTestCase {
         )
         XCTAssertTrue(client.contains("CleanupStream.failed("), "streamCleanup never checks a frame for an error")
         XCTAssertTrue(client.contains("finishReason"), "streamCleanup never checks finish_reason before committing")
+        let collapsed = client.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        XCTAssertTrue(collapsed.contains("guard finishReason == \"stop\" else { throw Failure.decode }"),
+                      "the end-of-stream finish_reason == stop guard is missing or weakened")
     }
 
     // B9: URLRequest.timeoutInterval is an idle timeout. A server that trickles bytes keeps transcribe past its
