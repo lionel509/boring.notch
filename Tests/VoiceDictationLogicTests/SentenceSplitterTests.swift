@@ -23,12 +23,15 @@ final class SentenceSplitterTests: XCTestCase {
 
     func testDecimalPointDoesNotEndASentence() {
         let result = SentenceSplitter.completeSentences(in: "3.14 is pi.", streamEnded: false)
-        XCTAssertEqual(result.sentences, [])
-        XCTAssertEqual(result.rest, "3.14 is pi.")
+        XCTAssertEqual(result.sentences, ["3.14 is pi."])
+        XCTAssertEqual(result.rest, "")
     }
 
-    func testTerminatorAtTheEndCompletesOnlyWhenTheStreamEnds() {
-        XCTAssertEqual(SentenceSplitter.completeSentences(in: "Hi there.", streamEnded: false).sentences, [])
-        XCTAssertEqual(SentenceSplitter.completeSentences(in: "Hi there.", streamEnded: true).sentences, ["Hi there."])
+    /// A digit before a final "." may still grow into a decimal ("3." then "3.5"), so it waits for the stream end.
+    func testOpenDigitPointAtTheEndWaitsForMoreText() {
+        XCTAssertEqual(SentenceSplitter.completeSentences(in: "Hi there.", streamEnded: false).sentences, ["Hi there."])
+        XCTAssertEqual(SentenceSplitter.completeSentences(in: "The price is 3.", streamEnded: false).sentences, [])
+        XCTAssertEqual(SentenceSplitter.completeSentences(in: "The price is 3.", streamEnded: true).sentences,
+                       ["The price is 3."])
     }
 }
