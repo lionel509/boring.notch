@@ -409,7 +409,12 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         guard Self.setRange(element, location, length),
               let readBack = Self.selectedRange(element),
               readBack.location == location, readBack.length == length else { return reply(1) }
-        Self.typeUnicode(text)
+        // An empty replacement types nothing, so a pure deletion is a Delete over the selection.
+        if text.isEmpty {
+            if length > 0 { Self.postKey(51, flags: []) }
+        } else {
+            Self.typeUnicode(text)
+        }
         reply(Self.setRange(element, caretAfter, 0) ? 0 : 3)
     }
 
@@ -421,7 +426,12 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         guard trackedFocus() != nil else { return reply(unavailableCode()) }
         for _ in 0..<max(0, suffixGraphemes) { Self.postKey(123, flags: []) }
         for _ in 0..<max(0, oldGraphemes) { Self.postKey(123, flags: .maskShift) }
-        Self.typeUnicode(text)
+        // An empty replacement types nothing, so a pure deletion is a Delete over the selection.
+        if text.isEmpty {
+            if oldGraphemes > 0 { Self.postKey(51, flags: []) }
+        } else {
+            Self.typeUnicode(text)
+        }
         for _ in 0..<max(0, suffixGraphemes) { Self.postKey(124, flags: []) }
         reply(0)
     }
