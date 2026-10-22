@@ -24,12 +24,20 @@ struct RewriteStep: Equatable {
     }
 }
 
+/// A partial-sentence target the planner returned, with the complete-sentence count it was built on.
+struct EmittedTarget: Equatable {
+    let sentences: Int
+    let text: String
+}
+
 /// Where the planner is in the raw text. Lives for one take.
 struct AlignState: Equatable {
     /// Index of the first raw word not yet covered by a completed cleaned sentence.
     var rawCursor = 0
     /// How many complete cleaned sentences have already moved the cursor.
     var anchoredSentences = 0
+    /// The last partial target returned, reused when the partial's last word cannot be found in the raw text.
+    var lastTarget: EmittedTarget?
 }
 
 /// Pure text planning for the in-place rewrite: which target the field should show, and the smallest
@@ -60,11 +68,8 @@ enum RewritePlanner {
             state.anchoredSentences = sentences.count
         }
         if streamEnded { return text }
-        // The partial sentence is estimated one raw word per cleaned word; the next sentence end corrects it.
-        let tailStart = min(state.rawCursor + words(rest).count, rawWords.count)
-        let tail = rawWords[tailStart...].joined(separator: " ")
-        if tail.isEmpty { return text }
-        return text.isEmpty ? tail : text + " " + tail
+        return partialTarget(head: sentences.joined(separator: " "), partial: rest, sentences: sentences.count,
+                             raw: rawWords, state: &state)
     }
 
     /// The smallest whole-span change from `committed` to `target`, or nil when they are equal. The cut
@@ -97,6 +102,43 @@ enum RewritePlanner {
     }
 
     // MARK: - Private
+
+    /// Aligns the open partial sentence to the raw words by matching its words in order, never by count, so
+    /// fillers, contractions and expansions cannot shift the tail. Unmatched partial words are skipped.
+    private static func partialTarget(head: String, partial: String, sentences: Int, raw: [String],
+                                      state: inout AlignState) -> String {
+        func join(_ parts: String...) -> String { parts.filter { !$0.isEmpty }.joined(separator: " ") }
+        let keys = words(partial).map(key).filter { !$0.isEmpty }
+        let windowEnd = min(raw.count, state.rawCursor + 2 * keys.count + 8)
+        var position = state.rawCursor
+        var lastMatch = -1
+        var lastWordMatched = false
+        for k in keys {
+            var found = -1
+            for i in position..<max(position, windowEnd) where key(raw[i]) == k {
+                found = i
+                break
+            }
+            lastWordMatched = found >= 0
+            if found >= 0 {
+                position = found + 1
+                lastMatch = found
+            }
+        }
+        if lastWordMatched {
+            let tail = raw[(lastMatch + 1)...].joined(separator: " ")
+            let result = join(head, partial, tail)
+            state.lastTarget = EmittedTarget(sentences: sentences, text: result)
+            return result
+        }
+        if let stored = state.lastTarget, stored.sentences == sentences {
+            return stored.text
+        }
+        let tail = raw[min(state.rawCursor, raw.count)...].joined(separator: " ")
+        let result = join(head, tail)
+        state.lastTarget = EmittedTarget(sentences: sentences, text: result)
+        return result
+    }
 
     private static func words(_ s: String) -> [String] {
         s.split(whereSeparator: { $0.isWhitespace }).map(String.init)

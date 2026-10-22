@@ -23,7 +23,12 @@ final class SentenceSplitterTests: XCTestCase {
 
     func testDecimalPointDoesNotEndASentence() {
         let result = SentenceSplitter.completeSentences(in: "3.14 is pi.", streamEnded: false)
-        XCTAssertEqual(result.sentences, ["3.14 is pi."])
-        XCTAssertEqual(result.rest, "")
+        XCTAssertEqual(result.sentences, [])
+        XCTAssertEqual(result.rest, "3.14 is pi.")
+    }
+
+    func testTerminatorAtTheEndCompletesOnlyWhenTheStreamEnds() {
+        XCTAssertEqual(SentenceSplitter.completeSentences(in: "Hi there.", streamEnded: false).sentences, [])
+        XCTAssertEqual(SentenceSplitter.completeSentences(in: "Hi there.", streamEnded: true).sentences, ["Hi there."])
     }
 }
