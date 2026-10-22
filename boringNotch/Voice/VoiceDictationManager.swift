@@ -391,6 +391,7 @@ final class VoiceDictationManager: ObservableObject {
             guard rewriteWanted, let client, let wav else { return nil }
             return await VoiceDictationManager.cloudTranscript(client: client, wav: wav, prompt: prompt)
         }
+        defer { sttTask.cancel() }
 
         var text = rawNow
         if text.isEmpty {
@@ -434,7 +435,7 @@ final class VoiceDictationManager: ObservableObject {
 
         // Without a readable caret the rewrite needs key events to abort on user input. With neither the
         // caret nor a key abort, the rewrite could overwrite text the user typed, so the Stage-A text stays.
-        let keyAbortLive = FnKeyMonitor.shared.isTapLive || AXIsProcessTrusted()
+        let keyAbortLive = FnKeyMonitor.shared.isTapLive || (AXIsProcessTrusted() && CGPreflightListenEventAccess())
         guard RewriteMechanism.effective(mechanism, caretReadable: field.caret >= 0, keyAbortLive: keyAbortLive) != nil else {
             engine.fill(&report)
             report.rewrite = .noAbortSource
@@ -483,6 +484,7 @@ final class VoiceDictationManager: ObservableObject {
     /// to the next model. The error text is never logged.
     private static func cloudTranscript(client: OpenRouterClient, wav: Data, prompt: String?) async -> TakeRewriter.SttAttempt? {
         for model in CloudConfig.sttModels {
+            guard !Task.isCancelled else { return nil }
             let started = ProcessInfo.processInfo.systemUptime
             do {
                 let transcript = try await client.transcribe(wav: wav, model: model, prompt: prompt, timeout: CloudConfig.sttTimeout)

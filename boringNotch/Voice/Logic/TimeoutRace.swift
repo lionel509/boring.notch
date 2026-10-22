@@ -6,12 +6,15 @@ import Foundation
 /// stops a cloud request from running on (and being billed) after the fallback has started.
 enum TimeoutRace {
     static func run<T: Sendable>(seconds: Double, _ op: @escaping @Sendable () async -> T) async -> T? {
-        await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
+        let handle = WorkHandle()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
             let once = Once()
             let work = Task {
                 let value = await op()
                 if once.claim() { continuation.resume(returning: value) }
             }
+            handle.set(work)
             Task {
                 try? await Task.sleep(for: .seconds(seconds))
                 if once.claim() {
@@ -19,6 +22,32 @@ enum TimeoutRace {
                     continuation.resume(returning: nil)
                 }
             }
+            }
+        } onCancel: {
+            handle.cancel()
+        }
+    }
+
+    /// Carries the cancel signal from the caller to `work`, whichever of the two is created first.
+    private final class WorkHandle: @unchecked Sendable {
+        private let lock = NSLock()
+        private var work: Task<Void, Never>?
+        private var cancelled = false
+
+        func set(_ task: Task<Void, Never>) {
+            lock.lock()
+            work = task
+            let already = cancelled
+            lock.unlock()
+            if already { task.cancel() }
+        }
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            let task = work
+            lock.unlock()
+            task?.cancel()
         }
     }
 

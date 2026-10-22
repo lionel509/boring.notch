@@ -40,6 +40,21 @@ final class TimeoutRaceTests: XCTestCase {
         }
         XCTAssertEqual(result, 42)
     }
+
+    func testCancellingTheCallerCancelsTheWork() async {
+        let box = CancelBox()
+        let outer = Task {
+            _ = await TimeoutRace.run(seconds: 5) { () -> Int in
+                try? await Task.sleep(for: .seconds(2))
+                box.record(Task.isCancelled)
+                return 1
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(50))
+        outer.cancel()
+        try? await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(box.value, true)
+    }
 }
 
 /// Holds the cancellation flag the operation saw, written from the operation's task.
