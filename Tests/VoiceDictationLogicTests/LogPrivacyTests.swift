@@ -69,6 +69,32 @@ final class LogPrivacyTests: XCTestCase {
         }
     }
 
+    /// The helper process reads the key and the field text, so it must log nothing new either. The count is
+    /// pinned to the matches in those two source roots. The base commit 5f7a1bc has 4: the helper's Logger, two
+    /// FileHandle.nullDevice uses, and the Xcode template NSLog in the helper's protocol doc comment. The app's
+    /// protocol copy carries that same comment (the copies must stay identical), so the total is 5. Any added
+    /// logging site moves the count and fails this test.
+    func testHelperAndXPCClientLogNothingNew() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        var total = 0
+        for dir in ["BoringNotchXPCHelper", "boringNotch/XPCHelperClient"] {
+            let files = (FileManager.default.enumerator(at: root.appendingPathComponent(dir), includingPropertiesForKeys: nil)?
+                .compactMap { $0 as? URL } ?? [])
+                .filter { $0.pathExtension == "swift" }
+            XCTAssertFalse(files.isEmpty, "expected Swift sources in \(dir)")
+            for file in files {
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for symbol in Self.loggingSymbols {
+                    total += text.components(separatedBy: symbol).count - 1
+                }
+            }
+        }
+        XCTAssertEqual(total, 5, "a logging call was added to the helper or its XPC client")
+    }
+
     func testMissingFloorPrintsNone() {
         var r = Self.sampleReport()
         r.floorDB = nil
