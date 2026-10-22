@@ -1,19 +1,23 @@
 import Foundation
 
 /// Runs `op` for at most `seconds`. Returns its value, or nil once the cap passes.
-/// On timeout `op` is abandoned: it is neither cancelled nor awaited, so an
-/// operation that ignores cancellation cannot hold the caller past the cap.
+/// On timeout `op` is cancelled and abandoned: the caller does not await it, so an
+/// operation that ignores cancellation cannot hold the caller past the cap. Cancellation
+/// stops a cloud request from running on (and being billed) after the fallback has started.
 enum TimeoutRace {
     static func run<T: Sendable>(seconds: Double, _ op: @escaping @Sendable () async -> T) async -> T? {
         await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
             let once = Once()
-            Task {
+            let work = Task {
                 let value = await op()
                 if once.claim() { continuation.resume(returning: value) }
             }
             Task {
                 try? await Task.sleep(for: .seconds(seconds))
-                if once.claim() { continuation.resume(returning: nil) }
+                if once.claim() {
+                    work.cancel()
+                    continuation.resume(returning: nil)
+                }
             }
         }
     }
