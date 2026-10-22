@@ -6,6 +6,14 @@
 import Foundation
 
 extension RewriteMechanism {
+    /// The mechanism that may actually run. Text is only moved when the caret can be read (`chosen`), or
+    /// when a key abort is live: the rewrite then falls back to key events, which abort on user input.
+    /// Nil means neither holds, so the rewrite must not run: it could overwrite text the user typed.
+    static func effective(_ chosen: RewriteMechanism, caretReadable: Bool, keyAbortLive: Bool) -> RewriteMechanism? {
+        if caretReadable { return chosen }
+        return keyAbortLive ? .keys : nil
+    }
+
     /// Bundles where a plain AX value write was verified by the spike (scripts/ax-spike). `com.apple.*`
     /// text fields that are settable are also `.ax` (see `choose`).
     static let axWritable: Set<String> = [

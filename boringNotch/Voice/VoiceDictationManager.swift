@@ -10,6 +10,7 @@
 //
 
 import AppKit
+import ApplicationServices
 import AVFoundation
 import Defaults
 import Foundation
@@ -431,7 +432,21 @@ final class VoiceDictationManager: ObservableObject {
             return
         }
 
-        let running = TakeRewriter(committed: text, field: field, mechanism: mechanism, releaseAt: releaseAt ?? now)
+        // Without a readable caret the rewrite needs key events to abort on user input. With neither the
+        // caret nor a key abort, the rewrite could overwrite text the user typed, so the Stage-A text stays.
+        let keyAbortLive = FnKeyMonitor.shared.isTapLive || AXIsProcessTrusted()
+        guard RewriteMechanism.effective(mechanism, caretReadable: field.caret >= 0, keyAbortLive: keyAbortLive) != nil else {
+            engine.fill(&report)
+            report.rewrite = .noAbortSource
+            endTake(.pasted)
+            if mechanism != .none { scheduleLearning(final: text, bundle: takeBundleID) }
+            state = .done
+            scheduleReset(after: 0.6)
+            return
+        }
+
+        let running = TakeRewriter(
+            committed: text, field: field, mechanism: mechanism, keyAbortLive: keyAbortLive, releaseAt: releaseAt ?? now)
         rewriter = running
         refining = true
         await running.run(

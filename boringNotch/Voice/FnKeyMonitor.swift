@@ -29,6 +29,9 @@ final class FnKeyMonitor: ObservableObject {
 
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
+
+    /// True while the session tap exists: key events reach the rewrite's abort path.
+    var isTapLive: Bool { tap != nil }
     private var logic = FnKeyLogic.State()
 
     private init() {}

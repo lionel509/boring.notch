@@ -40,4 +40,11 @@ final class RewriteMechanismTests: XCTestCase {
         XCTAssertTrue(RewriteMechanism.axSelectable.contains("com.microsoft.VSCode"))
         XCTAssertTrue(RewriteMechanism.axWritable.isDisjoint(with: RewriteMechanism.axSelectable))
     }
+
+    /// A rewrite runs only when the caret is readable or key events can abort it. Otherwise it is not started.
+    func testEffectiveMechanismNeedsCaretOrAbortSource() {
+        XCTAssertEqual(RewriteMechanism.effective(.axSelectType, caretReadable: true, keyAbortLive: false), .axSelectType)
+        XCTAssertEqual(RewriteMechanism.effective(.axSelectType, caretReadable: false, keyAbortLive: true), .keys)
+        XCTAssertNil(RewriteMechanism.effective(.axSelectType, caretReadable: false, keyAbortLive: false))
+    }
 }

@@ -56,9 +56,13 @@ final class TakeRewriter {
 
     /// `committed` is the text already pasted at `field.caret`. Without a readable caret the AX mechanisms
     /// need offsets they cannot have, so the take uses key events, which only need the caret at the span end.
-    init(committed: String, field: FocusedField, mechanism: RewriteMechanism, releaseAt: TimeInterval) {
+    /// `keyAbortLive` says whether key events can abort the rewrite; the caller has already checked that one
+    /// of the two holds.
+    init(committed: String, field: FocusedField, mechanism: RewriteMechanism, keyAbortLive: Bool,
+         releaseAt: TimeInterval) {
         self.field = field
-        self.mechanism = field.caret >= 0 ? mechanism : .keys
+        self.mechanism = RewriteMechanism.effective(
+            mechanism, caretReadable: field.caret >= 0, keyAbortLive: keyAbortLive) ?? .keys
         self.spanStart = max(field.caret, 0)
         self.releaseAt = releaseAt
         state = RewriteState(committed: committed)

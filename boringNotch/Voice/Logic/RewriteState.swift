@@ -11,7 +11,7 @@ enum RewriteMechanism: String {
 }
 
 enum RewriteOutcome: String {
-    case none, completed, aborted, timedOut, reverted, failed
+    case none, completed, aborted, timedOut, reverted, failed, noAbortSource
 }
 
 enum CleanupSource: String {
