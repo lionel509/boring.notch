@@ -297,7 +297,7 @@ final class TakeRewriter {
         }
         let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .keyDown]
         if let monitor = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] event in
-            if event.cgEvent?.getIntegerValueField(.eventSourceUserData) == DictationEvents.tag { return }
+            if let cg = event.cgEvent, DictationEvents.isSynthesized(cg.getIntegerValueField(.eventSourceUserData)) { return }
             Task { @MainActor in self?.cancel() }
         }) {
             monitors.append(monitor)

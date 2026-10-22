@@ -112,9 +112,7 @@ final class FnKeyMonitor: ObservableObject {
 
     fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // Our own synthesized events (the rewrite's keystrokes and paste) are not user input.
-        if event.getIntegerValueField(.eventSourceUserData) == DictationEvents.tag {
-            return Unmanaged.passUnretained(event)
-        }
+        if DictationEvents.isSynthesized(event.getIntegerValueField(.eventSourceUserData)) { return Unmanaged.passUnretained(event) }
         switch type {
         case .keyDown, .keyUp, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel:
             userInput?(type)
