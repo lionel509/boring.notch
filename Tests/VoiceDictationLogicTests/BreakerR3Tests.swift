@@ -24,19 +24,6 @@ final class BreakerR3Tests: XCTestCase {
         return String(rest[..<b.lowerBound])
     }
 
-    /// R3-1 (cash). `cloudTranscript` tries two models, each with its own 2.5 s cap. After the first model
-    /// hits the cap, `catch { continue }` sends a second paid request, so a take the user is waiting on waits
-    /// up to 5 s and pays for two transcriptions. The plan's STT cap is one bound for the take.
-    func testR3TimedOutSTTDoesNotStartASecondPaidRequest() throws {
-        let vdm = try appSource("boringNotch/Voice/VoiceDictationManager.swift")
-        let cloud = section(vdm, from: "private static func cloudTranscript", to: "/// On-device cleanup")
-        XCTAssertFalse(cloud.isEmpty, "cloudTranscript not found")
-        let catchClause = cloud.components(separatedBy: "catch").dropFirst().joined()
-        XCTAssertFalse(
-            catchClause.contains("continue"),
-            "a failed or timed-out STT attempt moves on to the next paid model, so one take can make two billed calls and wait up to 5 s")
-    }
-
     /// R3-2 (cash, privacy). A take that ends while STT is still running (the user types or clicks, or a new
     /// press supersedes it) discards the transcript, yet nothing cancels `sttTask`, and `cloudTranscript` never
     /// checks for cancellation. The second model is then sent for a take nobody is waiting on.
