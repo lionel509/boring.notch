@@ -468,6 +468,7 @@ final class VoiceDictationManager: ObservableObject {
                 return await VoiceDictationManager.onDeviceCleanup(input, tone: tone, dictionary: dictionary)
             }
         )
+        sttTask.cancel()
 
         // A press that superseded this rewrite already closed it, and the new take owns the state now.
         guard rewriter === running else { return }
