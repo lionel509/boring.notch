@@ -8,14 +8,16 @@ enum CleanupSkip: String, Equatable {
 /// Invariant I2: what gets pasted is the raw transcript or an LLM output that passed
 /// `accept`. An answer, a refusal or a rewrite must be rejected.
 enum CleanupGuard {
-    /// Whole-output check. Rejects empty output, output longer than the raw text (plus a
-    /// 10 % allowance), and output whose words mostly do not occur in the raw text.
+    /// Whole-output check. Rejects empty output, output shorter than 40 % of the raw word count
+    /// (a cut-off stream), output longer than the raw text (plus a 10 % allowance), and output
+    /// whose words mostly do not occur in the raw text.
     static func accept(raw: String, cleaned: String) -> Bool {
         let out = normalize(cleaned)
         guard !out.isEmpty else { return false }
         let rawWords = words(raw)
         let outWords = words(out)
         guard !outWords.isEmpty else { return false }
+        if outWords.count * 5 < rawWords.count * 2 { return false }
         if outWords.count > rawWords.count + max(1, rawWords.count / 10) { return false }
         let rawSet = Set(rawWords)
         let shared = outWords.filter { rawSet.contains($0) }.count
