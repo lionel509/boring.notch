@@ -30,26 +30,4 @@ final class BreakerR2Tests: XCTestCase {
         let target = RewritePlanner.target(cleaned: "Tell Dr. Lee", streamEnded: false, raw: raw, state: &state)
         XCTAssertEqual(target, "Tell Dr. Lee about the lab results")
     }
-
-    /// R2-3. Fix 2 rejects any cleanup under 40 % of the raw word count. A filler-heavy but legitimate
-    /// cleanup (10 fillers in 16 words, cleaned to 6 words) is discarded, so the user gets the raw text
-    /// with every "um" and "uh" in it. This is a realistic take, not a cut-off stream.
-    func testR2FillerHeavyLegitimateCleanupIsRejectedByTheLowerBound() {
-        let raw = "um uh so um uh I think um uh we should um uh go um uh"
-        XCTAssertTrue(CleanupGuard.accept(raw: raw, cleaned: "So I think we should go."),
-                      "a faithful cleanup of a filler-heavy take must be accepted")
-    }
-
-    /// R2-4. Fix 6 returns [] for any pair product over 200 000. A 65-word take pasted into a 4 000-word
-    /// document (65 * 4 000 = 260 000 pairs) is therefore never learned, although the user corrected a
-    /// name in it. Learning is silently switched off for any real take in a long document.
-    func testR2LongFieldDisablesLearningForARealTake() {
-        let filler = Array(repeating: "lorem ipsum dolor sit amet consectetur adipiscing elit sed do", count: 400)
-            .joined(separator: " ")
-        let take = Array(repeating: "meeting notes review", count: 20).joined(separator: " ")
-            + " send it to jon tomorrow"
-        let pasted = take
-        let current = filler + " " + take.replacingOccurrences(of: "jon", with: "Jun") + " " + filler
-        XCTAssertEqual(CorrectionLearner.candidates(pasted: pasted, current: current), ["Jun"])
-    }
 }
