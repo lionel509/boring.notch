@@ -35,20 +35,25 @@ enum PersonalDictionary {
     }
 
     /// Adds one count per candidate. A candidate matching an existing entry in any case bumps
-    /// that entry and keeps its first spelling. Over `cap`, the lowest counts are dropped first.
+    /// that entry and keeps its first spelling. Over `cap`, the lowest counts are dropped first, but never a
+    /// word passed in this call, so a new word cannot be evicted on the call that learned it.
     static func learn(_ candidates: [String], into learned: inout [String: Int]) {
+        var touched = Set<String>()
         for candidate in candidates {
             let word = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !word.isEmpty else { continue }
             if let key = learned.keys.first(where: { $0.lowercased() == word.lowercased() }) {
                 learned[key, default: 0] += 1
+                touched.insert(key)
             } else {
                 learned[word] = 1
+                touched.insert(word)
             }
         }
         let excess = learned.count - cap
         guard excess > 0 else { return }
         let doomed = learned
+            .filter { !touched.contains($0.key) }
             .sorted { lhs, rhs in
                 lhs.value != rhs.value ? lhs.value < rhs.value : lhs.key < rhs.key
             }
