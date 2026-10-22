@@ -50,6 +50,9 @@ enum RewritePlanner {
         "that", "this", "um", "uh",
     ]
 
+    /// Filler sounds the raw text may contain that cleanup drops. They never count against a match's skip budget.
+    private static let fillers: Set<String> = ["um", "uh", "er", "ah", "hmm", "mm"]
+
     /// Collapses every whitespace run, newlines included, to one space. A typed Return would send a message.
     static func normalize(_ s: String) -> String {
         s.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
@@ -113,17 +116,26 @@ enum RewritePlanner {
         var position = state.rawCursor
         var lastMatch = -1
         var lastWordMatched = false
+        // Unmatched partial keys since the last accepted match. A match may skip at most this many non-filler raw words.
+        var credit = 0
         for k in keys {
             var found = -1
             for i in position..<max(position, windowEnd) where key(raw[i]) == k {
                 found = i
                 break
             }
-            lastWordMatched = found >= 0
             if found >= 0 {
-                position = found + 1
-                lastMatch = found
+                let skipped = raw[position..<found].filter { !fillers.contains(key($0)) }.count
+                if skipped <= credit {
+                    position = found + 1
+                    lastMatch = found
+                    credit = 0
+                    lastWordMatched = true
+                    continue
+                }
             }
+            credit += 1
+            lastWordMatched = false
         }
         if lastWordMatched {
             let tail = raw[(lastMatch + 1)...].joined(separator: " ")
