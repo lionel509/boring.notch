@@ -16,7 +16,7 @@ enum RewriteGate {
     static func decide(field: FocusedField?, cloudOn: Bool, hasKey: Bool, cleanupOn: Bool, keyAbortLive: Bool) -> Decision {
         guard let field else { return .skip(.noField) }
         let chosen = RewriteMechanism.choose(field: field)
-        if field.secure || chosen == .none { return .skip(.secureField) }
+        if field.secure || field.role == "AXSecureTextField" || chosen == .none { return .skip(.secureField) }
         guard (cloudOn && hasKey) || cleanupOn else { return .skip(.cleanupOff) }
         guard RewriteMechanism.effective(chosen, caretReadable: field.caret >= 0, keyAbortLive: keyAbortLive) != nil else {
             return .skip(.noAbortSource)

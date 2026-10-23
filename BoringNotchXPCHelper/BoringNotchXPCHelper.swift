@@ -366,7 +366,8 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
 
     @objc func focusedTextValue(with reply: @escaping (String?) -> Void) {
         guard AXIsProcessTrusted(), let element = Self.currentFocusedElement() else { return reply(nil) }
-        if Self.copyString(element, kAXRoleAttribute as String) == "AXSecureTextField" { return reply(nil) }
+        if Self.copyString(element, kAXRoleAttribute as String) == "AXSecureTextField"
+            || Self.copyString(element, kAXSubroleAttribute as String) == "AXSecureTextField" { return reply(nil) }
         guard let value = Self.copyString(element, kAXValueAttribute as String), value.count <= 20_000 else {
             return reply(nil)
         }
@@ -380,12 +381,13 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         var pid: pid_t = 0
         AXUIElementGetPid(element, &pid)
         let role = Self.copyString(element, kAXRoleAttribute as String) ?? ""
+        let subrole = Self.copyString(element, kAXSubroleAttribute as String) ?? ""
         let bundle: Any = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? NSNull()
         let field: [String: Any] = [
             "pid": Int(pid),
             "bundle": bundle,
             "role": role,
-            "secure": role == "AXSecureTextField",
+            "secure": role == "AXSecureTextField" || subrole == "AXSecureTextField",
             "caret": Self.selectedRange(element)?.location ?? -1,
             "rangeSettable": Self.isSettable(element, kAXSelectedTextRangeAttribute as String),
             "textSettable": Self.isSettable(element, kAXSelectedTextAttribute as String),
