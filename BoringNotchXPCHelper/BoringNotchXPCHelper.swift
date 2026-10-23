@@ -496,7 +496,7 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
             return (ref as! AXUIElement)
         }
         guard preparedPid > 0,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == preparedPid,
+              (copyValue(AXUIElementCreateApplication(preparedPid), kAXFrontmostAttribute as String) as? Bool) == true,
               let ref = copyValue(AXUIElementCreateApplication(preparedPid), kAXFocusedUIElementAttribute as String)
         else { return nil }
         return (ref as! AXUIElement)
