@@ -38,4 +38,14 @@ final class BreakerU2Tests: XCTestCase {
         XCTAssertTrue(helper.contains("AXManualAccessibility") && helper.contains("kCFBooleanFalse"),
                       "AXManualAccessibility is turned on and never restored to false")
     }
+
+    /// F3 (review finding 3): the prepared-app fallback must trust the app's own AX frontmost flag, not
+    /// NSWorkspace, which can be stale in an XPC service with no main run loop.
+    func testFallbackFrontmostCheckReadsAXNotNSWorkspace() throws {
+        let helper = try repoFile("BoringNotchXPCHelper/BoringNotchXPCHelper.swift")
+        XCTAssertTrue(helper.contains("kAXFrontmostAttribute"),
+                      "the fallback does not read the prepared app's AXFrontmost")
+        XCTAssertFalse(helper.contains("NSWorkspace.shared.frontmostApplication"),
+                       "the fallback still trusts NSWorkspace.frontmostApplication, which can be stale")
+    }
 }
