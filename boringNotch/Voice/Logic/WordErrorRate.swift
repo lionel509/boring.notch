@@ -2,7 +2,7 @@ import Foundation
 
 /// Word error rate for the accuracy table (v2-8): Levenshtein distance over normalized words,
 /// divided by the reference word count. Pure text, no audio or network.
-enum WordErrorRate {
+public enum WordErrorRate {
     /// Lowercased, punctuation stripped, split on whitespace. Empty tokens are dropped.
     static func normalize(_ text: String) -> [String] {
         let lowered = text.lowercased()
@@ -16,7 +16,7 @@ enum WordErrorRate {
     /// 0 for identical text, 1.0 for an empty hypothesis against a non-empty reference.
     /// Insertions count against the reference too, so the result can exceed 1.0.
     /// An empty reference scores 0 when the hypothesis is also empty, otherwise 1.0.
-    static func wer(reference: String, hypothesis: String) -> Double {
+    public static func wer(reference: String, hypothesis: String) -> Double {
         let ref = normalize(reference)
         let hyp = normalize(hypothesis)
         if ref.isEmpty { return hyp.isEmpty ? 0 : 1.0 }

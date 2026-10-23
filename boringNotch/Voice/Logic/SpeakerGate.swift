@@ -2,12 +2,20 @@ import Foundation
 
 /// One STT final segment after the speaker gate. `kept` decides whether its text is pasted and whether its
 /// span is silenced in the cloud WAV.
-struct GatedSegment: Equatable {
-    var text: String
-    var start: Double
-    var end: Double
-    var kept: Bool
-    var score: Double
+public struct GatedSegment: Equatable {
+    public var text: String
+    public var start: Double
+    public var end: Double
+    public var kept: Bool
+    public var score: Double
+
+    public init(text: String, start: Double, end: Double, kept: Bool, score: Double) {
+        self.text = text
+        self.start = start
+        self.end = end
+        self.kept = kept
+        self.score = score
+    }
 }
 
 /// Scores a span of 16 kHz mono samples to a speaker embedding. The app's implementation is FluidAudio's
@@ -18,7 +26,7 @@ protocol SpeakerEmbedder: AnyObject, Sendable {
 
 /// Segment-level speaker verification (#17). Pure arithmetic: no model, no audio device, no Defaults.
 /// The app and the spike both score through `segmentEmbedding`, so the two paths cannot drift.
-struct SpeakerGate: Sendable {
+public struct SpeakerGate: Sendable {
     /// Placeholder until the spike's gate rule (U0 step 5) sets the real value.
     static let defaultThreshold = 0.30
     static let sampleRate = 16_000
@@ -39,7 +47,7 @@ struct SpeakerGate: Sendable {
     }
 
     /// Cosine similarity. 0 when either vector has zero norm or the lengths differ.
-    static func cosine(_ a: [Float], _ b: [Float]) -> Double {
+    public static func cosine(_ a: [Float], _ b: [Float]) -> Double {
         guard a.count == b.count, !a.isEmpty else { return 0 }
         var dot = 0.0, na = 0.0, nb = 0.0
         for i in a.indices {
@@ -83,7 +91,7 @@ struct SpeakerGate: Sendable {
 
     /// The one scoring path: the centroid of `embed(tile(window, tiledSamples))` over the span's windows.
     /// nil for an empty span.
-    static func segmentEmbedding(_ samples: [Float], embed: ([Float]) throws -> [Float]) throws -> [Float]? {
+    public static func segmentEmbedding(_ samples: [Float], embed: ([Float]) throws -> [Float]) throws -> [Float]? {
         let embeddings = try windows(samples)
             .map { try embed(tile($0, to: tiledSamples)) }
             .filter { !$0.isEmpty }
@@ -91,14 +99,14 @@ struct SpeakerGate: Sendable {
     }
 
     /// Cosine of the span's segment embedding with the voiceprint. nil when the span is empty.
-    static func score(segment: [Float], voiceprint: [Float], embed: ([Float]) throws -> [Float]) throws -> Double? {
+    public static func score(segment: [Float], voiceprint: [Float], embed: ([Float]) throws -> [Float]) throws -> Double? {
         guard let embedding = try segmentEmbedding(segment, embed: embed) else { return nil }
         return cosine(embedding, voiceprint)
     }
 
     /// Clamps to [-1, 1] and quantises to Int16 the way TakeAudioBuffer holds audio (truncation), then
     /// back to Float. Scoring the round-tripped samples makes live and replayed takes identical.
-    static func int16RoundTrip(_ samples: [Float]) -> [Float] {
+    public static func int16RoundTrip(_ samples: [Float]) -> [Float] {
         samples.map { s in
             let clamped = s.isNaN ? 0 : min(max(s, -1), 1)
             return Float(Int16(clamped * 32_767)) / 32_768
