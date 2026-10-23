@@ -60,7 +60,7 @@ struct InlineHUD: View {
                             Image(systemName: icon.isEmpty ? "dot.radiowaves.right" : icon)
                                 .contentTransition(.interpolate)
                                 .frame(width: 20, height: 15, alignment: .center)
-                        case .systemAlert:
+                        case .systemAlert, .dictation:
                             Image(systemName: icon.isEmpty ? "exclamationmark.triangle" : icon)
                                 .contentTransition(.interpolate)
                                 .frame(width: 20, height: 15, alignment: .center)
@@ -206,6 +206,7 @@ struct InlineHUD: View {
         // The rule picks its own word -- "CPU high" and "Draining" arrive under one type,
         // so there is nothing here that could derive it.
         case .systemAlert: label.isEmpty ? "System" : label
+        case .dictation: label.isEmpty ? "Dictation" : label
         default: Type2Name(type)
         }
     }

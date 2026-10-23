@@ -3,8 +3,9 @@
 //  boringNotch
 //
 //  Closed-notch strip for a dictation take, laid out like the music strip: an icon on
-//  the left and live mic bars on the right. Nothing the user said is shown here. A failure
-//  shows its short headline in place of the bars; the model download adds a message cell.
+//  the left and live mic bars on the right. Nothing the user said is shown here, and a failure
+//  draws nothing in the strip: it is announced beside the notch as a notice instead. The model
+//  download adds a message cell.
 //  The strip animates with the notch on `.smooth`, so it reads as the notch widening, not a
 //  second shape.
 //
@@ -16,14 +17,6 @@ struct VoiceDictationLiveActivity: View {
     @ObservedObject var voice = VoiceDictationManager.shared
 
     private var side: CGFloat { max(0, vm.effectiveClosedNotchHeight - 12) }
-
-    private var showsMessage: Bool {
-        switch voice.state {
-        case .failed: return true
-        case .recording: return voice.downloadingModel
-        default: return false
-        }
-    }
 
     var body: some View {
         HStack {
@@ -62,10 +55,8 @@ struct VoiceDictationLiveActivity: View {
                     .foregroundStyle(.green)
                     .contentTransition(.symbolEffect(.replace))
             case .failed:
-                Image(systemName: "exclamationmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.orange)
-                    .contentTransition(.symbolEffect(.replace))
+                // The failure is announced as a notice; the strip itself draws nothing for it.
+                EmptyView()
             }
         }
         .frame(width: side, height: side)
@@ -84,20 +75,9 @@ struct VoiceDictationLiveActivity: View {
             bars(voice.refining ? .rest : .idle, dim: false, refining: voice.refining)
         case .done:
             bars(.rest, dim: false)
-        case .failed(let message):
-            failureCell(DictationStrip.headline(message))
+        case .failed:
+            EmptyView()
         }
-    }
-
-    /// A failure shows its headline in place of the bars, never beside them: the bars and the text
-    /// overlapped. The cell is sized so the strip keeps the listening width.
-    private func failureCell(_ headline: String) -> some View {
-        Text(headline)
-            .font(.caption2)
-            .foregroundStyle(.gray)
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
-            .frame(width: DictationStrip.failureCellWidth(side: side), height: side, alignment: .leading)
     }
 
     /// The strip's bars cell, then one message cell to its right. The message is the

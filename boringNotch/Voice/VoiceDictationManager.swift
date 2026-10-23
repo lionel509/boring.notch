@@ -196,7 +196,14 @@ final class VoiceDictationManager: ObservableObject {
             // the take still recording and could be stopped or pasted into the wrong take.
             stop(takeID)
         case .discard:
+            // A bare fn or globe tap is used by other features, so only a real hold earns "Hold fn longer".
+            // A cancel (fn used as a modifier) or an abort is not a hold the user tried to dictate with.
+            let held = takeStartedAt.map { now - $0 } ?? 0
+            let fromKey = event != .cancel && event != .abort
             discard()
+            if fromKey && DictationNotices.isDiscardWorthNotice(heldFor: held) {
+                postNotice(for: .discarded, message: "")
+            }
         case .none:
             break
         }
@@ -633,8 +640,19 @@ final class VoiceDictationManager: ObservableObject {
         hotkey.downAt = nil
         hotkey.startedAt = nil
         endTake(outcome)
-        state = .failed(message)
+        // The message no longer goes in the closed strip. The strip returns to idle and the
+        // sneak peek says the short line instead, the same way a song change does.
+        state = .idle
+        postNotice(for: outcome, message: message)
         scheduleReset(after: 2.0)
+    }
+
+    /// Shows the notice for a take that ended with `outcome`, if it has one. Successful takes have none.
+    private func postNotice(for outcome: TakeOutcome, message: String) {
+        guard let notice = DictationNotices.notice(for: outcome, message: message) else { return }
+        BoringViewCoordinator.shared.toggleSneakPeek(
+            status: true, type: .dictation, duration: 2.5,
+            icon: notice.icon, detail: notice.detail, label: notice.label, tint: .orange)
     }
 
     private func scheduleReset(after seconds: Double) {
