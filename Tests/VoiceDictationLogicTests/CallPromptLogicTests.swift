@@ -121,10 +121,12 @@ final class CallPromptLogicTests: XCTestCase {
             var s = Logic.State()
             var now: TimeInterval = 0
             var balance: [String: Int] = [:]
+            var firstShown: [String: TimeInterval] = [:]
 
             for _ in 0..<40 {
                 now += Double.random(in: 0...200, using: &rng)
                 let muted = Set(pool.map(\.id).filter { _ in Bool.random(using: &rng) })
+                let before = s
                 let effects: [Effect]
 
                 switch Int.random(in: 0..<3, using: &rng) {
@@ -144,6 +146,14 @@ final class CallPromptLogicTests: XCTestCase {
                     case let .show(call):
                         XCTAssertFalse(muted.contains(call.id), "showed muted \(call.id)")
                         XCTAssertNil(s.answers[call.id], "showed already-answered \(call.id)")
+                        // One prompt window per call: a re-show stays within promptTimeout of the first show,
+                        // unless the reducer forgot the call during this step (its release had expired).
+                        if let r = before.releasedAt[call.id], now - r >= Logic.endGrace { firstShown[call.id] = nil }
+                        if let first = firstShown[call.id] {
+                            XCTAssertLessThan(now - first, Logic.promptTimeout, "re-prompted \(call.id) after its window")
+                        } else {
+                            firstShown[call.id] = now
+                        }
                     case let .begin(call):
                         balance[call.id, default: 0] += 1
                         XCTAssertLessThanOrEqual(balance[call.id]!, 1, "begin twice for \(call.id)")
@@ -155,6 +165,8 @@ final class CallPromptLogicTests: XCTestCase {
                     }
                 }
 
+                // A window ends when the reducer forgets the call (askedAt cleared), whether or not it showed again.
+                for call in pool where s.askedAt[call.id] == nil { firstShown[call.id] = nil }
                 if let pending = s.pending {
                     XCTAssertNotNil(s.live[pending.id], "pending is not live: \(pending.id)")
                 }

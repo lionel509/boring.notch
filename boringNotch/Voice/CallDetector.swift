@@ -111,6 +111,8 @@ final class CallDetector: ObservableObject {
         Task { @MainActor in
             for client in unresolved {
                 let titles = await XPCHelperClient.shared.windowTitles(pid: Int(client.pid)) ?? []
+                // A lookup that finished after a newer mic change must not write its pid back into the caches.
+                guard gen == self.generation else { return }
                 self.resolvedPids.insert(client.pid)
                 if let call = CallApps.browserCall(titles: titles, pid: client.pid) {
                     self.browserCalls[client.pid] = call

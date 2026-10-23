@@ -57,13 +57,13 @@ enum CallApps {
         browsers.contains { matches(bundleID, base: $0) }
     }
 
-    /// Walks the titles in order; the first service that matches a title wins. Only the table's id and name leave this function.
+    /// Services in table order are the priority: the specific matches (Meet, Zoom, Teams, Jitsi) beat the
+    /// bare words (Webex, Whereby, Discord, Slack). The first title that matches the top service wins, so a
+    /// stray tab cannot rename the real call. Only the table's id and name leave this function.
     static func browserCall(titles: [String], pid: Int32) -> DetectedCall? {
-        for title in titles {
-            let lower = title.lowercased()
-            for service in services where serviceMatches(service, lowercasedTitle: lower) {
-                return DetectedCall(id: service.id, name: service.name, pid: pid, viaBrowser: true)
-            }
+        let lowered = titles.map { $0.lowercased() }
+        for service in services where lowered.contains(where: { serviceMatches(service, lowercasedTitle: $0) }) {
+            return DetectedCall(id: service.id, name: service.name, pid: pid, viaBrowser: true)
         }
         return nil
     }
@@ -101,6 +101,8 @@ enum CallPromptLogic {
         var pending: DetectedCall? = nil
         var answers: [String: CallAnswer] = [:]
         var releasedAt: [String: TimeInterval] = [:]
+        /// When each call's prompt window opened. One window per call: a re-grab inside it may re-show the prompt.
+        var askedAt: [String: TimeInterval] = [:]
         var transcribing: Set<String> = []
         init() {}
     }
@@ -116,11 +118,12 @@ enum CallPromptLogic {
         }
         let incomingIDs = Set(incoming.map(\.id))
 
-        // (b) Forget releases older than the grace window, with their answers.
+        // (b) Forget releases older than the grace window, with their answers and prompt windows.
         let expired = s.releasedAt.compactMap { id, t in now - t >= endGrace ? id : nil }
         for id in expired {
             s.releasedAt[id] = nil
             s.answers[id] = nil
+            s.askedAt[id] = nil
         }
 
         // (c) Ids that left: remember when, drop a pending prompt, end a transcription.
@@ -146,6 +149,7 @@ enum CallPromptLogic {
             } else {
                 s.releasedAt[call.id] = nil
                 s.answers[call.id] = nil
+                s.askedAt[call.id] = nil
             }
         }
 
@@ -154,7 +158,7 @@ enum CallPromptLogic {
         s.liveOrder = incoming.map(\.id)
 
         // (f) Ask about the next unanswered, unmuted call if nothing is on screen.
-        effects += promptNext(&s, muted: muted)
+        effects += promptNext(&s, muted: muted, at: now)
         return effects
     }
 
@@ -174,7 +178,7 @@ enum CallPromptLogic {
             effects.append(.mute(call.id))
         }
         let nextMuted = a == .never ? muted.union([call.id]) : muted
-        effects += promptNext(&s, muted: nextMuted)
+        effects += promptNext(&s, muted: nextMuted, at: now)
         return effects
     }
 
@@ -184,11 +188,16 @@ enum CallPromptLogic {
         return answer(&s, .no, muted: muted, at: now)
     }
 
-    private static func promptNext(_ s: inout State, muted: Set<String>) -> [Effect] {
+    private static func promptNext(_ s: inout State, muted: Set<String>, at now: TimeInterval) -> [Effect] {
         guard s.pending == nil else { return [] }
+        // A call whose one prompt window has run out, unanswered, counts as "no" until it is forgotten.
+        for id in s.liveOrder where s.answers[id] == nil {
+            if let t = s.askedAt[id], now - t >= promptTimeout { s.answers[id] = .no }
+        }
         guard let id = s.liveOrder.first(where: { s.answers[$0] == nil && !muted.contains($0) }),
               let call = s.live[id] else { return [] }
         s.pending = call
+        s.askedAt[id] = s.askedAt[id] ?? now
         return [.show(call)]
     }
 }
