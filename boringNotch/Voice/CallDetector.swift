@@ -51,6 +51,10 @@ final class CallDetector: ObservableObject {
     private var sink: AnyCancellable?
     /// Re-renders the hint while a prompt is up, so it follows the live fn mode.
     private var modeSink: AnyCancellable?
+    /// Re-evaluates the live calls when fn dictation is turned back on.
+    private var dictateTask: Task<Void, Never>?
+    /// The last mic list, so turning fn dictation on can run the same evaluation the mic listener runs.
+    private var lastClients: [MicClient] = []
     private var timeoutTask: Task<Void, Never>?
     /// Bumped on every change to the mic list, so a slow browser lookup cannot apply a stale list.
     private var generation = 0
@@ -71,6 +75,10 @@ final class CallDetector: ObservableObject {
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] _ in self?.renderPendingPrompt() }
+        dictateTask = Task { @MainActor [weak self] in
+            // The first emit is the current value, which is harmless: the evaluation is idempotent.
+            for await on in Defaults.updates(.dictateWithFn) { self?.dictateWithFnChanged(on) }
+        }
     }
 
     func stop() {
@@ -78,7 +86,10 @@ final class CallDetector: ObservableObject {
         sink = nil
         modeSink?.cancel()
         modeSink = nil
+        dictateTask?.cancel()
+        dictateTask = nil
         generation &+= 1
+        lastClients = []
         var effects: [CallPromptLogic.Effect] = []
         if let shown = pending { effects.append(.hide(shown)) }
         for id in state.liveOrder where state.transcribing.contains(id) {
@@ -100,6 +111,7 @@ final class CallDetector: ObservableObject {
     private func micClientsChanged(_ clients: [MicClient]) {
         guard Defaults[.detectCalls] else { return }
         generation &+= 1
+        lastClients = clients
 
         let livePids = Set(clients.map(\.pid))
         resolvedPids.formIntersection(livePids)
@@ -136,6 +148,24 @@ final class CallDetector: ObservableObject {
         perform(CallPromptLogic.update(&state, calls: calls, muted: Set(Defaults[.callPromptMuted]), at: now))
     }
 
+    /// Fn dictation was turned on or off in Settings. Off takes a prompt that is up back down. On runs the same
+    /// evaluation as the mic listener, so a call that is still live is asked about, subject to the usual rules.
+    private func dictateWithFnChanged(_ on: Bool) {
+        guard sink != nil else { return }
+        if on {
+            apply(lastClients)
+        } else if let shown = pending {
+            clearPrompt(shown)
+        }
+    }
+
+    /// Takes a prompt down without answering it. The call is left unasked, so turning fn dictation back on can ask again.
+    private func clearPrompt(_ call: DetectedCall) {
+        state.pending = nil
+        state.askedAt[call.id] = nil
+        perform([.hide(call)])
+    }
+
     // MARK: - Effects
 
     private func perform(_ effects: [CallPromptLogic.Effect]) {
@@ -150,9 +180,9 @@ final class CallDetector: ObservableObject {
                     renderPendingPrompt()
                     restartTimeout(for: call.id)
                 } else {
-                    // Fn dictation is off in Settings, so there is nothing a yes can start. Count it as unanswered
-                    // and do not mute it.
-                    perform(CallPromptLogic.timeout(&state, callID: call.id, muted: Set(Defaults[.callPromptMuted]), at: now))
+                    // Fn dictation is off in Settings, so there is nothing a yes can start. Show nothing, and leave the
+                    // call unasked so turning dictation back on can ask.
+                    clearPrompt(call)
                 }
 
             case .hide:
@@ -184,6 +214,8 @@ final class CallDetector: ObservableObject {
     /// on every fn mode change while a prompt is up, so the hint and the live keys always agree.
     private func renderPendingPrompt() {
         guard let call = pending else { return }
+        // A prompt already up when fn dictation goes off is taken down, not redrawn without its hint.
+        guard Defaults[.dictateWithFn] else { clearPrompt(call); return }
         let keysWork = FnKeyMonitor.shared.mode == .active
         BoringViewCoordinator.shared.toggleSneakPeek(
             status: true, type: .callPrompt, duration: CallPromptLogic.promptTimeout,

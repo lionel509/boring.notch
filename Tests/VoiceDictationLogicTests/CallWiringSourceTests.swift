@@ -52,7 +52,7 @@ final class CallWiringSourceTests: XCTestCase {
         XCTAssertFalse(body.contains("guard"), "the show effect is still gated before it shows the prompt")
         XCTAssertFalse(body.contains("continue"), "the show effect still drops the prompt without showing it")
         XCTAssertTrue(body.contains("pending = call"), "the show effect does not set pending")
-        // The notch draw moved into renderPendingPrompt (breaker round 4, R4-1), so check the file, not the body.
+        XCTAssertTrue(body.contains("renderPendingPrompt()"), "the show effect does not draw the notch prompt")
         XCTAssertTrue(text.contains("toggleSneakPeek"), "nothing in CallDetector shows the notch prompt")
     }
 
