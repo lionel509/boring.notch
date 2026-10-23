@@ -43,12 +43,17 @@ final class DictationStripTests: XCTestCase {
         }
     }
 
-    /// I6: one named spring per state change; the content rides its own spring.
-    func testMotionIsNamedSprings() throws {
+    /// I6 (r5): the strip has no motion of its own. It moves with the notch on the same
+    /// `.smooth` the music live activity uses, with no r4 spring names, no scale entry and
+    /// no separate content animation.
+    func testStripMovesWithTheNotchOnSmooth() throws {
         let text = try source("boringNotch/ContentView.swift")
-        for name in ["DictationMotion.expand", "DictationMotion.collapse", "DictationMotion.content", "DictationStrip.extraWidth"] {
-            XCTAssertTrue(text.contains(name), name)
+        for name in ["DictationMotion.expand", "DictationMotion.collapse", "DictationMotion.content"] {
+            XCTAssertFalse(text.contains(name), name)
         }
+        XCTAssertFalse(text.contains("scale(scale: 0.9)"), "r4 scale entry on the dictation strip")
+        XCTAssertTrue(text.contains(".animation(.smooth, value: voiceDictation.state)"), "the strip rides the notch's .smooth")
+        XCTAssertTrue(text.contains("DictationStrip.extraWidth"), "the strip width still comes from DictationStrip")
     }
 
     /// v3-5: the refining state is a shimmer on the bars, driven by one published flag.
