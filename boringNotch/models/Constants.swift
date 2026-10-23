@@ -148,6 +148,10 @@ extension Defaults.Keys {
 
     /// Cloud transcription and cleanup through OpenRouter (zero-retention endpoints). Off: everything stays on this Mac.
     static let dictationCloud = Key<Bool>("dictationCloud", default: true)
+    /// Apple voice processing on the mic: echo cancellation, noise suppression and gain control, so the take hears the voice, not the speakers.
+    static let dictationVoiceProcessing = Key<Bool>("dictationVoiceProcessing", default: true)
+    /// Pause music from this Mac while a take is recording, and resume it when the mic is released.
+    static let dictationPausesMedia = Key<Bool>("dictationPausesMedia", default: false)
     /// On-device cleanup (Apple Intelligence) when cloud is off or fails.
     static let dictationCleanup = Key<Bool>("dictationCleanup", default: true)
     /// Names and terms, comma separated. Sent as the STT prompt and the cleanup vocabulary.

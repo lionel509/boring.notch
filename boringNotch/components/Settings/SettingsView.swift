@@ -1855,6 +1855,13 @@ struct Shortcuts: View {
                 Defaults.Toggle(key: .dictationCloud) {
                     Text("Cloud transcription and cleanup (OpenRouter)")
                 }
+                Defaults.Toggle(key: .dictationVoiceProcessing) {
+                    Text("Voice isolation")
+                }
+                .help("Filters out music from your speakers and background noise while you dictate.")
+                Defaults.Toggle(key: .dictationPausesMedia) {
+                    Text("Pause music while dictating")
+                }
                 Text("Models: \(CloudConfig.sttModels[0]) · \(CloudConfig.cleanupModels[0])")
                     .foregroundStyle(.secondary)
                     .font(.caption)
