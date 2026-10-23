@@ -5,6 +5,8 @@ enum CleanupSkip: String, Equatable {
     case none, unavailable, timeout, empty, guardRejected, error
     /// #13 r5 / U2: why the rewrite gate skipped a take (every skip has one).
     case noField, secureField, cleanupOff, noAbortSource
+    /// #17 U1: a labelled take would lose its labels in a rewrite, and a take past the cloud cap is truncated.
+    case labelled, tooLong
 }
 
 /// Invariant I2: what gets pasted is the raw transcript or an LLM output that passed
