@@ -3,11 +3,14 @@
 //  boringNotch
 //
 //  Push-to-talk dictation: hold the shortcut, speak, let go. The notch shows the
-//  state, the speech is transcribed on this Mac, and the text is pasted into the
-//  focused app. Audio and transcripts never leave the machine.
+//  state. Apple's on-device transcript is pasted into the focused app at once; with
+//  cloud on, the cloud transcript and a cleanup pass then rewrite that text in place.
+//  Audio and transcript text leave the Mac only through OpenRouterClient, and only
+//  when the cloud setting is on.
 //
 
 import AppKit
+import ApplicationServices
 import AVFoundation
 import Defaults
 import Foundation
@@ -24,7 +27,11 @@ enum VoiceDictationState: Equatable {
 /// manager only drives it, so the state machine stays testable.
 protocol VoiceSession: AnyObject {
     var levelTap: MicLevelTap { get }
-    func start(onPartial: @escaping @Sendable (String) -> Void) async throws
+    func start(contextualStrings: [String], onPartial: @escaping @Sendable (String) -> Void) async throws
+    /// Stops the microphone now and returns the transcript so far.
+    func stopNow() -> [String]
+    /// The take's audio as a WAV file, or nil when no audio arrived.
+    func takeWAV() -> Data?
     func finish() async throws -> [String]
     func cancel() async
     func fill(_ report: inout TakeReport)
@@ -35,10 +42,14 @@ final class VoiceDictationManager: ObservableObject {
     static let shared = VoiceDictationManager()
 
     @Published private(set) var state: VoiceDictationState = .idle
-    /// The partial transcript. Kept for the engine callbacks; the notch no longer shows it.
+    /// The partial transcript. No longer written: the notch shows bars only.
     private(set) var liveText: String = ""
     /// True while the OS installs the speech model on first use.
     @Published private(set) var downloadingModel = false
+    /// True from the raw paste until the rewrite ends. The notch shows the bars with a shimmer.
+    @Published var refining = false
+    /// True when the last key read found no OpenRouter key. Settings shows the hint.
+    @Published private(set) var cloudKeyMissing = false
 
     private var hotkey = DictationHotkeyLogic.State()
     private var session: (any VoiceSession)?
@@ -54,6 +65,7 @@ final class VoiceDictationManager: ObservableObject {
     private static let startGrace: Double = 10
     /// Owns the pending clipboard restore across overlapping takes.
     private var clipboard = ClipboardKeeper()
+    private var clipboardRestoreTask: Task<Void, Never>?
     /// The numbers for the take in progress. Logged once, when the take ends.
     private var report = TakeReport()
     private var takeOpen = false
@@ -67,6 +79,18 @@ final class VoiceDictationManager: ObservableObject {
     private var statusTask: Task<Void, Never>?
     /// Uptime when the engine started, so the mic is judged only after it has had time to deliver.
     private var engineStartedAt: TimeInterval?
+    /// Read at key press, so the release does not wait on the helper. Memory only; never stored.
+    private var cachedKey: String?
+    /// Accessibility trust read at key press. Nil when that read has not returned yet.
+    private var trustedAtStart: Bool?
+    /// The app the take started in, and the register and dictionary taken from it.
+    private var takeBundleID: String?
+    private var takeTone: AppTone = .neutral
+    private var takeDictionary: [String] = []
+    /// The rewrite of the take whose text is in the field, while it runs.
+    private var rewriter: TakeRewriter?
+    /// Learns words the user corrects after a paste. Cancelled by the next press.
+    private var learnTask: Task<Void, Never>?
 
     private init() {}
 
@@ -94,8 +118,8 @@ final class VoiceDictationManager: ObservableObject {
 
     private func handle(_ event: DictationHotkeyLogic.Event, at time: TimeInterval? = nil) {
         let now = time ?? ProcessInfo.processInfo.systemUptime
-        // While transcribing, only track the key. The next take starts after the paste.
-        guard state != .processing else {
+        // While transcribing, only track the key. A rewrite still running does not block a new take.
+        guard !(state == .processing && rewriter == nil) else {
             DictationHotkeyLogic.track(&hotkey, event, at: now)
             return
         }
@@ -103,6 +127,11 @@ final class VoiceDictationManager: ObservableObject {
         let action = DictationHotkeyLogic.reduce(&hotkey, event, at: now)
         switch action {
         case .start:
+            // A rewrite still running is cut here: its last whole target stays in the field, and its take is logged.
+            if let old = rewriter {
+                old.cancel()
+                closeRewrite(old)
+            }
             DictationSounds.playStart()
             // A take still open here was superseded before it ended. Log it so every take has one line.
             endTake(.discarded)
@@ -118,15 +147,38 @@ final class VoiceDictationManager: ObservableObject {
             downloadingModel = false
             // A new press during the "Pasted" or error flash starts a fresh take.
             resetTask?.cancel()
+            learnTask?.cancel()
             state = .recording
-            liveText = ""
             stopRequested = false
             report = TakeReport()
             releaseAt = nil
             takeStartedAt = now
             takeOpen = true
             engineStartedAt = nil
+            trustedAtStart = nil
             startStatusPolling(take)
+            takeBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            takeTone = AppTone.forBundle(takeBundleID)
+            takeDictionary = PersonalDictionary.words(
+                manual: Defaults[.dictationDictionary], learned: Defaults[.dictationLearnedWords]
+            )
+            report.tone = takeTone
+            report.dictionaryWords = takeDictionary.count
+            report.cloud = Defaults[.dictationCloud]
+            // Both reads run while the user is still holding the key, so the release does not wait on them.
+            Task { [weak self] in
+                let trusted = await XPCHelperClient.shared.ensureAccessibilityAuthorization(promptIfNeeded: true)
+                self?.trustedAtStart = trusted
+                if trusted, let frontPid { _ = await XPCHelperClient.shared.prepareFocus(pid: Int(frontPid)) }
+            }
+            if Defaults[.dictationCloud] {
+                Task { [weak self] in
+                    let key = await XPCHelperClient.shared.openRouterKey()
+                    self?.cachedKey = key
+                    self?.cloudKeyMissing = key == nil
+                }
+            }
             ceilingTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(DictationHotkeyLogic.maxTake))
                 guard !Task.isCancelled else { return }
@@ -144,7 +196,14 @@ final class VoiceDictationManager: ObservableObject {
             // the take still recording and could be stopped or pasted into the wrong take.
             stop(takeID)
         case .discard:
+            // A bare fn or globe tap is used by other features, so only a real hold earns "Hold fn longer".
+            // A cancel (fn used as a modifier) or an abort is not a hold the user tried to dictate with.
+            let held = takeStartedAt.map { now - $0 } ?? 0
+            let fromKey = event != .cancel && event != .abort
             discard()
+            if fromKey && DictationNotices.isDiscardWorthNotice(heldFor: held) {
+                postNotice(for: .discarded, message: "")
+            }
         case .none:
             break
         }
@@ -164,8 +223,11 @@ final class VoiceDictationManager: ObservableObject {
             session = nil
             Task { await captured.cancel() }
         }
+        if let running = rewriter {
+            running.cancel()
+            closeRewrite(running)
+        }
         state = .idle
-        liveText = ""
         hotkey.startedAt = nil
         endTake(.discarded)
     }
@@ -177,6 +239,16 @@ final class VoiceDictationManager: ObservableObject {
         takeOpen = false
         report.outcome = outcome
         DictationLog.take(report)
+    }
+
+    /// Ends a rewrite: its numbers go into the take report and the take is logged. Only the rewrite that is
+    /// still current closes. A superseded one was already closed by the press that replaced it.
+    private func closeRewrite(_ running: TakeRewriter) {
+        guard rewriter === running else { return }
+        rewriter = nil
+        refining = false
+        running.fill(&report)
+        endTake(.pasted)
     }
 
     private var isResting: Bool {
@@ -238,12 +310,7 @@ final class VoiceDictationManager: ObservableObject {
             }
             guard take == takeID else { return }
             downloadingModel = false
-            try await started.start { [weak self] partial in
-                Task { @MainActor in
-                    guard let self, take == self.takeID else { return }
-                    self.liveText = partial
-                }
-            }
+            try await started.start(contextualStrings: takeDictionary) { _ in }
         } catch {
             guard take == takeID else { return }
             downloadingModel = false
@@ -260,6 +327,7 @@ final class VoiceDictationManager: ObservableObject {
         // still-starting take (stopRequested) from a live one.
         session = started
         engineStartedAt = now
+        report.engineStartMs = takeStartedAt.map { elapsedMs(since: $0) } ?? -1
         startGraceTask?.cancel()
         if stopRequested {
             stop(take)
@@ -280,7 +348,7 @@ final class VoiceDictationManager: ObservableObject {
                 guard !Task.isCancelled, let self, take == self.takeID,
                       self.session == nil, self.state == .recording else { return }
                 let message = self.downloadingModel
-                    ? "Speech model still downloading. Try again"
+                    ? "Model still downloading. Try again"
                     : "Speech engine did not start. Try again"
                 // Bumping the take makes a still-pending begin() discard itself.
                 self.takeID += 1
@@ -293,41 +361,187 @@ final class VoiceDictationManager: ObservableObject {
         Task { await complete(current) }
     }
 
-    /// The slow half of a stop: waits for the engine's last results, then pastes or reports.
+    /// Releases the mic, then pastes the raw transcript at once and rewrites it in place.
     private func complete(_ current: any VoiceSession) async {
-        let parts = (try? await current.finish()) ?? []
-        current.fill(&report)
+        let rawNow = TranscriptAssembler.join(current.stopNow())
+        let wav = current.takeWAV()
+        // Apple's final results: they land after the paste and only matter for the rewrite and the empty take.
+        let finalTask = Task { (try? await current.finish()) ?? [] }
         let verdict = levelTap?.meter.verdict ?? .noBuffers
         session = nil
         // A take with real signal proves the mic works, so the warning clears.
         if verdict == .signal { Defaults[.dictationMicSilent] = false }
-
-        let text = TranscriptAssembler.join(parts)
-        guard !text.isEmpty else {
-            switch verdict {
-            case .noBuffers:
-                fail("No audio from the mic", outcome: .noAudio)
-            case .digitalSilence:
-                // The mic opened but only zeros arrived: the stale-grant case.
-                Defaults[.dictationMicSilent] = true
-                fail("Mic blocked. See Settings", outcome: .micSilent)
-            case .signal:
-                fail("Nothing heard", outcome: .nothingHeard)
-            }
-            return
-        }
-        await insert(text)
+        await insertAndRefine(rawNow: rawNow, wav: wav, finalTask: finalTask, engine: current, verdict: verdict)
     }
 
-    /// Puts the text on the pasteboard, presses Cmd-V in the focused app, then puts
-    /// the user's previous clipboard back unless they copied something meanwhile.
-    /// On every failure path the transcript stays on the clipboard, replacing what was there.
+    /// Pastes the raw text, then rewrites it in place when the take allows it. A take with no raw text waits for
+    /// the first non-empty of the cloud transcript and Apple's final, and that text is pasted instead.
+    private func insertAndRefine(
+        rawNow: String, wav: Data?, finalTask: Task<[String], Never>, engine: any VoiceSession, verdict: MicVerdict
+    ) async {
+        let take = takeID
+        let field = await XPCHelperClient.shared.beginTracking()
+        let mechanism = field.map { RewriteMechanism.choose(field: $0) } ?? .none
+        // The one place the cloud client is built: only with the setting on and the key read at the press.
+        let client: OpenRouterClient?
+        if Defaults[.dictationCloud], let key = cachedKey {
+            client = OpenRouterClient(key: key)
+        } else {
+            client = nil
+        }
+        // Without a readable caret the rewrite needs key events to abort on user input. With neither the
+        // caret nor a key abort, the rewrite could overwrite text the user typed, so the Stage-A text stays.
+        let keyAbortLive = FnKeyMonitor.shared.isTapLive || (AXIsProcessTrusted() && CGPreflightListenEventAccess())
+        // One decision for the take. Every skip has a reason; secure and untracked fields never run (#13 r5 / U2).
+        let decision = RewriteGate.decide(
+            field: field, cloudOn: Defaults[.dictationCloud], hasKey: cachedKey != nil,
+            cleanupOn: Defaults[.dictationCleanup], keyAbortLive: keyAbortLive)
+        report.hasKey = cachedKey != nil
+        let rewriteWanted: Bool = {
+            if case .run = decision { return true }
+            return false
+        }()
+        let dictionary = takeDictionary
+        let tone = takeTone
+        let prompt = CloudConfig.vocabularyPrompt(dictionary)
+
+        // Started at release, so the cloud transcript runs while the raw text is pasted.
+        let sttTask: Task<TakeRewriter.SttAttempt?, Never> = Task {
+            guard rewriteWanted, let client, let wav else { return nil }
+            return await VoiceDictationManager.cloudTranscript(client: client, wav: wav, prompt: prompt)
+        }
+        defer { sttTask.cancel() }
+
+        var text = rawNow
+        if text.isEmpty {
+            if let attempt = await sttTask.value, !RewritePlanner.normalize(attempt.text).isEmpty {
+                text = RewritePlanner.normalize(attempt.text)
+            } else {
+                text = RewritePlanner.normalize(TranscriptAssembler.join(await finalTask.value))
+            }
+            guard !text.isEmpty else {
+                engine.fill(&report)
+                switch verdict {
+                case .noBuffers:
+                    fail("No audio from the mic", outcome: .noAudio)
+                case .digitalSilence:
+                    // The mic opened but only zeros arrived: the stale-grant case.
+                    Defaults[.dictationMicSilent] = true
+                    fail("Mic blocked. See Settings", outcome: .micSilent)
+                case .signal:
+                    fail("No speech", outcome: .nothingHeard)
+                }
+                return
+            }
+        }
+
+        guard await insert(text) else { return }
+        guard take == takeID else {
+            // A new press arrived during the paste; that press already owns the report.
+            return
+        }
+
+        guard rewriteWanted, let field else {
+            _ = await finalTask.value
+            guard take == takeID else { return }
+            engine.fill(&report)
+            if case .skip(let reason) = decision {
+                report.cleanupSkip = reason
+                if reason == .noAbortSource { report.rewrite = .noAbortSource }
+            }
+            await XPCHelperClient.shared.endTracking()
+            endTake(.pasted)
+            if mechanism != .none { scheduleLearning(final: text, bundle: takeBundleID) }
+            state = .done
+            scheduleReset(after: 0.6)
+            return
+        }
+
+        let running = TakeRewriter(
+            committed: text, field: field, mechanism: mechanism, keyAbortLive: keyAbortLive, releaseAt: releaseAt ?? now)
+        rewriter = running
+        refining = true
+        await running.run(
+            stt: { await sttTask.value },
+            appleFinal: { TranscriptAssembler.join(await finalTask.value) },
+            stream: { input in
+                guard let client else { return nil }
+                return client.streamCleanup(
+                    model: CloudConfig.cleanupModels[0],
+                    system: CleanupPrompt.instructions(tone: tone, dictionary: dictionary),
+                    user: CleanupPrompt.userMessage(input),
+                    maxTokens: max(64, input.split(whereSeparator: { $0.isWhitespace }).count * 3),
+                    timeout: CloudConfig.rewriteDeadline
+                )
+            },
+            foundation: { input in
+                guard Defaults[.dictationCleanup] else { return nil }
+                return await VoiceDictationManager.onDeviceCleanup(input, tone: tone, dictionary: dictionary)
+            }
+        )
+        sttTask.cancel()
+
+        // A press that superseded this rewrite already closed it, and the new take owns the state now.
+        guard rewriter === running else { return }
+        _ = await finalTask.value
+        engine.fill(&report)
+        let finalText = running.committedText
+        closeRewrite(running)
+        if mechanism != .none { scheduleLearning(final: finalText, bundle: takeBundleID) }
+        state = .done
+        scheduleReset(after: 0.6)
+    }
+
+    /// Tries the cloud transcription models in order. A timeout, a zero-retention block or an HTTP error moves
+    /// to the next model. The error text is never logged.
+    private static func cloudTranscript(client: OpenRouterClient, wav: Data, prompt: String?) async -> TakeRewriter.SttAttempt? {
+        for model in CloudConfig.sttModels {
+            guard !Task.isCancelled else { return nil }
+            let started = ProcessInfo.processInfo.systemUptime
+            do {
+                let transcript = try await client.transcribe(wav: wav, model: model, prompt: prompt, timeout: CloudConfig.sttTimeout)
+                let source: SttSource = model.hasPrefix("assemblyai/") ? .assemblyai
+                    : (model.hasPrefix("mistralai/") ? .voxtral : .none)
+                return TakeRewriter.SttAttempt(
+                    text: transcript.text,
+                    source: source,
+                    ms: Int((ProcessInfo.processInfo.systemUptime - started) * 1000),
+                    seconds: transcript.seconds,
+                    costUSD: transcript.costUSD
+                )
+            } catch {
+                continue
+            }
+        }
+        return nil
+    }
+
+    /// On-device cleanup (Apple Intelligence) for when the cloud is off or fails. Nil leaves the text as it is.
+    private static func onDeviceCleanup(_ text: String, tone: AppTone, dictionary: [String]) async -> String? {
+        guard #available(macOS 26.0, *) else { return nil }
+        guard let cleanup = TranscriptCleanup(instructions: CleanupPrompt.instructions(tone: tone, dictionary: dictionary)) else {
+            return nil
+        }
+        if case .cleaned(let cleaned) = await cleanup.clean(text, budget: CloudConfig.foundationBudget) {
+            return cleaned
+        }
+        return nil
+    }
+
+    /// Puts the text on the pasteboard and presses Cmd-V in the focused app. The user's previous clipboard is
+    /// put back one second later, unless they copied something meanwhile. Returns false when the take already
+    /// failed. On every failure path the transcript stays on the clipboard, replacing what was there.
     /// A take that starts during an earlier take's restore wait inherits that take's saved clipboard, so the user's own clipboard is what comes back.
-    private func insert(_ text: String) async {
+    private func insert(_ text: String) async -> Bool {
         let pasteboard = NSPasteboard.general
         let axStart = now
-        let trustedResult = await TimeoutRace.run(seconds: 3) {
-            await XPCHelperClient.shared.ensureAccessibilityAuthorization(promptIfNeeded: true)
+        let trustedResult: Bool?
+        if let trustedAtStart {
+            trustedResult = trustedAtStart
+        } else {
+            trustedResult = await TimeoutRace.run(seconds: 3) {
+                await XPCHelperClient.shared.ensureAccessibilityAuthorization(promptIfNeeded: true)
+            }
         }
         report.axMs = elapsedMs(since: axStart)
         // Snapshot after the await, so a copy made during it is kept, not overwritten.
@@ -335,12 +549,12 @@ final class VoiceDictationManager: ObservableObject {
         guard let trusted = trustedResult else {
             clipboard.release(change)
             fail("Copied (clipboard replaced). Helper not responding")
-            return
+            return false
         }
         guard trusted else {
             clipboard.release(change)
             fail("Copied (clipboard replaced). Allow Accessibility to paste")
-            return
+            return false
         }
 
         let modStart = now
@@ -350,7 +564,7 @@ final class VoiceDictationManager: ObservableObject {
         guard pasteboard.changeCount == change else {
             clipboard.release(change)
             fail("Clipboard changed. Not pasted")
-            return
+            return false
         }
         // Read the layout on the main actor, where the TIS calls belong.
         let keyCode = PasteKeycode.currentV()
@@ -362,22 +576,23 @@ final class VoiceDictationManager: ObservableObject {
         guard let posted else {
             clipboard.release(change)
             fail("Copied (clipboard replaced). Helper slow, paste may still land")
-            return
+            return false
         }
         guard posted else {
             clipboard.release(change)
             fail("Copied (clipboard replaced). Paste failed")
-            return
+            return false
         }
 
         if let released = releaseAt {
             report.releaseToPasteMs = Int((now - released) * 1000)
         }
-        endTake(.pasted)
-        state = .done
-        scheduleReset(after: 0.6)
-        try? await Task.sleep(for: .milliseconds(1000))
-        clipboard.restore(to: pasteboard, ifChangeCountIs: change)
+        // The restore starts at the paste, not at the end of the rewrite: swaps never touch the clipboard.
+        clipboardRestoreTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1000))
+            self?.clipboard.restore(to: pasteboard, ifChangeCountIs: change)
+        }
+        return true
     }
 
     /// Cmd-V with Option still held would paste as Option-Cmd-V in many apps.
@@ -389,19 +604,55 @@ final class VoiceDictationManager: ObservableObject {
         }
     }
 
+    /// Learns the words the user corrects after a paste, 8 s later, in the same app and only while idle.
+    private func scheduleLearning(final text: String, bundle: String?) {
+        guard Defaults[.dictationLearnsCorrections] else { return }
+        learnTask?.cancel()
+        learnTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled, let self, self.state == .idle,
+                  NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundle else { return }
+            let current = await XPCHelperClient.shared.focusedTextValue() ?? ""
+            // The alignment is quadratic in the take and the field, so it runs off the main actor.
+            let found = await Task.detached(priority: .utility) {
+                CorrectionLearner.candidates(pasted: text, current: current)
+            }.value
+            guard !found.isEmpty else { return }
+            var learned = Defaults[.dictationLearnedWords]
+            PersonalDictionary.learn(found, into: &learned)
+            Defaults[.dictationLearnedWords] = learned
+        }
+    }
+
     private func fail(_ message: String, outcome: TakeOutcome = .failed) {
+        Task { await XPCHelperClient.shared.endTracking() }
         ceilingTask?.cancel()
         startGraceTask?.cancel()
         statusTask?.cancel()
         downloadingModel = false
         session = nil
+        if let running = rewriter {
+            running.cancel()
+            closeRewrite(running)
+        }
         hotkey.recording = false
         hotkey.handsFree = false
         hotkey.downAt = nil
         hotkey.startedAt = nil
         endTake(outcome)
-        state = .failed(message)
+        // The message no longer goes in the closed strip. The strip returns to idle and the
+        // sneak peek says the short line instead, the same way a song change does.
+        state = .idle
+        postNotice(for: outcome, message: message)
         scheduleReset(after: 2.0)
+    }
+
+    /// Shows the notice for a take that ended with `outcome`, if it has one. Successful takes have none.
+    private func postNotice(for outcome: TakeOutcome, message: String) {
+        guard let notice = DictationNotices.notice(for: outcome, message: message) else { return }
+        BoringViewCoordinator.shared.toggleSneakPeek(
+            status: true, type: .dictation, duration: 2.5,
+            icon: notice.icon, detail: notice.detail, label: notice.label, tint: .orange)
     }
 
     private func scheduleReset(after seconds: Double) {
@@ -411,7 +662,6 @@ final class VoiceDictationManager: ObservableObject {
             guard !Task.isCancelled, let self else { return }
             if self.isResting {
                 self.state = .idle
-                self.liveText = ""
             }
         }
     }

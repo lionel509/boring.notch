@@ -352,6 +352,7 @@
 		11F748502EC9AABA00F841DB /* BoringNotchXPCHelper */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (11F7485C2EC9AABA00F841DB /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = BoringNotchXPCHelper; sourceTree = "<group>"; };
 		4EC58D7610E3491B8A589CCA /* NotchTabs */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = NotchTabs; sourceTree = "<group>"; };
 		5A1C0DE0A11CE0F1D1C7A7E0 /* Voice */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Voice; sourceTree = "<group>"; };
+		3C10DC0A11CE0F1D1C7A7E01 /* Cloud */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Cloud; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -621,6 +622,7 @@
 				112FB72F2CCF12CC0015238C /* private */,
 				4EC58D7610E3491B8A589CCA /* NotchTabs */,
 				5A1C0DE0A11CE0F1D1C7A7E0 /* Voice */,
+				3C10DC0A11CE0F1D1C7A7E01 /* Cloud */,
 				11CC44A12CEE614100C7244B /* BoringViewCoordinator.swift */,
 			);
 			path = boringNotch;
@@ -844,6 +846,7 @@
 				112FB72F2CCF12CC0015238C /* private */,
 				4EC58D7610E3491B8A589CCA /* NotchTabs */,
 				5A1C0DE0A11CE0F1D1C7A7E0 /* Voice */,
+				3C10DC0A11CE0F1D1C7A7E01 /* Cloud */,
 			);
 			name = boringNotch;
 			packageProductDependencies = (

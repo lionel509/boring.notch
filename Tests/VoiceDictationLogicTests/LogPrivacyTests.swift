@@ -48,8 +48,52 @@ final class LogPrivacyTests: XCTestCase {
             "take outcome=pasted verdict=signal auth=3 granted=1 tap=1ch/48000Hz buf=1ch/48000Hz "
                 + "buffers=100 chunks=25 peak=0.1000 max_db=-23.0 floor_db=-50.0 voiced=20 "
                 + "config_changes=0 convert_failures=0 finals=2 partials=6 volatile_tail=0 "
-                + "hold_ms=1200 finalize_ms=80 ax_ms=5 mod_wait_ms=0 paste_ms=12 release_to_paste_ms=150"
+                + "hold_ms=1200 finalize_ms=80 ax_ms=5 mod_wait_ms=0 paste_ms=12 release_to_paste_ms=150 "
+                + "engine_start_ms=-1 first_partial_ms=-1 stt_ms=-1 stt=none stt_s=-1.00 stt_uusd=-1 "
+                + "first_cleanup_ms=-1 llm_ttft_ms=-1 llm_ms=-1 llm_in=-1 llm_out=-1 swaps=-1 "
+                + "max_swap_ms=-1 mech=none rewrite=none cleanup=none skip=none tone=neutral dict=-1 cloud=0 "
+                + "key=0 vp=0"
         )
+    }
+
+    /// I2 / v2-5: the cloud client is a source root too; it may log nothing (same banned tokens).
+    func testCloudSourcesAreScanned() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let client = root.appendingPathComponent("boringNotch/Cloud/OpenRouterClient.swift")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: client.path), "expected the cloud client")
+        let text = try String(contentsOf: client, encoding: .utf8)
+        for symbol in Self.loggingSymbols {
+            XCTAssertFalse(text.contains(symbol), "OpenRouterClient.swift contains \(symbol)")
+        }
+    }
+
+    /// The helper process reads the key and the field text, so it must log nothing new either. The count is
+    /// pinned to the matches in those two source roots. The base commit 5f7a1bc has 4: the helper's Logger, two
+    /// FileHandle.nullDevice uses, and the Xcode template NSLog in the helper's protocol doc comment. The app's
+    /// protocol copy carries that same comment (the copies must stay identical), so the total is 5. Any added
+    /// logging site moves the count and fails this test.
+    func testHelperAndXPCClientLogNothingNew() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        var total = 0
+        for dir in ["BoringNotchXPCHelper", "boringNotch/XPCHelperClient"] {
+            let files = (FileManager.default.enumerator(at: root.appendingPathComponent(dir), includingPropertiesForKeys: nil)?
+                .compactMap { $0 as? URL } ?? [])
+                .filter { $0.pathExtension == "swift" }
+            XCTAssertFalse(files.isEmpty, "expected Swift sources in \(dir)")
+            for file in files {
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for symbol in Self.loggingSymbols {
+                    total += text.components(separatedBy: symbol).count - 1
+                }
+            }
+        }
+        XCTAssertEqual(total, 5, "a logging call was added to the helper or its XPC client")
     }
 
     func testMissingFloorPrintsNone() {
@@ -94,10 +138,14 @@ final class LogPrivacyTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        let voice = root.appendingPathComponent("boringNotch/Voice")
-        let files = (FileManager.default.enumerator(at: voice, includingPropertiesForKeys: nil)?
-            .compactMap { $0 as? URL } ?? [])
-            .filter { ["swift", "m", "h"].contains($0.pathExtension) }
+        // v2-5: the cloud client is a source root too (same banned tokens).
+        var files: [URL] = []
+        for dir in ["boringNotch/Voice", "boringNotch/Cloud"] {
+            let root = root.appendingPathComponent(dir)
+            files += (FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
+                .compactMap { $0 as? URL } ?? [])
+                .filter { ["swift", "m", "h"].contains($0.pathExtension) }
+        }
         XCTAssertGreaterThanOrEqual(files.count, 5, "expected the voice sources, found \(files.count)")
         return files
     }

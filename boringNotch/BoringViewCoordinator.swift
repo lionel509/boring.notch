@@ -26,6 +26,9 @@ enum SneakContentType: Equatable {
     /// category as the connection events: it reports something that just happened, rather
     /// than mirroring a control the user is currently holding.
     case systemAlert
+    /// A dictation take that failed or was too short. A one-line notice like a system alert:
+    /// the icon, the headline and an optional second beat, never text inside the closed strip.
+    case dictation
 }
 
 extension SneakContentType {
@@ -39,7 +42,7 @@ extension SneakContentType {
     /// of them were in the set.
     var isAnnouncement: Bool {
         switch self {
-        case .wifi, .bluetooth, .systemAlert: true
+        case .wifi, .bluetooth, .systemAlert, .dictation: true
         default: false
         }
     }

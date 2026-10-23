@@ -8,6 +8,7 @@
 import AVFoundation
 import Defaults
 import EventKit
+import FoundationModels
 import KeyboardShortcuts
 import LaunchAtLogin
 import Sparkle
@@ -1777,7 +1778,10 @@ struct AccentCircleButton: View {
 
 struct Shortcuts: View {
     @ObservedObject var fnMonitor = FnKeyMonitor.shared
+    @ObservedObject var voice = VoiceDictationManager.shared
     @Default(.dictationMicSilent) var dictationMicSilent
+    @Default(.dictationDictionary) var dictationDictionary
+    @Default(.dictationLearnedWords) var learnedWords
 
     var body: some View {
         Form {
@@ -1836,7 +1840,7 @@ struct Shortcuts: View {
                 Text("Voice")
             } footer: {
                 Text(
-                    "Hold fn (or the shortcut) to talk, let go to type what you said into the app you are in. fn+Space, or a quick tap of the shortcut, keeps listening until you press again. Releases shorter than half a second are ignored. If fn also opens emoji or switches input language, set System Settings > Keyboard > \"Press Globe key to\" to \"Do Nothing\", and change the Dictation shortcut if it is \"Press Globe twice\". Keyboards without an Apple fn key use the shortcut. Transcription runs on this Mac and nothing is sent anywhere."
+                    "Hold fn (or the shortcut) to talk, let go to type what you said into the app you are in. fn+Space, or a quick tap of the shortcut, keeps listening until you press again. Releases shorter than half a second are ignored. If fn also opens emoji or switches input language, set System Settings > Keyboard > \"Press Globe key to\" to \"Do Nothing\", and change the Dictation shortcut if it is \"Press Globe twice\". Keyboards without an Apple fn key use the shortcut. With cloud on, audio goes to OpenRouter; see Cloud and cleanup below."
                 )
                 .multilineTextAlignment(.trailing)
                 .foregroundStyle(.secondary)
@@ -1847,9 +1851,68 @@ struct Shortcuts: View {
                     fnMonitor.restart()
                 }
             }
+            Section {
+                Defaults.Toggle(key: .dictationCloud) {
+                    Text("Cloud transcription and cleanup (OpenRouter)")
+                }
+                Defaults.Toggle(key: .dictationVoiceProcessing) {
+                    Text("Voice isolation")
+                }
+                .help("Filters out music from your speakers and background noise while you dictate.")
+                Defaults.Toggle(key: .dictationPausesMedia) {
+                    Text("Pause music while dictating")
+                }
+                Text("Models: \(CloudConfig.sttModels[0]) · \(CloudConfig.cleanupModels[0])")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                if voice.cloudKeyMissing {
+                    Text("No key at ~/.config/openrouter-key")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+                Defaults.Toggle(key: .dictationCleanup) {
+                    Text("Clean up on this Mac when cloud is off (Apple Intelligence)")
+                }
+                if appleIntelligenceUnavailable {
+                    Text("Apple Intelligence is off or still downloading, so takes paste as heard.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+                TextField("Names and terms, comma separated", text: $dictationDictionary)
+                Defaults.Toggle(key: .dictationLearnsCorrections) {
+                    Text("Learn words I correct after a paste")
+                }
+                Text(learnedWordsText)
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                Button("Forget learned words") {
+                    Defaults[.dictationLearnedWords] = [:]
+                }
+            } header: {
+                Text("Cloud and cleanup")
+            } footer: {
+                Text(
+                    "Audio goes to OpenRouter's zero-retention endpoints for a better transcript and cleanup. Off: everything stays on this Mac."
+                )
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            }
         }
         .accentColor(.effectiveAccent)
         .navigationTitle("Shortcuts")
+    }
+
+    private var learnedWordsText: String {
+        let words = PersonalDictionary.words(manual: "", learned: learnedWords)
+        return words.isEmpty ? "Nothing learned yet" : "Learned: " + words.joined(separator: ", ")
+    }
+
+    /// True when Apple Intelligence cannot clean up on this Mac (older macOS, off, or still downloading).
+    private var appleIntelligenceUnavailable: Bool {
+        guard #available(macOS 26.0, *) else { return true }
+        if case .available = SystemLanguageModel.default.availability { return false }
+        return true
     }
 
     /// Says why dictation heard nothing and how to re-grant the mic. Shown only when there is a reason.
