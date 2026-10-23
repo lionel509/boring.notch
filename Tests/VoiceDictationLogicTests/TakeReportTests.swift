@@ -43,11 +43,22 @@ final class TakeReportTests: XCTestCase {
     func testKeyAndVoiceProcessingAreLogged() {
         var report = TakeReport()
         report.record(meter: MicLevelMeter())
-        XCTAssertTrue(report.line.hasSuffix("cloud=0 key=0 vp=0"), report.line)
+        XCTAssertTrue(report.line.hasSuffix("cloud=0 key=0 vp=0 gate=off dropped=-1 vi=off"), report.line)
         report.hasKey = true
         report.voiceProcessing = true
         let words = report.line.components(separatedBy: " ")
         XCTAssertTrue(words.contains("key=1"), report.line)
         XCTAssertTrue(words.contains("vp=1"), report.line)
+    }
+
+    /// Speaker gate (#17 U1): the gate, the dropped count and the Voice Isolation mode are logged as numbers.
+    func testSpeakerGateFieldsAreLogged() {
+        var report = TakeReport()
+        report.record(meter: MicLevelMeter())
+        XCTAssertTrue(report.line.hasSuffix("gate=off dropped=-1 vi=off"), report.line)
+        report.speakerGate = true
+        report.speakerDropped = 3
+        report.voiceIsolation = true
+        XCTAssertTrue(report.line.hasSuffix("gate=on dropped=3 vi=on"), report.line)
     }
 }
