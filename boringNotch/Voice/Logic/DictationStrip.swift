@@ -15,9 +15,15 @@ enum DictationStrip {
     static let headlineMax = 28
 
     /// Width added beside the notch: two square cells (`side` each) plus 20 pt, and one
-    /// message cell when the strip says words.
+    /// message cell when the strip says words (the download only).
     static func extraWidth(side: CGFloat, showsMessage: Bool) -> CGFloat {
         2 * max(0, side) + 20 + (showsMessage ? messageWidth : 0)
+    }
+
+    /// The failure strip's right-hand cell: the bars' slot plus the 20 pt, so a failure keeps the
+    /// listening footprint. The icon cell (`side`) and this cell add up to `extraWidth(showsMessage: false)`.
+    static func failureCellWidth(side: CGFloat) -> CGFloat {
+        max(0, side) + 20
     }
 
     /// The part of a message before the first "." or ":", trimmed. The whole message when

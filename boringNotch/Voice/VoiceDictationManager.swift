@@ -422,7 +422,7 @@ final class VoiceDictationManager: ObservableObject {
                     Defaults[.dictationMicSilent] = true
                     fail("Mic blocked. See Settings", outcome: .micSilent)
                 case .signal:
-                    fail("Nothing heard", outcome: .nothingHeard)
+                    fail("No speech", outcome: .nothingHeard)
                 }
                 return
             }

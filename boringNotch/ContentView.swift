@@ -66,10 +66,10 @@ struct ContentView: View {
         )
     }
 
-    /// Failures and the model download are the only dictation states that show words.
+    /// Only the model download shows a message cell. A failure shows its short headline in the
+    /// failure cell at the listening width, so the strip never grows for it.
     private var dictationShowsMessage: Bool {
         switch voiceDictation.state {
-        case .failed: return true
         case .recording: return voiceDictation.downloadingModel
         default: return false
         }
