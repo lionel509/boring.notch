@@ -4,18 +4,11 @@
 //
 //  Closed-notch strip for a dictation take, laid out like the music strip: an icon on
 //  the left and live mic bars on the right. Nothing the user said is shown here. Failures
-//  and the model download add one short message cell to say why.
+//  and the model download add one short message cell to say why. The strip animates with
+//  the notch on `.smooth`, so it reads as the notch widening, not a second shape.
 //
 
 import SwiftUI
-
-/// Motion for the dictation strip: the chin width leads on one spring, the content
-/// follows on its own spring 80 ms later.
-enum DictationMotion {
-    static let expand = Animation.spring(response: 0.38, dampingFraction: 0.72, blendDuration: 0)
-    static let collapse = Animation.spring(response: 0.34, dampingFraction: 0.92, blendDuration: 0)
-    static let content = Animation.spring(response: 0.28, dampingFraction: 0.8).delay(0.08)
-}
 
 struct VoiceDictationLiveActivity: View {
     @EnvironmentObject var vm: BoringViewModel
@@ -34,12 +27,10 @@ struct VoiceDictationLiveActivity: View {
     var body: some View {
         HStack {
             leftCell
-                .transition(.scale(scale: 0.6).combined(with: .opacity))
             Rectangle()
                 .fill(.black)
                 .frame(width: vm.closedNotchSize.width - cornerRadiusInsets.closed.top)
             rightCell
-                .transition(.scale(scale: 0.6).combined(with: .opacity))
         }
         .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
     }
@@ -53,7 +44,6 @@ struct VoiceDictationLiveActivity: View {
             case .recording:
                 if voice.downloadingModel {
                     ProgressView().controlSize(.mini)
-                        .transition(.scale(scale: 0.6).combined(with: .opacity))
                 } else {
                     let problem = voice.micStatus == .noSignal || voice.micStatus == .quiet
                     Image(systemName: voice.micStatus == .noSignal ? "mic.slash.fill" : "mic.fill")
@@ -62,18 +52,19 @@ struct VoiceDictationLiveActivity: View {
                         .contentTransition(.symbolEffect(.replace))
                 }
             case .processing:
-                ProgressView().controlSize(.mini)
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.5))
             case .done:
-                Image(systemName: "checkmark.circle.fill")
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.green)
                     .contentTransition(.symbolEffect(.replace))
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
             case .failed:
-                Image(systemName: "exclamationmark.circle")
+                Image(systemName: "exclamationmark")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.orange)
                     .contentTransition(.symbolEffect(.replace))
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
         }
         .frame(width: side, height: side)
