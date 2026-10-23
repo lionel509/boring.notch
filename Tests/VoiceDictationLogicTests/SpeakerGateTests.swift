@@ -78,22 +78,25 @@ final class SpeakerGateTests: XCTestCase {
     }
 
     func testShortSpanIsTiledAndScoredAsOneWindow() throws {
+        // Held at the -26 dBFS target so normalise is the identity here (#17 U1).
+        let amp = Float(pow(10, -26.0 / 20))
         var calls = 0
-        let e = try SpeakerGate.segmentEmbedding([Float](repeating: 0.25, count: 8_000)) { input in
+        let e = try SpeakerGate.segmentEmbedding([Float](repeating: amp, count: 8_000)) { input in
             calls += 1
             return try self.fakeEmbed(input)
         }
         XCTAssertEqual(calls, 1)
         let vector = try XCTUnwrap(e)
-        // Fake embedding [0.25, 1, 0] is L2-normalised by the centroid.
-        XCTAssertEqual(vector[0], Float(0.25 / sqrt(1.0625)), accuracy: 1e-5)
-        XCTAssertEqual(vector[1], Float(1 / sqrt(1.0625)), accuracy: 1e-5)
+        // Fake embedding [amp, 1, 0] is L2-normalised by the centroid.
+        XCTAssertEqual(vector[0], Float(Double(amp) / sqrt(Double(amp) * Double(amp) + 1)), accuracy: 1e-5)
+        XCTAssertEqual(vector[1], Float(1 / sqrt(Double(amp) * Double(amp) + 1)), accuracy: 1e-5)
     }
 
     func testScoreIsCosineOfSegmentWithVoiceprint() throws {
-        let segment = [Float](repeating: 0.25, count: 8_000)
+        let amp = Float(pow(10, -26.0 / 20))
+        let segment = [Float](repeating: amp, count: 8_000)
         let score = try SpeakerGate.score(segment: segment, voiceprint: [1, 0, 0], embed: fakeEmbed)
-        XCTAssertEqual(try XCTUnwrap(score), 0.25 / sqrt(1.0625), accuracy: 1e-5)
+        XCTAssertEqual(try XCTUnwrap(score), Double(amp) / sqrt(Double(amp) * Double(amp) + 1), accuracy: 1e-5)
         XCTAssertNil(try SpeakerGate.score(segment: [], voiceprint: [1, 0, 0], embed: fakeEmbed))
     }
 

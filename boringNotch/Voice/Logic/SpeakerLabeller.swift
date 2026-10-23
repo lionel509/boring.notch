@@ -40,24 +40,31 @@ public struct LabelledSegment: Equatable, Sendable {
 /// voiceprint by a margin is Me. Everything else is Speaker 2, 3… by first appearance.
 public struct SpeakerLabeller: Sendable {
     public struct Params: Equatable, Sendable {
-        /// Average-linkage merge floor: two clusters merge while their mean pairwise cosine is at least this.
+        /// Average-linkage merge floor for the segments that are not Me one at a time: two clusters merge while
+        /// their mean pairwise cosine is at least this.
         public var clusterSim: Double
-        /// The Me cluster's cosine with the voiceprint must reach this.
+        /// A segment, or a cluster's centroid, whose cosine with the voiceprint reaches this is Me.
         public var meSim: Double
-        /// The Me cluster must lead the runner-up's cosine by at least this.
+        /// A cluster rescued into Me must lead every other cluster's cosine with its centroid by at least this,
+        /// measured against the Me centroid.
         public var meMargin: Double
+        /// A cluster is only rescued into Me if its voiceprint cosine reaches `meSim - rescueSim`.
+        public var rescueSim: Double
         /// Segments shorter than this are not clustered and inherit a neighbour's label.
         public var shortSeconds: Double
 
-        public init(clusterSim: Double, meSim: Double, meMargin: Double, shortSeconds: Double) {
+        public init(clusterSim: Double, meSim: Double, meMargin: Double, rescueSim: Double, shortSeconds: Double) {
             self.clusterSim = clusterSim
             self.meSim = meSim
             self.meMargin = meMargin
+            self.rescueSim = rescueSim
             self.shortSeconds = shortSeconds
         }
 
         /// Placeholder constants until the spike's grid (U0 step 5) sets the real ones.
-        public static let `default` = Params(clusterSim: 0.60, meSim: 0.30, meMargin: 0.10, shortSeconds: 1.0)
+        public static let `default` = Params(
+            clusterSim: 0.40, meSim: 0.30, meMargin: 0.10, rescueSim: 0.15, shortSeconds: 1.0
+        )
     }
 
     /// Average-linkage agglomerative clustering on cosine. Merges the most similar pair while its mean
@@ -118,36 +125,71 @@ public struct SpeakerLabeller: Sendable {
         return best
     }
 
-    /// Labels every segment. Segments with an embedding, at least `shortSeconds` long, are clustered; the Me
-    /// cluster is `.me`, the rest are `.other(n)` numbered by each cluster's first start time. Any other
-    /// segment takes the previous segment's label, else the next, else `.unknown`. Returns the input order.
+    /// Labels every segment (v2, #17 U1). A segment whose embedding reaches `meSim` against the voiceprint is
+    /// `.me` on its own. The rest, with an embedding and at least `shortSeconds` long, are clustered, and a
+    /// cluster that passes the rescue rule (see step 3) is `.me` too. The other clusters are `.other(n)`,
+    /// numbered by each cluster's first start time. Any other segment takes the previous segment's label, else
+    /// the next, else `.unknown`. Returns the input order.
     /// With no voiceprint and no embeddings every segment is `.unknown`, which every mode keeps.
     public static func label(_ segments: [LabelledSegment], voiceprint: [Float], params: Params) -> [LabelledSegment] {
-        let usable = segments.indices.filter { i in
-            guard let e = segments[i].embedding, !e.isEmpty else { return false }
-            return max(0, segments[i].end - segments[i].start) >= params.shortSeconds
+        func embedded(_ i: Int) -> [Float]? {
+            guard let e = segments[i].embedding, !e.isEmpty else { return nil }
+            return e
         }
-        let embeddings = usable.map { segments[$0].embedding ?? [] }
-        let local = clusters(embeddings, clusterSim: params.clusterSim)
-        let me = meCluster(local, embeddings: embeddings, voiceprint: voiceprint, params: params)
+        // 1. Every segment at or above meSim is Me, one segment at a time. Without a voiceprint, none is.
+        var me = Set<Int>()
+        if !voiceprint.isEmpty {
+            for i in segments.indices {
+                if let e = embedded(i), SpeakerGate.cosine(e, voiceprint) >= params.meSim { me.insert(i) }
+            }
+        }
+        let meCentroid: [Float]? = me.isEmpty ? nil : SpeakerGate.centroid(me.sorted().map { embedded($0) ?? [] })
 
+        // 2. The rest with an embedding and long enough are clustered.
+        let usable = segments.indices.filter { i in
+            !me.contains(i) && embedded(i) != nil
+                && max(0, segments[i].end - segments[i].start) >= params.shortSeconds
+        }
+        let embeddings = usable.map { embedded($0) ?? [] }
+        let local = clusters(embeddings, clusterSim: params.clusterSim)
+        let centroids = local.map { SpeakerGate.centroid($0.map { embeddings[$0] }) }
+
+        // 3. A cluster that is Me by the rescue rule joins Me. It must sit nearer the Me centroid than every
+        // other cluster by meMargin (with no other cluster, the margin is not tested), and reach the
+        // voiceprint at meSim - rescueSim. Skipped with no Me centroid.
+        var rescued = Set<Int>()
+        if let meCentroid, !voiceprint.isEmpty {
+            for c in local.indices {
+                let toMe = SpeakerGate.cosine(centroids[c], meCentroid)
+                let runnerUp = local.indices
+                    .filter { $0 != c }
+                    .map { SpeakerGate.cosine(centroids[c], centroids[$0]) }
+                    .max()
+                let leads = runnerUp.map { toMe >= $0 + params.meMargin } ?? true
+                if leads, SpeakerGate.cosine(centroids[c], voiceprint) >= params.meSim - params.rescueSim {
+                    rescued.insert(c)
+                }
+            }
+        }
+
+        // 4. The other clusters are Speaker 2, 3… (1 with no voiceprint) by their first start.
         let firstStart = { (cluster: [Int]) in cluster.map { segments[usable[$0]].start }.min() ?? 0 }
         let others = local.indices
-            .filter { $0 != me }
+            .filter { !rescued.contains($0) }
             .sorted { (firstStart(local[$0]), $0) < (firstStart(local[$1]), $1) }
+
+        // Resolved labels, indexed like `segments`. Labelled segments first, then inheritance.
+        var resolved = [SpeakerLabel?](repeating: nil, count: segments.count)
+        for i in me { resolved[i] = .me }
+        for c in rescued {
+            for m in local[c] { resolved[usable[m]] = .me }
+        }
         var number = voiceprint.isEmpty ? 1 : 2
-        var clusterLabel = [SpeakerLabel](repeating: .unknown, count: local.count)
-        if let me { clusterLabel[me] = .me }
         for c in others {
-            clusterLabel[c] = .other(number)
+            for m in local[c] { resolved[usable[m]] = .other(number) }
             number += 1
         }
-
-        // Resolved labels, indexed like `segments`. Clustered segments first, then inheritance.
-        var resolved = [SpeakerLabel?](repeating: nil, count: segments.count)
-        for (c, members) in local.enumerated() {
-            for m in members { resolved[usable[m]] = clusterLabel[c] }
-        }
+        // 5. Segments with no label inherit the previous label, else the next.
         for i in segments.indices where resolved[i] == nil && i > 0 {
             resolved[i] = resolved[i - 1]
         }

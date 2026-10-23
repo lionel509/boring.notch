@@ -34,8 +34,14 @@ public struct SpeakerGate: Sendable {
     static let windowSamples = 24_000
     static let hopSamples = 24_000
     static let minSegmentSeconds = 3.0
-    /// 10 s, the model's input window.
-    static let tiledSamples = 160_000
+    /// 20 ms at 16 kHz: the frame `levelDBFS` measures.
+    static let levelFrameSamples = 320
+    /// Frames more than this far below the loudest are not voiced.
+    static let voicedRangeDB: Float = 30
+    /// The most gain `normalise` adds.
+    static let maxGainDB: Float = 30
+    /// 10 s, the model's input window. The spike sets 48 000 for `--tile 3`.
+    static var tiledSamples = 160_000
 
     let voiceprint: [Float]
     let threshold: Double
@@ -89,10 +95,45 @@ public struct SpeakerGate: Sendable {
         return starts.map { Array(samples[$0..<($0 + windowSamples)]) }
     }
 
-    /// The one scoring path: the centroid of `embed(tile(window, tiledSamples))` over the span's windows.
-    /// nil for an empty span.
+    /// Voiced level in dBFS: RMS over the 20 ms frames that sit within 30 dB of the loudest frame.
+    /// -infinity for an empty or silent span.
+    static func levelDBFS(_ samples: [Float]) -> Float {
+        var frames: [(rms: Double, from: Int, to: Int)] = []
+        var from = 0
+        while from < samples.count {
+            let to = min(from + levelFrameSamples, samples.count)
+            var sum = 0.0
+            for i in from..<to { sum += Double(samples[i]) * Double(samples[i]) }
+            frames.append(((sum / Double(to - from)).squareRoot(), from, to))
+            from = to
+        }
+        guard let loudest = frames.map({ $0.rms }).max(), loudest > 0 else { return -.infinity }
+        let cutoff = loudest * pow(10, Double(-voicedRangeDB) / 20)
+        var sum = 0.0
+        var count = 0
+        for frame in frames where frame.rms >= cutoff {
+            for i in frame.from..<frame.to { sum += Double(samples[i]) * Double(samples[i]) }
+            count += frame.to - frame.from
+        }
+        guard count > 0, sum > 0 else { return -.infinity }
+        return Float(10 * log10(sum / Double(count)))
+    }
+
+    /// Scales a span so its voiced level (`levelDBFS`) reaches `targetDBFS`. Gain is capped at +30 dB, and
+    /// samples are clamped to [-1, 1]. A span below `floorDBFS` (silence included) is returned unchanged, so
+    /// near-silence is not lifted into noise. [] for [].
+    static func normalise(_ samples: [Float], targetDBFS: Float = -26, floorDBFS: Float = -60) -> [Float] {
+        guard !samples.isEmpty else { return [] }
+        let level = levelDBFS(samples)
+        guard level >= floorDBFS else { return samples }
+        let gain = Float(pow(10, Double(min(targetDBFS - level, maxGainDB)) / 20))
+        return samples.map { min(max($0 * gain, -1), 1) }
+    }
+
+    /// The one scoring path: the span is normalised, then the centroid of `embed(tile(window, tiledSamples))`
+    /// over its windows. nil for an empty span.
     public static func segmentEmbedding(_ samples: [Float], embed: ([Float]) throws -> [Float]) throws -> [Float]? {
-        let embeddings = try windows(samples)
+        let embeddings = try windows(normalise(samples))
             .map { try embed(tile($0, to: tiledSamples)) }
             .filter { !$0.isEmpty }
         return embeddings.isEmpty ? nil : centroid(embeddings)
