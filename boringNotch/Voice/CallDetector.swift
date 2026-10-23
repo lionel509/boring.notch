@@ -49,6 +49,8 @@ final class CallDetector: ObservableObject {
 
     private var state = CallPromptLogic.State()
     private var sink: AnyCancellable?
+    /// Re-renders the hint while a prompt is up, so it follows the live fn mode.
+    private var modeSink: AnyCancellable?
     private var timeoutTask: Task<Void, Never>?
     /// Bumped on every change to the mic list, so a slow browser lookup cannot apply a stale list.
     private var generation = 0
@@ -65,11 +67,17 @@ final class CallDetector: ObservableObject {
         sink = DictationManager.shared.$micClients
             .removeDuplicates()
             .sink { [weak self] clients in self?.micClientsChanged(clients) }
+        modeSink = FnKeyMonitor.shared.$mode
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.renderPendingPrompt() }
     }
 
     func stop() {
         sink?.cancel()
         sink = nil
+        modeSink?.cancel()
+        modeSink = nil
         generation &+= 1
         var effects: [CallPromptLogic.Effect] = []
         if let shown = pending { effects.append(.hide(shown)) }
@@ -134,15 +142,18 @@ final class CallDetector: ObservableObject {
         for effect in effects {
             switch effect {
             case .show(let call):
-                // Always show the prompt. Without the fn tap the keys cannot answer, so the hint is left out and
-                // the prompt times out like any other unanswered prompt. It is never dropped silently.
-                let keysWork = FnKeyMonitor.shared.mode == .active
-                pending = call
-                BoringViewCoordinator.shared.toggleSneakPeek(
-                    status: true, type: .callPrompt, duration: CallPromptLogic.promptTimeout,
-                    icon: "phone.fill", detail: keysWork ? "fn+Y transcribe · fn+N no · fn+D never" : "",
-                    label: "Call detected: \(call.name)")
-                restartTimeout(for: call.id)
+                if Defaults[.dictateWithFn] {
+                    // Always show the prompt when fn dictation is on. Without the fn tap the keys cannot answer, so
+                    // the hint is left out, and renderPendingPrompt adds it when the mode goes active. The prompt
+                    // times out like any other unanswered prompt. It is never dropped silently.
+                    pending = call
+                    renderPendingPrompt()
+                    restartTimeout(for: call.id)
+                } else {
+                    // Fn dictation is off in Settings, so there is nothing a yes can start. Count it as unanswered
+                    // and do not mute it.
+                    perform(CallPromptLogic.timeout(&state, callID: call.id, muted: Set(Defaults[.callPromptMuted]), at: now))
+                }
 
             case .hide:
                 pending = nil
@@ -167,6 +178,17 @@ final class CallDetector: ObservableObject {
                     label: "Won't ask for \(CallApps.displayName(for: id)) again")
             }
         }
+    }
+
+    /// Draws the pending prompt. The fn+Y/N/D hint is included only while the fn tap is `.active`, and this runs again
+    /// on every fn mode change while a prompt is up, so the hint and the live keys always agree.
+    private func renderPendingPrompt() {
+        guard let call = pending else { return }
+        let keysWork = FnKeyMonitor.shared.mode == .active
+        BoringViewCoordinator.shared.toggleSneakPeek(
+            status: true, type: .callPrompt, duration: CallPromptLogic.promptTimeout,
+            icon: "phone.fill", detail: keysWork ? "fn+Y transcribe · fn+N no · fn+D never" : "",
+            label: "Call detected: \(call.name)")
     }
 
     /// Times out the prompt for `callID` after `promptTimeout`. Cancelled by any answer or hide.
