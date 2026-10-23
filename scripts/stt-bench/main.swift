@@ -3,7 +3,8 @@
 // Build: swiftc -O -swift-version 5 -framework Speech -framework AVFoundation \
 //          scripts/stt-bench/main.swift boringNotch/Voice/Logic/WordErrorRate.swift \
 //          -o ~/worktrees/boring.notch/.target/stt-bench
-// Usage: stt-bench [refs.txt]
+// Usage: stt-bench [--vp] [refs.txt]
+//   --vp  record with Apple voice processing on (echo cancellation, noise suppression), to measure music bleed.
 // Audio and transcripts stay in the scratch dir and are deleted at the end. Only the numbers table
 // is printed. The key is read from ~/.config/openrouter-key and is never printed or logged.
 import AVFoundation
@@ -41,6 +42,12 @@ func readKey() -> String? {
 func recordTake(to url: URL) throws -> Double {
     let engine = AVAudioEngine()
     let input = engine.inputNode
+    if CommandLine.arguments.contains("--vp") {
+        try input.setVoiceProcessingEnabled(true)
+        input.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+            enableAdvancedDucking: false, duckingLevel: .min)
+        print("voice processing: on")
+    }
     let inFormat = input.outputFormat(forBus: 0)
     guard let outFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000,
                                         channels: 1, interleaved: true),
@@ -116,7 +123,7 @@ func timed<T>(_ work: () async throws -> T) async rethrows -> (T, Int) {
 }
 
 func run() async {
-    let refsPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "scripts/stt-bench/refs.txt"
+    let refsPath = CommandLine.arguments.dropFirst().first { !$0.hasPrefix("--") } ?? "scripts/stt-bench/refs.txt"
     guard let refsText = try? String(contentsOfFile: refsPath, encoding: .utf8) else {
         print("cannot read \(refsPath)"); return
     }

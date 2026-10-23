@@ -7,6 +7,7 @@
 //
 
 import AVFoundation
+import Defaults
 import Foundation
 import Speech
 
@@ -51,6 +52,10 @@ final class SpeechAnalyzerSession: VoiceSession {
     /// Uptime when the engine started and when the first partial arrived, for the take report.
     private var engineStartedAt: TimeInterval?
     private var firstPartialAt: TimeInterval?
+    /// True when the take runs with Apple voice processing (echo cancellation, noise suppression, AGC).
+    private(set) var voiceProcessing = false
+    /// True when this take paused the Mac's music, so teardown resumes only what it paused.
+    private var pausedMedia = false
 
     /// Makes sure the on-device en_US model is installed. The OS fetches it once.
     /// `onDownloadStart` runs only when a download is actually needed, so the UI can say so.
@@ -80,6 +85,17 @@ final class SpeechAnalyzerSession: VoiceSession {
         }
 
         let input = engine.inputNode
+        // Before the format is read: voice processing changes the input format the tap sees.
+        if Defaults[.dictationVoiceProcessing] {
+            do {
+                try input.setVoiceProcessingEnabled(true)
+                input.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                    enableAdvancedDucking: false, duckingLevel: .min)
+                voiceProcessing = true
+            } catch {
+                voiceProcessing = false
+            }
+        }
         let inFormat = input.outputFormat(forBus: 0)
         guard inFormat.channelCount > 0, MicLevelMeter.isUsableRate(inFormat.sampleRate) else {
             throw VoiceError.noMicrophone
@@ -157,9 +173,21 @@ final class SpeechAnalyzerSession: VoiceSession {
         }
 
         do {
+            if Defaults[.dictationPausesMedia], MusicManager.shared.isPlaying {
+                MusicManager.shared.pause()
+                pausedMedia = true
+            }
             engine.prepare()
             engineStartedAt = ProcessInfo.processInfo.systemUptime
-            try engine.start()
+            do {
+                try engine.start()
+            } catch where voiceProcessing {
+                // Voice processing failed to start: retry on the raw mic so the take never fails for it.
+                try? input.setVoiceProcessingEnabled(false)
+                voiceProcessing = false
+                engine.prepare()
+                try engine.start()
+            }
             try await analyzer.start(inputSequence: stream)
         } catch {
             teardownAudio()
@@ -221,6 +249,7 @@ final class SpeechAnalyzerSession: VoiceSession {
         report.finals = finals.count
         report.partials = partialCount
         report.finalizeMs = finalizeMs
+        report.voiceProcessing = voiceProcessing
         report.volatileTail = !finalized && !lastVolatile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if let engineStartedAt, let firstPartialAt {
             report.firstPartialMs = Int((firstPartialAt - engineStartedAt) * 1000)
@@ -235,6 +264,10 @@ final class SpeechAnalyzerSession: VoiceSession {
         }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        if pausedMedia {
+            pausedMedia = false
+            MusicManager.shared.play()
+        }
         continuation?.finish()
         continuation = nil
     }
