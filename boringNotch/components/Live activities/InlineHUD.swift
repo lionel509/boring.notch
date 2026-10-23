@@ -60,7 +60,7 @@ struct InlineHUD: View {
                             Image(systemName: icon.isEmpty ? "dot.radiowaves.right" : icon)
                                 .contentTransition(.interpolate)
                                 .frame(width: 20, height: 15, alignment: .center)
-                        case .systemAlert, .dictation:
+                        case .systemAlert:
                             Image(systemName: icon.isEmpty ? "exclamationmark.triangle" : icon)
                                 .contentTransition(.interpolate)
                                 .frame(width: 20, height: 15, alignment: .center)
