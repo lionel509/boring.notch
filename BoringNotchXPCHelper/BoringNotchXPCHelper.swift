@@ -18,6 +18,8 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
     private var trackedElement: AXUIElement?
     /// The app the take was prepared for (#13 r5 / U2). Its focus is read through the app element only while it is frontmost.
     private static var preparedPid: pid_t = 0
+    /// The app whose AXManualAccessibility this helper turned on, so it can be turned back off.
+    private static var manualAXPid: pid_t = 0
 
     @objc func isAccessibilityAuthorized(with reply: @escaping (Bool) -> Void) {
         reply(AXIsProcessTrusted())
@@ -339,23 +341,27 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
 
     // MARK: - Dictation rewrite (U4)
 
-    /// The strict key from ~/.config/openrouter-key, and only that file. Never logged.
     /// Chromium and Electron apps build their accessibility tree only on request. Turns it on for `pid` when the
     /// system-wide focus cannot be read for that app, and remembers `pid` for the take. Never touches other apps.
     @objc func prepareFocus(_ pid: Int, with reply: @escaping (Bool) -> Void) {
         guard AXIsProcessTrusted(), pid > 0 else { return reply(false) }
+        Self.restoreManualAccessibility()
         Self.preparedPid = pid_t(pid)
         var systemFocusPid: pid_t = 0
         if let focused = Self.copyValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as String) {
             AXUIElementGetPid(focused as! AXUIElement, &systemFocusPid)
         }
         if systemFocusPid != pid_t(pid) {
-            AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid_t(pid)), "AXManualAccessibility" as CFString,
-                                         kCFBooleanTrue)
+            let app = AXUIElementCreateApplication(pid_t(pid))
+            if (Self.copyValue(app, "AXManualAccessibility") as? Bool) != true {
+                AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+                Self.manualAXPid = pid_t(pid)
+            }
         }
         reply(Self.currentFocusedElement() != nil)
     }
 
+    /// The strict key from ~/.config/openrouter-key, and only that file. Never logged.
     @objc func openRouterKey(with reply: @escaping (String?) -> Void) {
         let home = String(cString: getpwuid(getuid()).pointee.pw_dir)
         let path = (home as NSString).appendingPathComponent(".config/openrouter-key")
@@ -458,6 +464,17 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
 
     @objc func endTracking() {
         trackedElement = nil
+        Self.restoreManualAccessibility()
+        Self.preparedPid = 0
+    }
+
+    /// Turns AXManualAccessibility back off on the app this helper turned it on for.
+    private static func restoreManualAccessibility() {
+        if manualAXPid > 0 {
+            AXUIElementSetAttributeValue(AXUIElementCreateApplication(manualAXPid), "AXManualAccessibility" as CFString,
+                                         kCFBooleanFalse)
+            manualAXPid = 0
+        }
     }
 
     /// The tracked element while it still has focus, or nil.

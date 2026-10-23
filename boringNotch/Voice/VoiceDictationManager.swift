@@ -442,6 +442,7 @@ final class VoiceDictationManager: ObservableObject {
                 report.cleanupSkip = reason
                 if reason == .noAbortSource { report.rewrite = .noAbortSource }
             }
+            await XPCHelperClient.shared.endTracking()
             endTake(.pasted)
             if mechanism != .none { scheduleLearning(final: text, bundle: takeBundleID) }
             state = .done
@@ -617,6 +618,7 @@ final class VoiceDictationManager: ObservableObject {
     }
 
     private func fail(_ message: String, outcome: TakeOutcome = .failed) {
+        Task { await XPCHelperClient.shared.endTracking() }
         ceilingTask?.cancel()
         startGraceTask?.cancel()
         statusTask?.cancel()
