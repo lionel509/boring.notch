@@ -192,6 +192,9 @@ final class SpeechAnalyzerSession: VoiceSession {
                 try? input.setVoiceProcessingEnabled(false)
                 voiceProcessing = false
                 engine.prepare()
+                let rawFormat = input.outputFormat(forBus: 0)
+                tapChannels = Int(rawFormat.channelCount)
+                tapSampleRate = Int(rawFormat.sampleRate)
                 try engine.start()
             }
             try await analyzer.start(inputSequence: stream)
