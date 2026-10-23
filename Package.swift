@@ -5,6 +5,9 @@ import PackageDescription
 let package = Package(
     name: "VoiceDictationLogic",
     platforms: [.macOS(.v14)],
+    products: [
+        .library(name: "VoiceDictationLogic", targets: ["VoiceDictationLogic"]),
+    ],
     targets: [
         .target(name: "VoiceDictationLogic", path: "boringNotch/Voice/Logic"),
         .testTarget(
