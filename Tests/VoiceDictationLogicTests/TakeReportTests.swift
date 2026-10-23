@@ -61,4 +61,23 @@ final class TakeReportTests: XCTestCase {
         report.voiceIsolation = true
         XCTAssertTrue(report.line.hasSuffix("gate=on dropped=3 vi=on"), report.line)
     }
+
+    /// #17 U1: the speaker take fields print only once a take sets them, so unset takes keep the old line.
+    func testSpeakerTakeFieldsPrintWhenSet() {
+        var report = TakeReport()
+        report.record(meter: MicLevelMeter())
+        XCTAssertFalse(report.line.contains("mode="), report.line)
+        report.speakerMode = "everyoneLabelled"
+        report.speakers = 2
+        report.cpuPct = 4.5
+        report.rssDeltaMB = 12
+        report.voiceIsolation = true
+        report.ducking = "mid"
+        XCTAssertTrue(
+            report.line.hasSuffix("mode=everyoneLabelled speakers=2 cpu=4.5% rss=+12MB iso=on duck=mid"),
+            report.line
+        )
+        report.rssDeltaMB = -3
+        XCTAssertTrue(report.line.contains("rss=-3MB"), report.line)
+    }
 }

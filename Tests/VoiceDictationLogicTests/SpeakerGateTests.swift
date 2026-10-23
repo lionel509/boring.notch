@@ -46,6 +46,7 @@ final class SpeakerGateTests: XCTestCase {
         XCTAssertEqual(SpeakerGate.tile([], to: 4), [])
     }
 
+    /// #17 U1: no overlap (hop = window), so each STT final is embedded once.
     func testWindowsAreOnePointFiveSecondsWithShortSpansAsOneWindow() {
         XCTAssertEqual(SpeakerGate.windows([]), [])
         let short = [Float](repeating: 0.5, count: 8_000)
@@ -54,9 +55,10 @@ final class SpeakerGateTests: XCTestCase {
         let three = (0..<48_000).map { Float($0) }
         let windows = SpeakerGate.windows(three)
         XCTAssertTrue(windows.allSatisfy { $0.count == SpeakerGate.windowSamples })
-        // Hop is 0.75 s over 3 s: starts 0, 12000, 24000. The last window ends at the span end.
-        XCTAssertEqual(windows.count, 3)
+        // No overlap: windows start at 0 and 24000, and the last window ends at the span end.
+        XCTAssertEqual(windows.count, 2)
         XCTAssertEqual(windows.last?.last, 47_999)
+        XCTAssertEqual(windows.last?.first, 24_000)
     }
 
     // MARK: segmentEmbedding and score
