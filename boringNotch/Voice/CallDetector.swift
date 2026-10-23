@@ -25,7 +25,7 @@ final class StubCallTranscriber: CallTranscriber {
     func begin(_ call: DetectedCall) {
         BoringViewCoordinator.shared.toggleSneakPeek(
             status: true, type: .dictation, duration: 2, icon: "waveform",
-            label: "Transcribe \(call.name)", detail: "stub, #17 plugs in here")
+            detail: "stub, #17 plugs in here", label: "Transcribe \(call.name)")
     }
 
     func end(_ call: DetectedCall) {}
