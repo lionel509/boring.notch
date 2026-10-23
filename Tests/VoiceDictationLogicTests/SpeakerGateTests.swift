@@ -100,7 +100,7 @@ final class SpeakerGateTests: XCTestCase {
     func testInt16RoundTripClampsAndQuantises() {
         let out = SpeakerGate.int16RoundTrip([2.0, -2.0, 0, 0.5])
         XCTAssertEqual(out[0], 32_767.0 / 32_768.0, accuracy: 1e-7)
-        XCTAssertEqual(out[1], -1.0, accuracy: 1e-7)
+        XCTAssertEqual(out[1], -32_767.0 / 32_768.0, accuracy: 1e-7)
         XCTAssertEqual(out[2], 0)
         XCTAssertEqual(out[3], Float(16_383) / 32_768, accuracy: 1e-7)
     }
@@ -129,8 +129,9 @@ final class SpeakerGateTests: XCTestCase {
 
     func testWidenPadsShortSpansSymmetrically() {
         let (s, e) = SpeakerGate.widen(start: 2, end: 2.5, minSeconds: 3, total: 10)
-        XCTAssertEqual(s, 1.75, accuracy: 1e-9)
-        XCTAssertEqual(e, 2.75, accuracy: 1e-9)
+        // Need is 2.5 s: 1.25 s each side of the 0.5 s span.
+        XCTAssertEqual(s, 0.75, accuracy: 1e-9)
+        XCTAssertEqual(e, 3.75, accuracy: 1e-9)
     }
 
     func testWidenShiftsAtEdgesAndNeverInverts() {

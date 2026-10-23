@@ -64,6 +64,10 @@ struct TakeReport {
     /// #13 r5 / U2: whether an OpenRouter key was read at the press, and whether voice processing is on.
     var hasKey = false
     var voiceProcessing = false
+    /// #17 U1: the speaker gate, the segments it dropped, and whether the mic runs in Voice Isolation.
+    var speakerGate = false
+    var speakerDropped = -1
+    var voiceIsolation = false
 
     /// Copies what the mic meter measured.
     mutating func record(meter: MicLevelMeter) {
@@ -129,6 +133,9 @@ struct TakeReport {
             "cloud=\(cloud ? 1 : 0)",
             "key=\(hasKey ? 1 : 0)",
             "vp=\(voiceProcessing ? 1 : 0)",
+            "gate=\(speakerGate ? "on" : "off")",
+            "dropped=\(speakerDropped)",
+            "vi=\(voiceIsolation ? "on" : "off")",
         ].joined(separator: " ")
     }
 }
