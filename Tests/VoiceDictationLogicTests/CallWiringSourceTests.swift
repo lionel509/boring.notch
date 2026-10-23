@@ -29,6 +29,18 @@ final class CallWiringSourceTests: XCTestCase {
         XCTAssertEqual(count, 2, "call detection must reuse the two existing mic listeners, not add more")
     }
 
+    /// F3: a browser lookup must check its generation before it writes the per-pid caches.
+    func testBrowserLookupChecksGenerationBeforeCaching() throws {
+        let text = try appSource("boringNotch/Voice/CallDetector.swift")
+        let lookup = try XCTUnwrap(text.range(of: "let titles = await"), "browser lookup moved; re-check this test")
+        let insert = try XCTUnwrap(text.range(of: "self.resolvedPids.insert(client.pid)"), "cache write moved; re-check this test")
+        let guardCheck = try XCTUnwrap(
+            text.range(of: "guard gen == self.generation else { return }", range: lookup.upperBound..<text.endIndex),
+            "no generation guard after the lookup")
+        XCTAssertLessThan(guardCheck.upperBound, insert.lowerBound,
+                          "a stale lookup can write resolvedPids before the generation guard")
+    }
+
     func testCallDetectorHasNoTimerOrListener() throws {
         let text = try appSource("boringNotch/Voice/CallDetector.swift")
         XCTAssertFalse(text.contains("Timer"), "CallDetector must not poll with a Timer")
