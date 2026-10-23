@@ -557,6 +557,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 on ? FnKeyMonitor.shared.start() : FnKeyMonitor.shared.disable()
             }
         }
+        // Call detection rides on the mic listeners. start() and stop() are idempotent.
+        Task { @MainActor in
+            for await on in Defaults.updates(.detectCalls) {
+                on ? CallDetector.shared.start() : CallDetector.shared.stop()
+            }
+        }
         // An Accessibility grant made in System Settings while the app runs is picked up on return.
         Task { @MainActor in
             for await _ in NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification) {

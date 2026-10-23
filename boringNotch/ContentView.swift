@@ -371,8 +371,8 @@ struct ContentView: View {
     private var peekTakesIntrinsicWidth: Bool {
         guard coordinator.sneakPeek.show, vm.notchState == .closed else { return false }
         // A dictation notice is always the row, so it skips the style check the music row makes.
-        guard coordinator.sneakPeek.type == .music || coordinator.sneakPeek.type == .dictation else { return true }
-        return !vm.hideOnClosed && (coordinator.sneakPeek.type == .dictation || Defaults[.sneakPeekStyles] == .standard)
+        guard coordinator.sneakPeek.type == .music || coordinator.sneakPeek.type == .dictation || coordinator.sneakPeek.type == .callPrompt else { return true }
+        return !vm.hideOnClosed && (coordinator.sneakPeek.type == .dictation || coordinator.sneakPeek.type == .callPrompt || Defaults[.sneakPeekStyles] == .standard)
     }
 
     func NotchLayout() -> some View {
@@ -416,7 +416,7 @@ struct ContentView: View {
                             .frame(width: 76, alignment: .trailing)
                         }
                         .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
-                      } else if coordinator.sneakPeek.show && (Defaults[.inlineHUD] || coordinator.sneakPeek.type.isAnnouncement) && (coordinator.sneakPeek.type != .music) && (coordinator.sneakPeek.type != .battery) && (coordinator.sneakPeek.type != .dictation) && vm.notchState == .closed {
+                      } else if coordinator.sneakPeek.show && (Defaults[.inlineHUD] || coordinator.sneakPeek.type.isAnnouncement) && (coordinator.sneakPeek.type != .music) && (coordinator.sneakPeek.type != .battery) && (coordinator.sneakPeek.type != .dictation) && (coordinator.sneakPeek.type != .callPrompt) && vm.notchState == .closed {
                           InlineHUD(type: $coordinator.sneakPeek.type, value: $coordinator.sneakPeek.value, icon: $coordinator.sneakPeek.icon, detail: $coordinator.sneakPeek.detail, detailSecondary: $coordinator.sneakPeek.detailSecondary, label: $coordinator.sneakPeek.label,
                             tint: $coordinator.sneakPeek.tint, hoverAnimation: $isHovering, gestureProgress: $gestureProgress)
                               .transition(.opacity)
@@ -482,6 +482,22 @@ struct ContentView: View {
                           }
                           // A dictation notice: the same row as the song change, with the notice's icon and text.
                           else if coordinator.sneakPeek.type == .dictation {
+                              if vm.notchState == .closed && !vm.hideOnClosed {
+                                  HStack(alignment: .center) {
+                                      Image(systemName: coordinator.sneakPeek.icon)
+                                      Text(coordinator.sneakPeek.detail.isEmpty
+                                           ? coordinator.sneakPeek.label
+                                           : coordinator.sneakPeek.label + " · " + coordinator.sneakPeek.detail)
+                                          .font(.body)
+                                          .lineLimit(1)
+                                  }
+                                  .foregroundStyle(.gray)
+                                  .padding(.bottom, 10)
+                              }
+                          }
+                          // The call prompt is the same row. It has its own branch because the dictation
+                          // row's text is pinned by DictationRowSourceTests.
+                          else if coordinator.sneakPeek.type == .callPrompt {
                               if vm.notchState == .closed && !vm.hideOnClosed {
                                   HStack(alignment: .center) {
                                       Image(systemName: coordinator.sneakPeek.icon)

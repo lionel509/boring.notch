@@ -138,6 +138,10 @@ extension Defaults.Keys {
     /// it is asked for.
     static let showDictationActivity = Key<Bool>("showDictationActivity", default: false)
     static let dictateWithFn = Key<Bool>("dictateWithFn", default: true)
+    /// Ask once, when a call app starts using the microphone, whether to transcribe it (fn+Y / fn+N / fn+D).
+    static let detectCalls = Key<Bool>("detectCalls", default: true)
+    /// Call apps (`CallApps` ids) the notch has been told never to ask about again (fn+D).
+    static let callPromptMuted = Key<[String]>("callPromptMuted", default: [])
     /// Set when the last take reached the mic but it delivered only silence (a stale mic grant
     /// after a rebuild). Cleared by the next take that hears signal. Drives the Settings hint.
     static let dictationMicSilent = Key<Bool>("dictationMicSilent", default: false)
