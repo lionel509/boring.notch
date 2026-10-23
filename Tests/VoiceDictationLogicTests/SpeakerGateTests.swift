@@ -97,6 +97,48 @@ final class SpeakerGateTests: XCTestCase {
         XCTAssertNil(try SpeakerGate.score(segment: [], voiceprint: [1, 0, 0], embed: fakeEmbed))
     }
 
+    // MARK: levelDBFS and normalise (#17 U1)
+
+    func testLevelDBFSOfAConstantSpanIsItsAmplitudeInDecibels() {
+        XCTAssertEqual(SpeakerGate.levelDBFS([Float](repeating: 0.1, count: 16_000)), -20, accuracy: 0.01)
+        XCTAssertEqual(SpeakerGate.levelDBFS([]), -Float.infinity)
+        XCTAssertEqual(SpeakerGate.levelDBFS([Float](repeating: 0, count: 1_600)), -Float.infinity)
+    }
+
+    func testLevelDBFSIgnoresFramesMoreThanThirtyDecibelsBelowTheLoudest() {
+        // Half at 0.5 (-6.02 dBFS), half at 0.0001 (-80 dBFS): only the loud half is voiced.
+        let loud = [Float](repeating: 0.5, count: 16_000)
+        let quiet = [Float](repeating: 0.0001, count: 16_000)
+        XCTAssertEqual(SpeakerGate.levelDBFS(loud + quiet), SpeakerGate.levelDBFS(loud), accuracy: 0.01)
+    }
+
+    func testNormaliseRaisesAQuietSpanToTheTargetLevel() {
+        let quiet = [Float](repeating: 0.25, count: 16_000)  // -12.04 dBFS
+        let out = SpeakerGate.normalise(quiet)
+        XCTAssertEqual(out.count, quiet.count)
+        XCTAssertEqual(SpeakerGate.levelDBFS(out), -26, accuracy: 0.01)
+        XCTAssertEqual(out[0], Float(pow(10, -26.0 / 20)), accuracy: 1e-5)
+    }
+
+    func testNormaliseAttenuatesALoudSpan() {
+        let loud = [Float](repeating: 0.9, count: 16_000)
+        XCTAssertEqual(SpeakerGate.levelDBFS(SpeakerGate.normalise(loud)), -26, accuracy: 0.01)
+    }
+
+    func testNormaliseClampsTheGainToThirtyDecibels() {
+        // -58 dBFS needs +32 dB to reach -26. The gain stops at +30, so the output sits at -28 dBFS.
+        let faint = [Float](repeating: Float(pow(10, -58.0 / 20)), count: 16_000)
+        XCTAssertEqual(SpeakerGate.levelDBFS(SpeakerGate.normalise(faint)), -28, accuracy: 0.01)
+    }
+
+    func testNormaliseLeavesSpansBelowTheFloorAndSilenceAlone() {
+        let faint = [Float](repeating: Float(pow(10, -61.0 / 20)), count: 16_000)
+        XCTAssertEqual(SpeakerGate.normalise(faint), faint)
+        let silent = [Float](repeating: 0, count: 1_600)
+        XCTAssertEqual(SpeakerGate.normalise(silent), silent)
+        XCTAssertEqual(SpeakerGate.normalise([]), [])
+    }
+
     // MARK: int16RoundTrip
 
     func testInt16RoundTripClampsAndQuantises() {

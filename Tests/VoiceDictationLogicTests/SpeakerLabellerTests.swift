@@ -127,6 +127,62 @@ final class SpeakerLabellerTests: XCTestCase {
         XCTAssertEqual(labels, [.other(1), .other(2)])
     }
 
+    // MARK: label v2 (#17 U1): per-segment Me, rescue merge, numbering
+
+    func testEverySegmentAtOrAboveMeSimIsMeEvenWhenClusteringWouldSplitIt() {
+        // y is 0.35 from the voiceprint and 0.35 from x, so the clusters stay apart. Each one is still Me.
+        let v: [Float] = [1, 0, 0]
+        let segments = [
+            seg("x", 0, emb: [1, 0, 0]),
+            seg("y", 2, emb: [0.35, 0.9368, 0]),
+            seg("z", 4, emb: [0, 0, 1]),
+        ]
+        let labels = SpeakerLabeller.label(segments, voiceprint: v, params: params).map { $0.label }
+        XCTAssertEqual(labels, [.me, .me, .other(2)])
+    }
+
+    func testRescueMergesAClusterThatLeadsAndIsCloseEnoughToTheVoiceprint() {
+        // a is 0.25 from the voiceprint (under meSim, so not Me per segment), 0.25 from the Me centroid and
+        // 0 from b. 0.25 >= 0 + meMargin 0.10 and 0.25 >= meSim - rescueSim 0.15, so a is rescued. b is not.
+        let v: [Float] = [1, 0, 0]
+        let segments = [
+            seg("me", 0, emb: [1, 0, 0]),
+            seg("a1", 2, emb: [0.25, 0, 0.968]),
+            seg("a2", 4, emb: [0.25, 0, 0.968]),
+            seg("b", 6, emb: [0, 1, 0]),
+        ]
+        let labels = SpeakerLabeller.label(segments, voiceprint: v, params: params).map { $0.label }
+        XCTAssertEqual(labels, [.me, .me, .me, .other(2)])
+    }
+
+    func testRescueRefusesAClusterThatIsNotClearlyNearerMeThanAnother() {
+        // a and b are 0.30 apart, so they stay two clusters. a's cosine with Me (0.25) does not beat its
+        // cosine with b (0.30) by meMargin 0.10, and b's cosine with Me is no better than a's, so neither
+        // is rescued and they keep their numbers. The rescue is not a bare floor check.
+        let v: [Float] = [1, 0, 0]
+        let segments = [
+            seg("me", 0, emb: [1, 0, 0]),
+            seg("a1", 2, emb: [0.25, 0, 0.968]),
+            seg("a2", 4, emb: [0.25, 0, 0.968]),
+            seg("b", 6, emb: [0.25, 0.937, 0.245]),
+        ]
+        let labels = SpeakerLabeller.label(segments, voiceprint: v, params: params).map { $0.label }
+        XCTAssertEqual(labels, [.me, .other(2), .other(2), .other(3)])
+    }
+
+    func testRescueRefusesAClusterFarFromTheVoiceprintEvenWhenItIsNearerMe() {
+        // The Me centroid sits at [0.8, 0.6, 0], so the cluster at [0, 0.6, 0.8] is 0.36 from it and
+        // nothing else exists. Its cosine with the voiceprint is 0, under meSim - rescueSim, so it stays other.
+        let v: [Float] = [1, 0, 0]
+        let segments = [
+            seg("me", 0, emb: [0.8, 0.6, 0]),
+            seg("c1", 2, emb: [0, 0.6, 0.8]),
+            seg("c2", 4, emb: [0, 0.6, 0.8]),
+        ]
+        let labels = SpeakerLabeller.label(segments, voiceprint: v, params: params).map { $0.label }
+        XCTAssertEqual(labels, [.me, .other(2), .other(2)])
+    }
+
     // MARK: kept and droppedRanges
 
     private var mixed: [LabelledSegment] {
