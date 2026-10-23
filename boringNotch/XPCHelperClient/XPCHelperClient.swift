@@ -283,6 +283,19 @@ final class XPCHelperClient: NSObject {
         }
     }
 
+    /// Window titles of the app that owns pid, or nil when unreadable (no Accessibility, or the helper is down).
+    nonisolated func windowTitles(pid: Int) async -> [String]? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let joined: String? = try await service.withContinuation { service, continuation in
+                service.windowTitles(pid) { joined in continuation.resume(returning: joined) }
+            }
+            return joined?.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        } catch {
+            return nil
+        }
+    }
+
     /// Turns on the frontmost app's accessibility tree at press time. True if a focused element now resolves.
     nonisolated func prepareFocus(pid: Int) async -> Bool {
         do {

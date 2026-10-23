@@ -380,6 +380,20 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         reply(value)
     }
 
+    /// Window titles of the app that owns `pid`, for call detection. Nothing is logged here.
+    @objc func windowTitles(_ pid: Int, with reply: @escaping (String?) -> Void) {
+        guard AXIsProcessTrusted(), pid > 0 else { return reply(nil) }
+        let owner = Self.responsibleProcess(of: pid_t(pid)) ?? pid_t(pid)
+        let app = AXUIElementCreateApplication(owner)
+        AXUIElementSetMessagingTimeout(app, 0.5)
+        let windows = (Self.copyValue(app, kAXWindowsAttribute as String) as? [AXUIElement]) ?? []
+        let titles = windows
+            .compactMap { Self.copyString($0, kAXTitleAttribute as String) }
+            .filter { !$0.isEmpty }
+            .prefix(20)
+        reply(titles.joined(separator: "\n"))
+    }
+
     @objc func beginTracking(with reply: @escaping (String?) -> Void) {
         trackedElement = nil
         guard AXIsProcessTrusted(), let element = Self.currentFocusedElement() else { return reply(nil) }
