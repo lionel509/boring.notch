@@ -101,4 +101,30 @@ final class RewriteGateTests: XCTestCase {
         }
         XCTAssertEqual(cases, fields.count * 16)
     }
+
+    /// #17 U1 step 7: a labelled take is never rewritten, on-device or cloud, and the reason is logged.
+    func testLabelledModeSkipsTheRewrite() {
+        let d = RewriteGate.decide(field: field(), cloudOn: true, hasKey: true, cleanupOn: true,
+                                   keyAbortLive: true, mode: .everyoneLabelled, takeSeconds: 5)
+        XCTAssertEqual(d, .skip(.labelled))
+    }
+
+    /// Plain modes are unaffected by the labelled skip.
+    func testPlainModesStillRun() {
+        for mode in [SpeakerMode.onlyMe, .everyoneButMe] {
+            let d = RewriteGate.decide(field: field(), cloudOn: true, hasKey: true, cleanupOn: true,
+                                       keyAbortLive: true, mode: mode, takeSeconds: 5)
+            XCTAssertEqual(d, .run(.ax), "\(mode)")
+        }
+    }
+
+    /// The WAV is truncated at CloudConfig.maxTakeSeconds, so a longer take is not rewritten.
+    func testTakeLongerThanTheCloudCapSkips() {
+        let over = RewriteGate.decide(field: field(), cloudOn: true, hasKey: true, cleanupOn: true,
+                                      keyAbortLive: true, mode: .onlyMe, takeSeconds: 181)
+        XCTAssertEqual(over, .skip(.tooLong))
+        let atCap = RewriteGate.decide(field: field(), cloudOn: true, hasKey: true, cleanupOn: true,
+                                       keyAbortLive: true, mode: .onlyMe, takeSeconds: 180)
+        XCTAssertEqual(atCap, .run(.ax))
+    }
 }

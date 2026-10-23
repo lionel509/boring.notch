@@ -46,6 +46,7 @@ final class SpeakerGateTests: XCTestCase {
         XCTAssertEqual(SpeakerGate.tile([], to: 4), [])
     }
 
+    /// #17 U1: no overlap (hop = window), so each STT final is embedded once.
     func testWindowsAreOnePointFiveSecondsWithShortSpansAsOneWindow() {
         XCTAssertEqual(SpeakerGate.windows([]), [])
         let short = [Float](repeating: 0.5, count: 8_000)
@@ -54,9 +55,10 @@ final class SpeakerGateTests: XCTestCase {
         let three = (0..<48_000).map { Float($0) }
         let windows = SpeakerGate.windows(three)
         XCTAssertTrue(windows.allSatisfy { $0.count == SpeakerGate.windowSamples })
-        // Hop is 0.75 s over 3 s: starts 0, 12000, 24000. The last window ends at the span end.
-        XCTAssertEqual(windows.count, 3)
+        // No overlap: windows start at 0 and 24000, and the last window ends at the span end.
+        XCTAssertEqual(windows.count, 2)
         XCTAssertEqual(windows.last?.last, 47_999)
+        XCTAssertEqual(windows.last?.first, 24_000)
     }
 
     // MARK: segmentEmbedding and score
@@ -76,23 +78,68 @@ final class SpeakerGateTests: XCTestCase {
     }
 
     func testShortSpanIsTiledAndScoredAsOneWindow() throws {
+        // Held at the -26 dBFS target so normalise is the identity here (#17 U1).
+        let amp = Float(pow(10, -26.0 / 20))
         var calls = 0
-        let e = try SpeakerGate.segmentEmbedding([Float](repeating: 0.25, count: 8_000)) { input in
+        let e = try SpeakerGate.segmentEmbedding([Float](repeating: amp, count: 8_000)) { input in
             calls += 1
             return try self.fakeEmbed(input)
         }
         XCTAssertEqual(calls, 1)
         let vector = try XCTUnwrap(e)
-        // Fake embedding [0.25, 1, 0] is L2-normalised by the centroid.
-        XCTAssertEqual(vector[0], Float(0.25 / sqrt(1.0625)), accuracy: 1e-5)
-        XCTAssertEqual(vector[1], Float(1 / sqrt(1.0625)), accuracy: 1e-5)
+        // Fake embedding [amp, 1, 0] is L2-normalised by the centroid.
+        XCTAssertEqual(vector[0], Float(Double(amp) / sqrt(Double(amp) * Double(amp) + 1)), accuracy: 1e-5)
+        XCTAssertEqual(vector[1], Float(1 / sqrt(Double(amp) * Double(amp) + 1)), accuracy: 1e-5)
     }
 
     func testScoreIsCosineOfSegmentWithVoiceprint() throws {
-        let segment = [Float](repeating: 0.25, count: 8_000)
+        let amp = Float(pow(10, -26.0 / 20))
+        let segment = [Float](repeating: amp, count: 8_000)
         let score = try SpeakerGate.score(segment: segment, voiceprint: [1, 0, 0], embed: fakeEmbed)
-        XCTAssertEqual(try XCTUnwrap(score), 0.25 / sqrt(1.0625), accuracy: 1e-5)
+        XCTAssertEqual(try XCTUnwrap(score), Double(amp) / sqrt(Double(amp) * Double(amp) + 1), accuracy: 1e-5)
         XCTAssertNil(try SpeakerGate.score(segment: [], voiceprint: [1, 0, 0], embed: fakeEmbed))
+    }
+
+    // MARK: levelDBFS and normalise (#17 U1)
+
+    func testLevelDBFSOfAConstantSpanIsItsAmplitudeInDecibels() {
+        XCTAssertEqual(SpeakerGate.levelDBFS([Float](repeating: 0.1, count: 16_000)), -20, accuracy: 0.01)
+        XCTAssertEqual(SpeakerGate.levelDBFS([]), -Float.infinity)
+        XCTAssertEqual(SpeakerGate.levelDBFS([Float](repeating: 0, count: 1_600)), -Float.infinity)
+    }
+
+    func testLevelDBFSIgnoresFramesMoreThanThirtyDecibelsBelowTheLoudest() {
+        // Half at 0.5 (-6.02 dBFS), half at 0.0001 (-80 dBFS): only the loud half is voiced.
+        let loud = [Float](repeating: 0.5, count: 16_000)
+        let quiet = [Float](repeating: 0.0001, count: 16_000)
+        XCTAssertEqual(SpeakerGate.levelDBFS(loud + quiet), SpeakerGate.levelDBFS(loud), accuracy: 0.01)
+    }
+
+    func testNormaliseRaisesAQuietSpanToTheTargetLevel() {
+        let quiet = [Float](repeating: 0.25, count: 16_000)  // -12.04 dBFS
+        let out = SpeakerGate.normalise(quiet)
+        XCTAssertEqual(out.count, quiet.count)
+        XCTAssertEqual(SpeakerGate.levelDBFS(out), -26, accuracy: 0.01)
+        XCTAssertEqual(out[0], Float(pow(10, -26.0 / 20)), accuracy: 1e-5)
+    }
+
+    func testNormaliseAttenuatesALoudSpan() {
+        let loud = [Float](repeating: 0.9, count: 16_000)
+        XCTAssertEqual(SpeakerGate.levelDBFS(SpeakerGate.normalise(loud)), -26, accuracy: 0.01)
+    }
+
+    func testNormaliseClampsTheGainToThirtyDecibels() {
+        // -58 dBFS needs +32 dB to reach -26. The gain stops at +30, so the output sits at -28 dBFS.
+        let faint = [Float](repeating: Float(pow(10, -58.0 / 20)), count: 16_000)
+        XCTAssertEqual(SpeakerGate.levelDBFS(SpeakerGate.normalise(faint)), -28, accuracy: 0.01)
+    }
+
+    func testNormaliseLeavesSpansBelowTheFloorAndSilenceAlone() {
+        let faint = [Float](repeating: Float(pow(10, -61.0 / 20)), count: 16_000)
+        XCTAssertEqual(SpeakerGate.normalise(faint), faint)
+        let silent = [Float](repeating: 0, count: 1_600)
+        XCTAssertEqual(SpeakerGate.normalise(silent), silent)
+        XCTAssertEqual(SpeakerGate.normalise([]), [])
     }
 
     // MARK: int16RoundTrip
