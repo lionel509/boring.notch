@@ -30,9 +30,9 @@ public struct SpeakerGate: Sendable {
     /// Placeholder until the spike's gate rule (U0 step 5) sets the real value.
     static let defaultThreshold = 0.30
     static let sampleRate = 16_000
-    /// 1.5 s windows, 0.75 s hop.
+    /// 1.5 s windows with no overlap (#17 U1): each STT final is embedded once.
     static let windowSamples = 24_000
-    static let hopSamples = 12_000
+    static let hopSamples = 24_000
     static let minSegmentSeconds = 3.0
     /// 10 s, the model's input window.
     static let tiledSamples = 160_000
@@ -79,7 +79,7 @@ public struct SpeakerGate: Sendable {
         return (0..<count).map { samples[$0 % samples.count] }
     }
 
-    /// 1.5 s windows at a 0.75 s hop, the last one ending at the span's end. A span shorter than one
+    /// 1.5 s windows at a 1.5 s hop, the last one ending at the span's end. A span shorter than one
     /// window is one window. [] for an empty span.
     static func windows(_ samples: [Float]) -> [[Float]] {
         guard !samples.isEmpty else { return [] }

@@ -67,12 +67,12 @@ final class TakeReportTests: XCTestCase {
         var report = TakeReport()
         report.record(meter: MicLevelMeter())
         XCTAssertFalse(report.line.contains("mode="), report.line)
-        report.speakerMode = "everyoneLabelled"
+        report.speakerMode = .everyoneLabelled
         report.speakers = 2
         report.cpuPct = 4.5
         report.rssDeltaMB = 12
         report.voiceIsolation = true
-        report.ducking = "mid"
+        report.ducking = .mid
         XCTAssertTrue(
             report.line.hasSuffix("mode=everyoneLabelled speakers=2 cpu=4.5% rss=+12MB iso=on duck=mid"),
             report.line

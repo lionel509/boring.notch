@@ -1,5 +1,10 @@
 import Foundation
 
+/// How much the Mac's other audio is turned down during a take (#17 U1). `.mid` is the voice-processing level.
+enum DuckLevel: String {
+    case off, mid
+}
+
 enum TakeOutcome: String {
     case pasted
     case discarded
@@ -68,6 +73,13 @@ struct TakeReport {
     var speakerGate = false
     var speakerDropped = -1
     var voiceIsolation = false
+    /// #17 U1: the keep mode, the number of speakers labelled, the process CPU share of the take (%) and the
+    /// resident-memory change over it (MB), and the ducking level. Printed only once a take sets `speakerMode`.
+    var speakerMode: SpeakerMode? = nil
+    var speakers = -1
+    var cpuPct: Double = -1
+    var rssDeltaMB = -1
+    var ducking: DuckLevel = .off
 
     /// Copies what the mic meter measured.
     mutating func record(meter: MicLevelMeter) {
@@ -87,7 +99,7 @@ struct TakeReport {
 
     var line: String {
         let floorText = floorDB.map { String(format: "%.1f", $0) } ?? "none"
-        return [
+        return ([
             "take outcome=\(outcome.rawValue)",
             "verdict=\(verdict.rawValue)",
             "auth=\(authStatus)",
@@ -136,6 +148,19 @@ struct TakeReport {
             "gate=\(speakerGate ? "on" : "off")",
             "dropped=\(speakerDropped)",
             "vi=\(voiceIsolation ? "on" : "off")",
-        ].joined(separator: " ")
+        ] + speakerWords).joined(separator: " ")
+    }
+
+    /// The #17 U1 keys, empty until a take sets the mode, so takes without a speaker mode keep their old line.
+    private var speakerWords: [String] {
+        guard let speakerMode else { return [] }
+        return [
+            "mode=\(speakerMode.rawValue)",
+            "speakers=\(speakers)",
+            "cpu=\(String(format: "%.1f", cpuPct))%",
+            "rss=\(rssDeltaMB >= 0 ? "+" : "")\(rssDeltaMB)MB",
+            "iso=\(voiceIsolation ? "on" : "off")",
+            "duck=\(ducking.rawValue)",
+        ]
     }
 }
