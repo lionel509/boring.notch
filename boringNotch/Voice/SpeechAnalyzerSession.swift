@@ -96,7 +96,13 @@ final class SpeechAnalyzerSession: VoiceSession {
                 voiceProcessing = false
             }
         }
-        let inFormat = input.outputFormat(forBus: 0)
+        var inFormat = input.outputFormat(forBus: 0)
+        if voiceProcessing, !(inFormat.channelCount > 0 && MicLevelMeter.isUsableRate(inFormat.sampleRate)) {
+            // A voice-processing format the take can't use: fall back to the raw mic instead of failing the take.
+            try? input.setVoiceProcessingEnabled(false)
+            voiceProcessing = false
+            inFormat = input.outputFormat(forBus: 0)
+        }
         guard inFormat.channelCount > 0, MicLevelMeter.isUsableRate(inFormat.sampleRate) else {
             throw VoiceError.noMicrophone
         }
