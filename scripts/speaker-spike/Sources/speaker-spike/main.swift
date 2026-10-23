@@ -14,8 +14,7 @@ let scratch = URL(
     isDirectory: true)
 let clipSeconds = 8.0
 let sampleRate = 16_000.0
-let windowSeconds = 1.5
-let hopSeconds = 0.75
+var windowSeconds = 1.5  // --window overrides; hop is half the window (1.5 s -> 0.75 s)
 let tiledSamples = 160_000  // 10 s, the length the embedding model is run at (what embedSpans does)
 
 let promptA = "The quick brown fox jumps over the lazy dog while the notch listens to every word I say."
@@ -183,7 +182,7 @@ func centroid(_ embeddings: [[Float]]) -> [Float] {
 
 func windows(_ x: [Float]) -> [[Float]] {
     let w = Int(windowSeconds * sampleRate)
-    let h = Int(hopSeconds * sampleRate)
+    let h = Int(windowSeconds / 2 * sampleRate)
     guard x.count >= w else { return [] }
     var out: [[Float]] = []
     var s = 0
@@ -233,7 +232,36 @@ func fmt(_ v: Double) -> String { v.isNaN ? "  n/a" : String(format: "%.3f", v) 
 
 // MARK: - Main
 
-let replay = CommandLine.arguments.contains("--replay")
+let args = CommandLine.arguments
+let replay = args.contains("--replay")
+func flagValue(_ flag: String) -> String? {
+    guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
+    return args[i + 1]
+}
+if let v = flagValue("--window") {
+    guard let w = Double(v), w >= 0.5 else { fputs("bad --window (seconds, >= 0.5)\n", stderr); exit(2) }
+    windowSeconds = w
+}
+var enrolList = [1]  // 1-based clip numbers
+if let v = flagValue("--enrol") {
+    enrolList = v.split(separator: ",").compactMap { Int($0) }
+    if enrolList.isEmpty || enrolList.contains(where: { !(1...clipPlan.count).contains($0) }) {
+        fputs("bad --enrol (comma list of clip numbers 1-5)\n", stderr)
+        exit(2)
+    }
+}
+enum FloorOpt { case off, auto, fixed(Double) }
+var floorOpt = FloorOpt.off
+if let v = flagValue("--floor") {
+    if v == "auto" {
+        floorOpt = .auto
+    } else if let d = Double(v) {
+        floorOpt = .fixed(d)
+    } else {
+        fputs("bad --floor (auto or dBFS number)\n", stderr)
+        exit(2)
+    }
+}
 try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
 func clipURL(_ n: Int) -> URL { scratch.appendingPathComponent("clip\(n).wav") }
 
@@ -280,32 +308,68 @@ func embed(_ window: [Float]) throws -> [Float] {
     return e
 }
 
-// Voiceprint: L2-normalised mean of clip 1's window embeddings.
-let clip1Windows = windows(clips[0])
-let clip1Embeddings = try clip1Windows.map { try embed($0) }
-let voiceprint = centroid(clip1Embeddings)
+// Speech floor: a window whose RMS is below the floor is dropped from the voiceprint and from scoring.
+// auto = median RMS of the enrol clips' windows minus 20 dB.
+let enrolIdx = enrolList.map { $0 - 1 }
+let allWindows = clips.map { windows($0) }
+let floorDB: Double? = {
+    switch floorOpt {
+    case .off: return nil
+    case .fixed(let v): return v
+    case .auto: return percentile(enrolIdx.flatMap { allWindows[$0].map { rmsDBFS($0) } }, 0.5) - 20
+    }
+}()
+let floorLabel: String = {
+    switch floorOpt {
+    case .off: return "off"
+    case .auto: return "auto, enrol median - 20 dB = \(String(format: "%.1f", floorDB ?? .nan)) dBFS"
+    case .fixed: return "\(String(format: "%.1f", floorDB ?? .nan)) dBFS"
+    }
+}()
 
-var rows: [(label: String, sims: [Double], level: Double)] = []
-for (i, clip) in clips.enumerated() {
-    let ws = i == 0 ? clip1Windows : windows(clip)
-    let embs = i == 0 ? clip1Embeddings : try ws.map { try embed($0) }
-    let sims = embs.map { cosine($0, voiceprint) }
-    rows.append((clipPlan[i].label, sims, rmsDBFS(clip)))
+var embs: [[[Float]]] = []
+var droppedCounts: [Int] = []
+for ws in allWindows {
+    let keep = ws.filter { floorDB == nil || rmsDBFS($0) >= floorDB! }
+    droppedCounts.append(ws.count - keep.count)
+    embs.append(try keep.map { try embed($0) })
 }
 
-print("Speaker spike (#17 U0): voiceprint = clip 1, \(clip1Windows.count) windows of \(windowSeconds) s, hop \(hopSeconds) s")
-print("clip  condition                       win  min    median max    level dBFS")
+// Voiceprint. One enrol clip: centroid of that clip (clip 1 is scored against itself, as in round 1).
+// Several enrol clips: a scored enrol clip is left out of its own voiceprint (leave-one-out).
+func voiceprintFor(_ i: Int) -> ([Float], String) {
+    if enrolIdx.count == 1 { return (centroid(embs[enrolIdx[0]]), "enrol 1 (self)") }
+    if enrolIdx.contains(i) {
+        let others = enrolIdx.filter { $0 != i }
+        return (centroid(others.flatMap { embs[$0] }), "LOO from \(others.map { String($0 + 1) }.joined(separator: "+"))")
+    }
+    return (centroid(enrolIdx.flatMap { embs[$0] }), "enrol \(enrolList.map { String($0) }.joined(separator: "+"))")
+}
+
+var rows: [(label: String, sims: [Double], level: Double, vp: String)] = []
+for i in 0..<clips.count {
+    let (vp, vpLabel) = voiceprintFor(i)
+    let sims = embs[i].map { cosine($0, vp) }
+    rows.append((clipPlan[i].label, sims, rmsDBFS(clips[i]), vpLabel))
+}
+
+print("Speaker spike (#17 U0) replay")
+print("window \(String(format: "%.2f", windowSeconds)) s, hop \(String(format: "%.2f", windowSeconds / 2)) s | enrol \(enrolList.map { String($0) }.joined(separator: ",")) | speech floor \(floorLabel)")
+print("clip  condition                       kept drop  voiceprint          min    median max    level dBFS")
 for (i, r) in rows.enumerated() {
     let label = r.label.padding(toLength: 27, withPad: " ", startingAt: 0)
+    let vp = r.vp.padding(toLength: 18, withPad: " ", startingAt: 0)
     let line = "\(i + 1)     \(label)"
-        + " \(String(format: "%3d", r.sims.count))  \(fmt(r.sims.min() ?? .nan))  \(fmt(percentile(r.sims, 0.5)))"
-        + "  \(fmt(r.sims.max() ?? .nan))  \(String(format: "%.1f", r.level))"
+        + " \(String(format: "%4d", r.sims.count)) \(String(format: "%4d", droppedCounts[i]))  \(vp)"
+        + " \(fmt(r.sims.min() ?? .nan))  \(fmt(percentile(r.sims, 0.5)))  \(fmt(r.sims.max() ?? .nan))"
+        + "  \(String(format: "%.1f", r.level))"
     print(line)
 }
 
 let clip2Min = rows[1].sims.min() ?? .nan
 let impostorMax = max(rows[2].sims.max() ?? -1, rows[4].sims.max() ?? -1)
 let gap = clip2Min - impostorMax
+let clip4Max = rows[3].sims.max() ?? .nan
 let medianMs = percentile(timingsMs, 0.5)
 let p95Ms = percentile(timingsMs, 0.95)
 let rssDelta = rssAfter - rssBefore
@@ -315,7 +379,7 @@ let candidate = ((clip2Min + impostorMax) / 2 * 100).rounded() / 100
 print("")
 print("gate gap  min(clip 2) - max(clip 3, clip 5) = \(fmt(gap))   (rule: >= 0.15)")
 print("candidate threshold  midpoint, 2 dp = \(String(format: "%.2f", candidate))")
-print("clip 4 (overlap) max = \(fmt(rows[3].sims.max() ?? .nan))   reported, not gated")
+print("clip 4 (overlap) max = \(fmt(clip4Max))   reported, not gated")
 print("embed wall ms  median \(String(format: "%.1f", medianMs))  p95 \(String(format: "%.1f", p95Ms))  n=\(timingsMs.count)   (rule: median <= 80)")
 print("RSS MB  before load \(String(format: "%.0f", rssBefore))  after load \(String(format: "%.0f", rssAfter))  delta \(String(format: "%.0f", rssDelta))   (rule: <= 150)")
 print("model load s \(String(format: "%.1f", loadSeconds))   model cache \(String(format: "%.1f", cacheMB)) MB")
