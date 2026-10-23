@@ -41,6 +41,20 @@ final class CallWiringSourceTests: XCTestCase {
                           "a stale lookup can write resolvedPids before the generation guard")
     }
 
+    /// Fix round: the prompt must still show when the fn tap is not active. Without the tap the keys cannot
+    /// answer, but the prompt is still shown and times out like any other. It is never dropped silently.
+    func testCallPromptShowsWhenTheFnTapIsNotActive() throws {
+        let text = try appSource("boringNotch/Voice/CallDetector.swift")
+        let start = try XCTUnwrap(text.range(of: "case .show(let call):"), "show effect moved; re-check this test")
+        let end = try XCTUnwrap(text.range(of: "case .hide:", range: start.upperBound..<text.endIndex),
+                                "hide effect moved; re-check this test")
+        let body = String(text[start.lowerBound..<end.lowerBound])
+        XCTAssertFalse(body.contains("mode"), "the show effect still depends on the fn tap mode")
+        XCTAssertFalse(body.contains("continue"), "the show effect still drops the prompt without showing it")
+        XCTAssertTrue(body.contains("pending = call"), "the show effect does not set pending")
+        XCTAssertTrue(body.contains("toggleSneakPeek"), "the show effect does not show the notch prompt")
+    }
+
     func testCallDetectorHasNoTimerOrListener() throws {
         let text = try appSource("boringNotch/Voice/CallDetector.swift")
         XCTAssertFalse(text.contains("Timer"), "CallDetector must not poll with a Timer")
