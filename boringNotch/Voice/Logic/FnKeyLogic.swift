@@ -2,8 +2,8 @@ import Foundation
 
 /// Pure fn-key classifier. It turns raw key events from the session event tap into
 /// `DictationHotkeyLogic` events and says whether the tap should swallow the event.
-/// It swallows only the Space of an fn+Space chord. The fn key itself always passes
-/// through, so the system Globe action is left alone.
+/// It swallows the Space of an fn+Space chord, and Y/N/D while a call prompt is armed and fn
+/// is held alone. The fn key itself always passes through, so the system Globe action is left alone.
 enum FnKeyLogic {
     static let fnKeyCode = 63
     static let globeKeyCode = 179
@@ -22,6 +22,8 @@ enum FnKeyLogic {
     struct Output: Equatable {
         var event: DictationHotkeyLogic.Event?
         var swallow: Bool
+        /// A fresh Y/N/D press answering the armed call prompt. Nothing else sets it.
+        var answer: CallAnswer? = nil
 
         static let pass = Output(event: nil, swallow: false)
     }
@@ -38,6 +40,10 @@ enum FnKeyLogic {
         var swallowingSpace = false
         /// The last fn hold ended as a latched take, so the reducer is still hands-free.
         var handsFreeOpen = false
+        /// A call prompt is on screen, so Y/N/D answer it while fn is held alone.
+        var promptArmed = false
+        /// The Y/N/D keyDown was swallowed, so its keyUp (and repeats) must be too.
+        var swallowingAnswerKey: Int? = nil
 
         init() {}
     }
@@ -89,12 +95,26 @@ enum FnKeyLogic {
                 return Output(event: nil, swallow: true)
             }
             if keyCode == fnKeyCode || keyCode == globeKeyCode { return .pass }
-            guard s.fnHeld && !s.chorded else { return .pass }
-            return Output(event: chord(&s), swallow: false)
+            var answer: CallAnswer? = nil
+            var swallow = false
+            if let a = CallAnswer(keyCode: keyCode) {
+                if !isRepeat { s.swallowingAnswerKey = nil }            // a fresh press clears a lost keyUp
+                if !isRepeat && s.promptArmed && s.fnHeld && !s.chorded {
+                    answer = a
+                    s.swallowingAnswerKey = keyCode
+                }
+                swallow = s.swallowingAnswerKey == keyCode
+            }
+            let event = (s.fnHeld && !s.chorded) ? chord(&s) : nil     // exactly the old event
+            return Output(event: event, swallow: swallow, answer: answer)
 
         case let .keyUp(keyCode):
             if keyCode == spaceKeyCode && s.swallowingSpace {
                 s.swallowingSpace = false
+                return Output(event: nil, swallow: true)
+            }
+            if let k = s.swallowingAnswerKey, keyCode == k {
+                s.swallowingAnswerKey = nil
                 return Output(event: nil, swallow: true)
             }
             return .pass
