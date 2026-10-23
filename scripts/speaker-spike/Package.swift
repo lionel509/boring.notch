@@ -5,12 +5,16 @@ let package = Package(
     name: "speaker-spike",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.17.0")
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.17.0"),
+        .package(name: "VoiceDictationLogic", path: "../.."),
     ],
     targets: [
         .executableTarget(
             name: "speaker-spike",
-            dependencies: [.product(name: "FluidAudio", package: "FluidAudio")]
+            dependencies: [
+                .product(name: "FluidAudio", package: "FluidAudio"),
+                .product(name: "VoiceDictationLogic", package: "VoiceDictationLogic"),
+            ]
         )
     ]
 )

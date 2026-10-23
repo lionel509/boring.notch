@@ -1,12 +1,19 @@
-// Speaker-verification spike (#17, U0): the real-mic gate for the dictation speaker gate.
-// Records five 8 s clips from the default mic (or replays the saved ones with --replay), embeds
-// 1.5 s windows with FluidAudio's WeSpeaker model, and prints similarity numbers only. No audio
-// content or audio path is printed; clips stay in the scratch dir.
-// Record: cd scripts/speaker-spike && swift run -c release --scratch-path ~/worktrees/boring.notch/.target/speaker-spike
-// Replay: the same command with --replay appended (no mic, no prompts).
+// Speaker-verification spike (#17, U0 round 3): the real-mic check for the dictation speaker gate.
+// Record: swift run -c release --scratch-path ~/worktrees/boring.notch/.target/speaker-spike -- --record 6,7,8,9,10,11 --stt --segments
+//   --record N,N   records those scenes (1-11). Scenes 6-11 are taken twice back to back: VP off, then VP on.
+//   --vp A,B,C     capture variants probed for 3 s each, in order (default A,B,C). The first variant that
+//                  delivers buffers records the VP-on takes and is named in the table header.
+// Replay: the same command with --replay, or with no --record: no mic, no prompts, scores the clips on disk.
+// Scenes 1-5 are the VP-off clips from rounds 1-2 and are not re-recorded unless asked.
+// Every score is SpeakerGate (VoiceDictationLogic) on audio after an Int16 round trip, live and replay alike,
+// so a live run and a --replay of the same files print the same determinism hash.
+// Prints numbers only: no transcript text, no audio content, no audio paths. Clips stay in the scratch dir.
 import AVFoundation
+import CryptoKit
 import FluidAudio
 import Foundation
+import Speech
+import VoiceDictationLogic
 
 let scratch = URL(
     fileURLWithPath: (NSHomeDirectory() as NSString)
@@ -14,77 +21,297 @@ let scratch = URL(
     isDirectory: true)
 let clipSeconds = 8.0
 let sampleRate = 16_000.0
-var windowSeconds = 1.5  // --window overrides; hop is half the window (1.5 s -> 0.75 s)
-let tiledSamples = 160_000  // 10 s, the length the embedding model is run at (what embedSpans does)
+let segmentLengths = [2, 3, 5, 8]
+let budgetFraction = 0.08  // of one core, during a take (issue #17 CPU budget)
+let budgetRSSMB = 80.0
 
 let promptA = "The quick brown fox jumps over the lazy dog while the notch listens to every word I say."
 let promptB = "Please schedule the meeting for Tuesday afternoon and send the notes to the whole team."
 let promptC = "Seven green apples, two blue bicycles and one very tired cat were waiting at the station."
 
-let clipPlan: [(label: String, instruction: String)] = [
-    ("1 enrol, quiet, Lionel", "Room quiet. Lionel reads: \(promptA)"),
-    ("2 quiet, Lionel", "Room quiet. Lionel reads: \(promptB)"),
-    ("3 song, Lionel silent", "Play a song on the Mac. Lionel stays silent."),
-    ("4 song + Lionel (overlap)", "Same song still playing. Lionel reads: \(promptC)"),
-    ("5 other voice", "Play a talking video (not Lionel). Lionel stays silent."),
+struct Scene {
+    let number: Int
+    let label: String
+    let instruction: String
+    let prompt: String  // what Lionel reads; "" when he stays silent
+    let pair: Bool  // recorded twice, VP off then VP on
+}
+
+let scenes: [Scene] = [
+    Scene(number: 1, label: "enrol, quiet, Lionel", instruction: "Room quiet. Lionel reads: \(promptA)",
+          prompt: promptA, pair: false),
+    Scene(number: 2, label: "quiet, Lionel", instruction: "Room quiet. Lionel reads: \(promptB)",
+          prompt: promptB, pair: false),
+    Scene(number: 3, label: "song, Lionel silent", instruction: "Play a song on the Mac. Lionel stays silent.",
+          prompt: "", pair: false),
+    Scene(number: 4, label: "song + Lionel (overlap)", instruction: "Same song still playing. Lionel reads: \(promptC)",
+          prompt: promptC, pair: false),
+    Scene(number: 5, label: "other voice", instruction: "Play a talking video (not Lionel). Lionel stays silent.",
+          prompt: "", pair: false),
+    Scene(number: 6, label: "enrol through VP, Lionel",
+          instruction: "Room quiet, phone away. Lionel reads: \(promptA)", prompt: promptA, pair: true),
+    Scene(number: 7, label: "lawnmower on phone + Lionel",
+          instruction: "Lawnmower or fan video on the phone beside the Mac, at speaking volume. Lionel reads over it: \(promptB)",
+          prompt: promptB, pair: true),
+    Scene(number: 8, label: "talker on phone + Lionel",
+          instruction: "Talking video on the phone beside the Mac (not Lionel). Lionel reads over it: \(promptC)",
+          prompt: promptC, pair: true),
+    Scene(number: 9, label: "talker on phone, Lionel silent",
+          instruction: "The same talking video on the phone. Lionel stays silent.", prompt: "", pair: true),
+    Scene(number: 10, label: "song on Mac + Lionel",
+          instruction: "Song on the Mac speakers. Lionel reads over it: \(promptA)", prompt: promptA, pair: true),
+    Scene(number: 11, label: "song on Mac, Lionel silent",
+          instruction: "Song on the Mac speakers. Lionel stays silent.", prompt: "", pair: true),
 ]
+
+enum Variant: String {
+    case off, a = "A", b = "B", c = "C"
+}
 
 enum SpikeError: Error, CustomStringConvertible {
     case noInput
-    case missingClip(Int)
+    case missingClip(String)
     case conversion(String)
+    case badFlag(String)
 
     var description: String {
         switch self {
-        case .noInput: return "no usable input device (sample rate 0). Check the mic and the Terminal mic grant."
-        case .missingClip(let n): return "clip \(n) is missing. Record without --replay first."
+        case .noInput: return "no usable input device or no buffers. Check the mic and the Terminal mic grant."
+        case .missingClip(let n): return "\(n) is missing. Record it first with --record."
         case .conversion(let why): return "audio conversion failed: \(why)"
+        case .badFlag(let why): return why
         }
     }
 }
 
-// MARK: - Recording
+/// Capture numbers for one take, saved beside the clip as clipN[-vp].json. No audio content.
+struct CaptureMeta: Codable {
+    var variant: String
+    var micMode: String
+    var inputBefore: String
+    var inputAfter: String
+    var tapFormat: String
+    var buffers: Int
+    var channelRMS: [Double]  // dBFS per tap channel, first buffer; channel 0 is recorded
+    var levelDBFS: Double
+    var captureCPUFraction: Double  // process CPU seconds per wall second during the take
+    var wallSeconds: Double
+}
 
-final class ClipBuffer: @unchecked Sendable {
+struct LoadedClip {
+    let scene: Scene
+    let vp: Bool
+    let name: String
+    let samples: [Float]  // 16 kHz, Int16 round trip
+    let meta: CaptureMeta?
+}
+
+struct ClipResult {
+    let clip: LoadedClip
+    let byLength: [Int: [Double]]  // segment seconds -> hop-1 s segment scores
+    let embedFraction: Double  // CPU per audio second embedding the whole clip (one core if scored live)
+    let peakMB: Double
+}
+
+struct SttRow {
+    let words: Int
+    let wer: Double?
+    let leak: Int
+    let failed: Bool
+}
+
+// MARK: - CPU, memory, formatting
+
+func cpuSeconds() -> Double {
+    var ru = rusage()
+    getrusage(RUSAGE_SELF, &ru)
+    return Double(ru.ru_utime.tv_sec) + Double(ru.ru_utime.tv_usec) / 1e6
+        + Double(ru.ru_stime.tv_sec) + Double(ru.ru_stime.tv_usec) / 1e6
+}
+
+func peakRSSMB() -> Double {
+    var ru = rusage()
+    getrusage(RUSAGE_SELF, &ru)
+    return Double(ru.ru_maxrss) / 1_048_576  // bytes on macOS
+}
+
+func residentMB() -> Double {
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size)
+    let kr = withUnsafeMutablePointer(to: &info) { ptr in
+        ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { raw in
+            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), raw, &count)
+        }
+    }
+    return kr == KERN_SUCCESS ? Double(info.resident_size) / 1_048_576 : -1
+}
+
+func directorySizeMB(_ url: URL) -> Double {
+    guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+    var total = 0
+    for case let f as URL in e {
+        total += (try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+    }
+    return Double(total) / 1_048_576
+}
+
+func rmsDBFS(_ x: [Float]) -> Double {
+    guard !x.isEmpty else { return -120 }
+    var sum = 0.0
+    for v in x { sum += Double(v) * Double(v) }
+    let rms = sqrt(sum / Double(x.count))
+    return rms > 0 ? 20 * log10(rms) : -120
+}
+
+func percentile(_ values: [Double], _ p: Double) -> Double {
+    guard !values.isEmpty else { return .nan }
+    let s = values.sorted()
+    let idx = min(s.count - 1, Int((p * Double(s.count - 1)).rounded(.up)))
+    return s[idx]
+}
+
+func fmt(_ v: Double) -> String { v.isNaN ? "  n/a" : String(format: "%.3f", v) }
+
+func formatText(_ f: AVAudioFormat) -> String { String(format: "%.0f Hz %dch", f.sampleRate, Int(f.channelCount)) }
+
+func tokens(_ text: String) -> [String] {
+    text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map { String($0) }
+}
+
+func clipName(_ scene: Int, vp: Bool) -> String { "clip\(scene)\(vp ? "-vp" : "")" }
+func clipURL(_ name: String) -> URL { scratch.appendingPathComponent("\(name).wav") }
+func metaURL(_ name: String) -> URL { scratch.appendingPathComponent("\(name).json") }
+
+// MARK: - Capture
+
+final class TapBox: @unchecked Sendable {
     let lock = NSLock()
     var samples: [Float] = []
     var rate: Double = 0
+    var buffers = 0
+    var channelRMS: [Double] = []
 }
 
-func recordClip(seconds: Double) throws -> [Float] {
+func describe(_ input: AVAudioInputNode) -> String {
+    "in \(formatText(input.inputFormat(forBus: 0))) out \(formatText(input.outputFormat(forBus: 0)))"
+}
+
+func micModeName() -> String {
+    guard #available(macOS 26.0, *) else { return "n/a" }
+    switch AVCaptureDevice.activeMicrophoneMode {
+    case .standard: return "standard"
+    case .voiceIsolation: return "voiceIsolation"
+    case .wideSpectrum: return "wideSpectrum"
+    @unknown default: return "other"
+    }
+}
+
+/// One take at the mic. off: plain capture. A: VP on, tap format read after prepare. B: A plus the VPIO render
+/// side (mixer to output at volume 0). C: B, with Voice Isolation picked by Lionel in the system panel.
+/// Returns 16 kHz mono from channel 0 (the MicChannelPick.monoSource rule); per-channel RMS is recorded.
+func capture(seconds: Double, variant: Variant) throws -> (samples: [Float], meta: CaptureMeta) {
     let engine = AVAudioEngine()
     let input = engine.inputNode
     guard input.inputFormat(forBus: 0).sampleRate > 0 else { throw SpikeError.noInput }
-    let box = ClipBuffer()
-    input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, _ in
+    let before = describe(input)
+    if variant != .off {
+        try input.setVoiceProcessingEnabled(true)
+        input.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+            enableAdvancedDucking: false, duckingLevel: .min)
+    }
+    let after = describe(input)
+    if variant == .b || variant == .c {
+        engine.connect(input, to: engine.mainMixerNode, format: nil)
+        engine.mainMixerNode.outputVolume = 0
+    }
+    engine.prepare()
+    let tapFormat = input.outputFormat(forBus: 0)
+    guard tapFormat.sampleRate > 0 else { throw SpikeError.noInput }
+
+    let box = TapBox()
+    input.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { buffer, _ in
         guard let data = buffer.floatChannelData else { return }
         let frames = Int(buffer.frameLength)
         let channels = Int(buffer.format.channelCount)
         guard frames > 0, channels > 0 else { return }
-        var chunk = [Float](repeating: 0, count: frames)
-        for c in 0..<channels {
-            let p = data[c]
-            for i in 0..<frames { chunk[i] += p[i] }
-        }
-        let scale = 1 / Float(channels)
-        for i in 0..<frames { chunk[i] *= scale }
         box.lock.lock()
+        if box.buffers == 0 {
+            box.channelRMS = (0..<channels).map { c in
+                rmsDBFS(Array(UnsafeBufferPointer(start: data[c], count: frames)))
+            }
+        }
+        box.buffers += 1
         box.rate = buffer.format.sampleRate
-        box.samples.append(contentsOf: chunk)
+        box.samples.append(contentsOf: UnsafeBufferPointer(start: data[0], count: frames))
         box.lock.unlock()
     }
+    let cpu0 = cpuSeconds()
+    let wall0 = Date()
     try engine.start()
+    let mode = micModeName()
     Thread.sleep(forTimeInterval: seconds)
     input.removeTap(onBus: 0)
     engine.stop()
+    let wall = Date().timeIntervalSince(wall0)
+    let cpu = cpuSeconds() - cpu0
 
     box.lock.lock()
     let raw = box.samples
     let rate = box.rate
+    let buffers = box.buffers
+    let rms = box.channelRMS
     box.lock.unlock()
-    guard rate > 0, !raw.isEmpty else { throw SpikeError.noInput }
-    return try resample(raw, from: rate, to: sampleRate)
+    var samples: [Float] = []
+    if !raw.isEmpty && rate > 0 { samples = try resample(raw, from: rate, to: sampleRate) }
+    let meta = CaptureMeta(
+        variant: variant.rawValue, micMode: mode, inputBefore: before, inputAfter: after,
+        tapFormat: formatText(tapFormat), buffers: buffers, channelRMS: rms,
+        levelDBFS: rmsDBFS(samples), captureCPUFraction: wall > 0 ? cpu / wall : 0, wallSeconds: wall)
+    return (samples, meta)
 }
+
+func printProbe(_ m: CaptureMeta) {
+    let chans = m.channelRMS.map { String(format: "%.1f", $0) }.joined(separator: " ")
+    print("  \(m.variant)  \(m.inputBefore) | after VP \(m.inputAfter) | tap \(m.tapFormat) | buffers \(m.buffers)"
+        + " | ch dBFS \(chans) | level \(String(format: "%.1f", m.levelDBFS)) | mic \(m.micMode)")
+}
+
+/// Probes the capture variants for 3 s each, in order. Returns the first that delivers buffers.
+func probeCaptureVariants(_ variants: [Variant]) throws -> (variant: Variant, meta: CaptureMeta)? {
+    print("Capture probe, 3 s per variant, first that delivers buffers is used: \(variants.map(\.rawValue).joined(separator: ","))")
+    for v in variants {
+        if v == .c {
+            print("Variant C: the system mic panel opens. Pick Voice Isolation in Control Center, then press Return.")
+            AVCaptureDevice.showSystemUserInterface(.microphoneModes)
+            _ = readLine()
+        }
+        do {
+            let take = try capture(seconds: 3, variant: v)
+            printProbe(take.meta)
+            if take.meta.buffers > 0 { return (v, take.meta) }
+        } catch {
+            print("  \(v.rawValue)  failed: \(error)")
+        }
+    }
+    return nil
+}
+
+func recordTake(_ scene: Scene, vp: Bool, variant: Variant) throws {
+    let name = clipName(scene.number, vp: vp)
+    print("Take \(name) [\(scene.label)] \(vp ? "VP on, variant \(variant.rawValue)" : "VP off")")
+    print("  \(scene.instruction)")
+    print("  Press Return to start.", terminator: " ")
+    _ = readLine()
+    print("  Recording...")
+    let take = try capture(seconds: clipSeconds, variant: variant)
+    guard take.meta.buffers > 0 else { throw SpikeError.noInput }
+    try saveClip(take.samples, to: clipURL(name))
+    try JSONEncoder().encode(take.meta).write(to: metaURL(name))
+    print("  Saved. level \(String(format: "%.1f", take.meta.levelDBFS)) dBFS, capture CPU "
+        + "\(String(format: "%.1f", take.meta.captureCPUFraction * 100))% of one core\n")
+}
+
+// MARK: - Files
 
 func resample(_ raw: [Float], from rate: Double, to target: Double) throws -> [Float] {
     if rate == target { return raw }
@@ -142,151 +369,108 @@ func loadClip(_ url: URL) throws -> [Float] {
     return Array(UnsafeBufferPointer(start: buf.floatChannelData![0], count: Int(buf.frameLength)))
 }
 
-// MARK: - Math helpers
+// MARK: - STT (lifted from scripts/stt-bench/main.swift)
 
-func rmsDBFS(_ x: [Float]) -> Double {
-    guard !x.isEmpty else { return -120 }
-    var sum = 0.0
-    for v in x { sum += Double(v) * Double(v) }
-    let rms = sqrt(sum / Double(x.count))
-    return rms > 0 ? 20 * log10(rms) : -120
-}
-
-func cosine(_ a: [Float], _ b: [Float]) -> Double {
-    var dot = 0.0, na = 0.0, nb = 0.0
-    for i in 0..<min(a.count, b.count) {
-        let x = Double(a[i]), y = Double(b[i])
-        dot += x * y
-        na += x * x
-        nb += y * y
-    }
-    guard na > 0, nb > 0 else { return 0 }
-    return dot / (sqrt(na) * sqrt(nb))
-}
-
-func l2Normalised(_ v: [Float]) -> [Float] {
-    var n = 0.0
-    for x in v { n += Double(x) * Double(x) }
-    let norm = Float(sqrt(n))
-    guard norm > 0 else { return v }
-    return v.map { $0 / norm }
-}
-
-func centroid(_ embeddings: [[Float]]) -> [Float] {
-    guard let first = embeddings.first else { return [] }
-    var sum = [Double](repeating: 0, count: first.count)
-    for e in embeddings { for i in 0..<min(e.count, sum.count) { sum[i] += Double(e[i]) } }
-    let mean = sum.map { Float($0 / Double(embeddings.count)) }
-    return l2Normalised(mean)
-}
-
-func windows(_ x: [Float]) -> [[Float]] {
-    let w = Int(windowSeconds * sampleRate)
-    let h = Int(windowSeconds / 2 * sampleRate)
-    guard x.count >= w else { return [] }
-    var out: [[Float]] = []
-    var s = 0
-    while s + w <= x.count {
-        out.append(Array(x[s..<(s + w)]))
-        s += h
-    }
-    return out
-}
-
-func tile(_ x: [Float], to count: Int) -> [Float] {
-    guard !x.isEmpty else { return [] }
-    var out: [Float] = []
-    out.reserveCapacity(count)
-    while out.count < count { out.append(contentsOf: x.prefix(count - out.count)) }
-    return out
-}
-
-func percentile(_ values: [Double], _ p: Double) -> Double {
-    guard !values.isEmpty else { return .nan }
-    let s = values.sorted()
-    let idx = min(s.count - 1, Int((p * Double(s.count - 1)).rounded(.up)))
-    return s[idx]
-}
-
-func residentMB() -> Double {
-    var info = mach_task_basic_info()
-    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size)
-    let kr = withUnsafeMutablePointer(to: &info) { ptr in
-        ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { raw in
-            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), raw, &count)
+@available(macOS 26.0, *)
+func appleTranscribe(_ url: URL) async throws -> String {
+    let transcriber = SpeechTranscriber(locale: Locale(identifier: "en-US"), preset: .transcription)
+    let analyzer = SpeechAnalyzer(modules: [transcriber])
+    let audio = try AVAudioFile(forReading: url)
+    let collector = Task { () -> String in
+        var text = ""
+        for try await result in transcriber.results where result.isFinal {
+            text += String(result.text.characters)
         }
+        return text
     }
-    return kr == KERN_SUCCESS ? Double(info.resident_size) / 1_048_576 : -1
+    _ = try await analyzer.analyzeSequence(from: audio)
+    try await analyzer.finalizeAndFinishThroughEndOfInput()
+    return try await collector.value
 }
 
-func directorySizeMB(_ url: URL) -> Double {
-    guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
-    var total = 0
-    for case let f as URL in e {
-        total += (try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+/// Leak = transcript words not matched by the prompt (multiset). Only the counts leave this function.
+@available(macOS 26.0, *)
+func sttRow(_ c: LoadedClip) async -> SttRow {
+    do {
+        let text = try await appleTranscribe(clipURL(c.name))
+        let hyp = tokens(text)
+        var left: [String: Int] = [:]
+        for w in tokens(c.scene.prompt) { left[w, default: 0] += 1 }
+        var leak = 0
+        for w in hyp {
+            if let n = left[w], n > 0 { left[w] = n - 1 } else { leak += 1 }
+        }
+        let wer: Double? = c.scene.prompt.isEmpty
+            ? nil : WordErrorRate.wer(reference: c.scene.prompt, hypothesis: text)
+        return SttRow(words: hyp.count, wer: wer, leak: leak, failed: false)
+    } catch {
+        return SttRow(words: 0, wer: nil, leak: 0, failed: true)
     }
-    return Double(total) / 1_048_576
 }
 
-func fmt(_ v: Double) -> String { v.isNaN ? "  n/a" : String(format: "%.3f", v) }
-
-// MARK: - Main
+// MARK: - Arguments
 
 let args = CommandLine.arguments
-let replay = args.contains("--replay")
 func flagValue(_ flag: String) -> String? {
     guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
     return args[i + 1]
 }
-if let v = flagValue("--window") {
-    guard let w = Double(v), w >= 0.5 else { fputs("bad --window (seconds, >= 0.5)\n", stderr); exit(2) }
-    windowSeconds = w
-}
-var enrolList = [1]  // 1-based clip numbers
-if let v = flagValue("--enrol") {
-    enrolList = v.split(separator: ",").compactMap { Int($0) }
-    if enrolList.isEmpty || enrolList.contains(where: { !(1...clipPlan.count).contains($0) }) {
-        fputs("bad --enrol (comma list of clip numbers 1-5)\n", stderr)
-        exit(2)
-    }
-}
-enum FloorOpt { case off, auto, fixed(Double) }
-var floorOpt = FloorOpt.off
-if let v = flagValue("--floor") {
-    if v == "auto" {
-        floorOpt = .auto
-    } else if let d = Double(v) {
-        floorOpt = .fixed(d)
-    } else {
-        fputs("bad --floor (auto or dBFS number)\n", stderr)
-        exit(2)
-    }
-}
-try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
-func clipURL(_ n: Int) -> URL { scratch.appendingPathComponent("clip\(n).wav") }
+let replay = args.contains("--replay")
+let wantSegments = args.contains("--segments")
+let wantSTT = args.contains("--stt")
 
-var clips: [[Float]] = []
-if replay {
-    for n in 1...clipPlan.count {
-        guard FileManager.default.fileExists(atPath: clipURL(n).path) else { throw SpikeError.missingClip(n) }
-        clips.append(try loadClip(clipURL(n)))
+var recordList: [Int]? = nil
+if let v = flagValue("--record") {
+    let nums = v.split(separator: ",").compactMap { Int($0) }
+    guard !nums.isEmpty, nums.allSatisfy({ (1...scenes.count).contains($0) }) else {
+        throw SpikeError.badFlag("bad --record (comma list of scene numbers 1-11)")
     }
-    print("Replaying \(clips.count) saved clips (no mic).")
-} else {
-    print("Recording \(clipPlan.count) clips of \(Int(clipSeconds)) s from the default mic.")
-    print("For each clip: read the instruction, press Return, then the clip records.\n")
-    for (i, step) in clipPlan.enumerated() {
-        print("Clip \(i + 1)/\(clipPlan.count) [\(step.label)]")
-        print("  \(step.instruction)")
-        print("  Press Return to start.", terminator: " ")
-        _ = readLine()
-        print("  Recording...")
-        let samples = try recordClip(seconds: clipSeconds)
-        try saveClip(samples, to: clipURL(i + 1))
-        print("  Saved. level \(String(format: "%.1f", rmsDBFS(samples))) dBFS\n")
-        clips.append(samples)
+    recordList = nums
+}
+if replay && recordList != nil { throw SpikeError.badFlag("--replay and --record cannot be combined") }
+var variantList: [Variant] = [.a, .b, .c]
+if let v = flagValue("--vp") {
+    let parsed = v.split(separator: ",").compactMap { Variant(rawValue: String($0).uppercased()) }
+    guard !parsed.isEmpty, !parsed.contains(.off) else { throw SpikeError.badFlag("bad --vp (comma list of A, B, C)") }
+    variantList = parsed
+}
+
+// MARK: - Record
+
+try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+
+if let list = recordList {
+    print("Recording scenes \(list.map(String.init).joined(separator: ",")) from the default mic. "
+        + "Read each instruction, press Return, then the take records 8 s.\n")
+    var chosen: (variant: Variant, meta: CaptureMeta)? = nil
+    if list.contains(where: { scenes[$0 - 1].pair }) {
+        chosen = try probeCaptureVariants(variantList)
+        if chosen == nil { print("No capture variant delivered buffers. VP-on takes are skipped.\n") }
+    }
+    for n in list {
+        let scene = scenes[n - 1]
+        try recordTake(scene, vp: false, variant: .off)
+        if scene.pair, let c = chosen { try recordTake(scene, vp: true, variant: c.variant) }
     }
 }
+
+// MARK: - Load (live and replay take the same path: file, then Int16 round trip)
+
+var loaded: [LoadedClip] = []
+for scene in scenes {
+    for vp in (scene.pair ? [false, true] : [false]) {
+        let name = clipName(scene.number, vp: vp)
+        guard FileManager.default.fileExists(atPath: clipURL(name).path) else { continue }
+        let raw = try loadClip(clipURL(name))
+        let meta = try? JSONDecoder().decode(CaptureMeta.self, from: Data(contentsOf: metaURL(name)))
+        loaded.append(LoadedClip(scene: scene, vp: vp, name: name,
+                                 samples: SpeakerGate.int16RoundTrip(raw), meta: meta))
+    }
+}
+guard loaded.contains(where: { $0.name == "clip1" }) else { throw SpikeError.missingClip("clip 1") }
+print("Scoring \(loaded.count) clips (no mic).\n")
+
+// MARK: - Model
 
 let rssBefore = residentMB()
 let modelDir = DiarizerModels.defaultModelsDirectory()
@@ -296,98 +480,203 @@ let diarizer = DiarizerManager()
 diarizer.initialize(models: models)
 let loadDuration = loadStart.duration(to: .now)
 let loadSeconds = Double(loadDuration.components.seconds) + Double(loadDuration.components.attoseconds) / 1e18
-let rssAfter = residentMB()
+let rssAfterLoad = residentMB()
 
 var timingsMs: [Double] = []
-func embed(_ window: [Float]) throws -> [Float] {
-    let input = tile(window, to: tiledSamples)
+func embedWindow(_ tiled: [Float]) throws -> [Float] {
     let t0 = ContinuousClock.now
-    let e = try diarizer.extractSpeakerEmbedding(from: input)
+    let e = try diarizer.extractSpeakerEmbedding(from: tiled)
     let d = t0.duration(to: .now)
     timingsMs.append(Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15)
     return e
 }
 
-// Speech floor: a window whose RMS is below the floor is dropped from the voiceprint and from scoring.
-// auto = median RMS of the enrol clips' windows minus 20 dB.
-let enrolIdx = enrolList.map { $0 - 1 }
-let allWindows = clips.map { windows($0) }
-let floorDB: Double? = {
-    switch floorOpt {
-    case .off: return nil
-    case .fixed(let v): return v
-    case .auto: return percentile(enrolIdx.flatMap { allWindows[$0].map { rmsDBFS($0) } }, 0.5) - 20
+/// Hop-1 s segments of `seconds` length, each scored through SpeakerGate.score.
+func scoreSegments(_ x: [Float], voiceprint: [Float], seconds: Int) throws -> [Double] {
+    let len = min(seconds * Int(sampleRate), x.count)
+    guard len > 0 else { return [] }
+    let hop = Int(sampleRate)
+    var out: [Double] = []
+    var s = 0
+    while s + len <= x.count {
+        if let v = try SpeakerGate.score(segment: Array(x[s..<(s + len)]), voiceprint: voiceprint, embed: embedWindow) {
+            out.append(v)
+        }
+        s += hop
     }
-}()
-let floorLabel: String = {
-    switch floorOpt {
-    case .off: return "off"
-    case .auto: return "auto, enrol median - 20 dB = \(String(format: "%.1f", floorDB ?? .nan)) dBFS"
-    case .fixed: return "\(String(format: "%.1f", floorDB ?? .nan)) dBFS"
-    }
-}()
-
-var embs: [[[Float]]] = []
-var droppedCounts: [Int] = []
-for ws in allWindows {
-    let keep = ws.filter { floorDB == nil || rmsDBFS($0) >= floorDB! }
-    droppedCounts.append(ws.count - keep.count)
-    embs.append(try keep.map { try embed($0) })
+    return out
 }
 
-// Voiceprint. One enrol clip: centroid of that clip (clip 1 is scored against itself, as in round 1).
-// Several enrol clips: a scored enrol clip is left out of its own voiceprint (leave-one-out).
-func voiceprintFor(_ i: Int) -> ([Float], String) {
-    if enrolIdx.count == 1 { return (centroid(embs[enrolIdx[0]]), "enrol 1 (self)") }
-    if enrolIdx.contains(i) {
-        let others = enrolIdx.filter { $0 != i }
-        return (centroid(others.flatMap { embs[$0] }), "LOO from \(others.map { String($0 + 1) }.joined(separator: "+"))")
+// Embedding each clip once: the cost is measured here (the budget), and the voiceprints come from this map.
+var segEmb: [String: [Float]] = [:]
+var embedFraction: [String: Double] = [:]
+for c in loaded {
+    let c0 = cpuSeconds()
+    let e = try SpeakerGate.segmentEmbedding(c.samples, embed: embedWindow)
+    let cpu = cpuSeconds() - c0
+    let audioSec = Double(c.samples.count) / sampleRate
+    embedFraction[c.name] = audioSec > 0 ? cpu / audioSec : 0
+    if let e { segEmb[c.name] = e }
+}
+// VP-off clips are scored against clip 1; VP-on clips against clip 6-vp (the enrolment taken through VP).
+let vpOffPrint = segEmb["clip1"]
+let vpOnPrint = segEmb["clip6-vp"]
+
+var results: [ClipResult] = []
+for c in loaded {
+    guard let vector = c.vp ? vpOnPrint : vpOffPrint else { continue }
+    var byLength: [Int: [Double]] = [:]
+    for seconds in segmentLengths {
+        byLength[seconds] = try scoreSegments(c.samples, voiceprint: vector, seconds: seconds)
     }
-    return (centroid(enrolIdx.flatMap { embs[$0] }), "enrol \(enrolList.map { String($0) }.joined(separator: "+"))")
+    results.append(ClipResult(clip: c, byLength: byLength, embedFraction: embedFraction[c.name] ?? 0,
+                              peakMB: peakRSSMB()))
 }
 
-var rows: [(label: String, sims: [Double], level: Double, vp: String)] = []
-for i in 0..<clips.count {
-    let (vp, vpLabel) = voiceprintFor(i)
-    let sims = embs[i].map { cosine($0, vp) }
-    rows.append((clipPlan[i].label, sims, rmsDBFS(clips[i]), vpLabel))
+// Determinism: SHA-256 over the 3 s scores of every clip, as big-endian Double bit patterns.
+var scoreBytes: [UInt8] = []
+for r in results {
+    for v in r.byLength[3] ?? [] {
+        withUnsafeBytes(of: v.bitPattern.bigEndian) { scoreBytes.append(contentsOf: $0) }
+    }
+}
+let determinismHash = SHA256.hash(data: Data(scoreBytes)).map { String(format: "%02x", $0) }.joined()
+let determinismCount = scoreBytes.count / 8
+
+var sttRows: [String: SttRow] = [:]
+if wantSTT {
+    if #available(macOS 26.0, *) {
+        for c in loaded { sttRows[c.name] = await sttRow(c) }
+    } else {
+        print("--stt needs macOS 26 (SpeechAnalyzer). Skipped.")
+    }
 }
 
-print("Speaker spike (#17 U0) replay")
-print("window \(String(format: "%.2f", windowSeconds)) s, hop \(String(format: "%.2f", windowSeconds / 2)) s | enrol \(enrolList.map { String($0) }.joined(separator: ",")) | speech floor \(floorLabel)")
-print("clip  condition                       kept drop  voiceprint          min    median max    level dBFS")
-for (i, r) in rows.enumerated() {
-    let label = r.label.padding(toLength: 27, withPad: " ", startingAt: 0)
-    let vp = r.vp.padding(toLength: 18, withPad: " ", startingAt: 0)
-    let line = "\(i + 1)     \(label)"
-        + " \(String(format: "%4d", r.sims.count)) \(String(format: "%4d", droppedCounts[i]))  \(vp)"
-        + " \(fmt(r.sims.min() ?? .nan))  \(fmt(percentile(r.sims, 0.5)))  \(fmt(r.sims.max() ?? .nan))"
-        + "  \(String(format: "%.1f", r.level))"
+// MARK: - Table
+
+func lengthCell(_ v: Double) -> String { v.isNaN ? "   n/a" : String(format: "%6.3f", v) }
+
+if let m = loaded.first(where: { $0.vp && $0.meta != nil })?.meta {
+    let chans = m.channelRMS.map { String(format: "%.1f", $0) }.joined(separator: " ")
+    print("capture: VP variant \(m.variant), mic mode \(m.micMode), tap \(m.tapFormat), ch dBFS \(chans), channel 0 recorded")
+} else {
+    print("capture: no VP-on take with capture numbers on disk")
+}
+print("determinism  SHA-256 of \(determinismCount) 3 s scores = \(determinismHash.prefix(16))  (live and replay must match)")
+print("")
+var header = "clip  condition                    vs      n    min  median    max   dBFS   cap%   emb%  peakMB"
+if wantSTT { header += "  words    WER  leak" }
+print(header)
+for r in results {
+    let s3 = r.byLength[3] ?? []
+    let label = r.clip.scene.label.padding(toLength: 28, withPad: " ", startingAt: 0)
+    let name = r.clip.name.padding(toLength: 6, withPad: " ", startingAt: 0)
+    let vs = (r.clip.vp ? "6-vp" : "1").padding(toLength: 6, withPad: " ", startingAt: 0)
+    let cap = r.clip.meta.map { String(format: "%5.1f", $0.captureCPUFraction * 100) } ?? "  n/a"
+    var line = "\(name)  \(label) \(vs)\(String(format: "%4d", s3.count))"
+        + " \(lengthCell(s3.min() ?? .nan))  \(lengthCell(percentile(s3, 0.5)))  \(lengthCell(s3.max() ?? .nan))"
+        + "  \(String(format: "%6.1f", rmsDBFS(r.clip.samples)))"
+        + "  \(cap)  \(String(format: "%5.1f", r.embedFraction * 100))  \(String(format: "%6.0f", r.peakMB))"
+    if wantSTT {
+        if let s = sttRows[r.clip.name] {
+            let werText = s.failed ? "fail" : (s.wer.map { String(format: "%.3f", $0) } ?? "  n/a")
+            line += "  \(String(format: "%5d", s.words))  \(werText.padding(toLength: 5, withPad: " ", startingAt: 0))"
+                + "  \(String(format: "%4d", s.leak))"
+        } else {
+            line += "  stt n/a"
+        }
+    }
     print(line)
 }
 
-let clip2Min = rows[1].sims.min() ?? .nan
-let impostorMax = max(rows[2].sims.max() ?? -1, rows[4].sims.max() ?? -1)
-let gap = clip2Min - impostorMax
-let clip4Max = rows[3].sims.max() ?? .nan
-let medianMs = percentile(timingsMs, 0.5)
-let p95Ms = percentile(timingsMs, 0.95)
-let rssDelta = rssAfter - rssBefore
-let cacheMB = directorySizeMB(modelDir)
-let candidate = ((clip2Min + impostorMax) / 2 * 100).rounded() / 100
+if wantSegments {
+    print("\nsegments (hop 1 s): length, n, min, median, max")
+    for r in results {
+        for seconds in segmentLengths {
+            let v = r.byLength[seconds] ?? []
+            print("\(r.clip.name.padding(toLength: 6, withPad: " ", startingAt: 0)) \(String(format: "%d", seconds)) s"
+                + "  n \(String(format: "%3d", v.count))  \(lengthCell(v.min() ?? .nan))"
+                + "  \(lengthCell(percentile(v, 0.5)))  \(lengthCell(v.max() ?? .nan))")
+        }
+    }
+}
 
-print("")
-print("gate gap  min(clip 2) - max(clip 3, clip 5) = \(fmt(gap))   (rule: >= 0.15)")
-print("candidate threshold  midpoint, 2 dp = \(String(format: "%.2f", candidate))")
-print("clip 4 (overlap) max = \(fmt(clip4Max))   reported, not gated")
-print("embed wall ms  median \(String(format: "%.1f", medianMs))  p95 \(String(format: "%.1f", p95Ms))  n=\(timingsMs.count)   (rule: median <= 80)")
-print("RSS MB  before load \(String(format: "%.0f", rssBefore))  after load \(String(format: "%.0f", rssAfter))  delta \(String(format: "%.0f", rssDelta))   (rule: <= 150)")
-print("model load s \(String(format: "%.1f", loadSeconds))   model cache \(String(format: "%.1f", cacheMB)) MB")
+// MARK: - Gates (the lead applies them; these lines carry the numbers)
 
-var failed: [String] = []
-if !(gap >= 0.15) { failed.append("gap") }
-if !(medianMs <= 80) { failed.append("embed ms") }
-if !(rssDelta <= 150) { failed.append("RSS") }
-print(failed.isEmpty
-    ? "rule: GO (lead applies the threshold)"
-    : "rule: FLAG, fails \(failed.joined(separator: ", ")). Lead decides window size, wespeaker_int8 or extraction.")
+func row(_ name: String) -> ClipResult? { results.first { $0.clip.name == name } }
+
+print("\nLayer 1 (VP on), gate: 3 s median >= 0.35 and leak <= 3 with WER <= 2x clip 6-vp")
+let ref6WER = sttRows["clip6-vp"]?.wer
+var l1Fail: [String] = []
+var l1Pending: [String] = []
+for name in ["clip7-vp", "clip8-vp", "clip10-vp"] {
+    guard let r = row(name) else {
+        print("  \(name): not recorded")
+        l1Fail.append(name)
+        continue
+    }
+    let med = percentile(r.byLength[3] ?? [], 0.5)
+    let medOK = med >= 0.35
+    var sttText = "stt not run"
+    var sttOK: Bool? = nil
+    if let s = sttRows[name] {
+        if s.failed {
+            sttText = "stt failed"
+            sttOK = false
+        } else {
+            let werText = s.wer.map { String(format: "%.3f", $0) } ?? "n/a"
+            sttText = "leak \(s.leak), WER \(werText) vs 6-vp \(ref6WER.map { String(format: "%.3f", $0) } ?? "n/a")"
+            if let w = s.wer, let w6 = ref6WER { sttOK = s.leak <= 3 && w <= 2 * w6 }
+        }
+    }
+    if !medOK || sttOK == false { l1Fail.append(name) }
+    if sttOK == nil { l1Pending.append(name) }
+    print("  \(name): median \(fmt(med)) \(medOK ? "PASS" : "FAIL"), \(sttText) "
+        + "\(sttOK.map { $0 ? "PASS" : "FAIL" } ?? "pending")")
+}
+for name in ["clip9-vp", "clip11-vp"] {
+    guard let r = row(name) else { continue }
+    let s = sttRows[name]
+    print("  \(name): informational, median \(fmt(percentile(r.byLength[3] ?? [], 0.5)))"
+        + (s.map { ", leak \($0.leak)" } ?? ""))
+}
+print("  L1 fail set: \(l1Fail.isEmpty ? "none" : "{" + l1Fail.joined(separator: ", ") + "}")"
+    + (l1Pending.isEmpty ? "" : "  (pending STT: \(l1Pending.joined(separator: ", ")))"))
+
+print("\nLayer 2 (VP-off speaker vs others), gate: min(his 3 s) - max(others 3 s) >= 0.20")
+let his = row("clip6-vp") ?? row("clip1")
+let others = ["clip9-vp", "clip5"].compactMap { row($0) }
+let hisName = row("clip6-vp") != nil ? "clip 6-vp" : "clip 1"
+if let his, !others.isEmpty {
+    let hisMin = his.byLength[3]?.min() ?? .nan
+    let othersMax = others.compactMap { $0.byLength[3]?.max() }.max() ?? .nan
+    let gap = hisMin - othersMax
+    let threshold = ((hisMin + othersMax) / 2 * 100).rounded() / 100
+    print("  his (\(hisName)) min \(fmt(hisMin)); others max \(fmt(othersMax)); gap \(fmt(gap)) "
+        + "\(gap >= 0.20 ? "PASS" : "FAIL"); candidate threshold \(String(format: "%.2f", threshold))")
+    let his5 = his.byLength[5]?.min() ?? .nan, his8 = his.byLength[8]?.min() ?? .nan
+    let oth5 = others.compactMap { $0.byLength[5]?.max() }.max() ?? .nan
+    let oth8 = others.compactMap { $0.byLength[8]?.max() }.max() ?? .nan
+    print("  5 s: his min \(fmt(his5)), others max \(fmt(oth5)); 8 s: his min \(fmt(his8)), others max \(fmt(oth8))")
+} else {
+    print("  n/a: needs clip 1 or 6-vp, and clip 9-vp or clip 5")
+}
+
+// Budget: capture (VP on, measured on the take) plus embedding worst case (every second of audio scored once).
+let capFrac = results.compactMap { $0.clip.vp ? $0.clip.meta?.captureCPUFraction : nil }.max()
+let embFrac = results.map(\.embedFraction).max() ?? 0
+let totalFrac = (capFrac ?? 0) + embFrac
+let rssDelta = residentMB() - rssBefore
+let budgetOK = capFrac != nil && totalFrac <= budgetFraction && rssDelta <= budgetRSSMB
+let embedMs = percentile(timingsMs, 0.5)
+let embedP95 = percentile(timingsMs, 0.95)
+print("\nbudget  capture (VP on) \(capFrac.map { String(format: "%.1f%%", $0 * 100) } ?? "n/a")"
+    + " + embed worst case \(String(format: "%.1f%%", embFrac * 100))"
+    + " = \(String(format: "%.1f%%", totalFrac * 100)) of one core (rule <= 8%); "
+    + "RSS +\(String(format: "%.0f", rssDelta)) MB (rule <= 80)  \(budgetOK ? "PASS" : "FLAG")")
+print("embed wall ms  median \(String(format: "%.1f", embedMs))  p95 \(String(format: "%.1f", embedP95))  n=\(timingsMs.count)")
+print("RSS MB  before load \(String(format: "%.0f", rssBefore))  after load \(String(format: "%.0f", rssAfterLoad))"
+    + "  after scoring \(String(format: "%.0f", residentMB()))  delta \(String(format: "%.0f", rssDelta))")
+print("model load s \(String(format: "%.1f", loadSeconds))   model cache \(String(format: "%.1f", directorySizeMB(modelDir))) MB")
+print("\nsummary: L1 fail set \(l1Fail.isEmpty ? "none" : l1Fail.joined(separator: ",")); "
+    + "budget \(budgetOK ? "PASS" : "FLAG"); determinism \(determinismHash.prefix(16))")
