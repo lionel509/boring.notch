@@ -158,6 +158,7 @@ final class VoiceDictationManager: ObservableObject {
             trustedAtStart = nil
             startStatusPolling(take)
             takeBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
             takeTone = AppTone.forBundle(takeBundleID)
             takeDictionary = PersonalDictionary.words(
                 manual: Defaults[.dictationDictionary], learned: Defaults[.dictationLearnedWords]
@@ -169,6 +170,7 @@ final class VoiceDictationManager: ObservableObject {
             Task { [weak self] in
                 let trusted = await XPCHelperClient.shared.ensureAccessibilityAuthorization(promptIfNeeded: true)
                 self?.trustedAtStart = trusted
+                if trusted, let frontPid { _ = await XPCHelperClient.shared.prepareFocus(pid: Int(frontPid)) }
             }
             if Defaults[.dictationCloud] {
                 Task { [weak self] in
@@ -380,8 +382,18 @@ final class VoiceDictationManager: ObservableObject {
         } else {
             client = nil
         }
-        // Secure fields and fields the helper cannot track get the raw paste and nothing else.
-        let rewriteWanted = field != nil && mechanism != .none && (client != nil || Defaults[.dictationCleanup])
+        // Without a readable caret the rewrite needs key events to abort on user input. With neither the
+        // caret nor a key abort, the rewrite could overwrite text the user typed, so the Stage-A text stays.
+        let keyAbortLive = FnKeyMonitor.shared.isTapLive || (AXIsProcessTrusted() && CGPreflightListenEventAccess())
+        // One decision for the take. Every skip has a reason; secure and untracked fields never run (#13 r5 / U2).
+        let decision = RewriteGate.decide(
+            field: field, cloudOn: Defaults[.dictationCloud], hasKey: cachedKey != nil,
+            cleanupOn: Defaults[.dictationCleanup], keyAbortLive: keyAbortLive)
+        report.hasKey = cachedKey != nil
+        let rewriteWanted: Bool = {
+            if case .run = decision { return true }
+            return false
+        }()
         let dictionary = takeDictionary
         let tone = takeTone
         let prompt = CloudConfig.vocabularyPrompt(dictionary)
@@ -426,19 +438,10 @@ final class VoiceDictationManager: ObservableObject {
             _ = await finalTask.value
             guard take == takeID else { return }
             engine.fill(&report)
-            endTake(.pasted)
-            if mechanism != .none { scheduleLearning(final: text, bundle: takeBundleID) }
-            state = .done
-            scheduleReset(after: 0.6)
-            return
-        }
-
-        // Without a readable caret the rewrite needs key events to abort on user input. With neither the
-        // caret nor a key abort, the rewrite could overwrite text the user typed, so the Stage-A text stays.
-        let keyAbortLive = FnKeyMonitor.shared.isTapLive || (AXIsProcessTrusted() && CGPreflightListenEventAccess())
-        guard RewriteMechanism.effective(mechanism, caretReadable: field.caret >= 0, keyAbortLive: keyAbortLive) != nil else {
-            engine.fill(&report)
-            report.rewrite = .noAbortSource
+            if case .skip(let reason) = decision {
+                report.cleanupSkip = reason
+                if reason == .noAbortSource { report.rewrite = .noAbortSource }
+            }
             endTake(.pasted)
             if mechanism != .none { scheduleLearning(final: text, bundle: takeBundleID) }
             state = .done

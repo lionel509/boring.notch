@@ -3,6 +3,8 @@ import Foundation
 /// Why a cleanup did not replace the raw text. Recorded in `TakeReport` as a code.
 enum CleanupSkip: String, Equatable {
     case none, unavailable, timeout, empty, guardRejected, error
+    /// #13 r5 / U2: why the rewrite gate skipped a take (every skip has one).
+    case noField, secureField, cleanupOff, noAbortSource
 }
 
 /// Invariant I2: what gets pasted is the raw transcript or an LLM output that passed

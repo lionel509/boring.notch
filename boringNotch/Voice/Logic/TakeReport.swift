@@ -61,6 +61,9 @@ struct TakeReport {
     var tone: AppTone = .neutral
     var dictionaryWords = -1
     var cloud = false
+    /// #13 r5 / U2: whether an OpenRouter key was read at the press, and whether voice processing is on.
+    var hasKey = false
+    var voiceProcessing = false
 
     /// Copies what the mic meter measured.
     mutating func record(meter: MicLevelMeter) {
@@ -124,6 +127,8 @@ struct TakeReport {
             "tone=\(tone.rawValue)",
             "dict=\(dictionaryWords)",
             "cloud=\(cloud ? 1 : 0)",
+            "key=\(hasKey ? 1 : 0)",
+            "vp=\(voiceProcessing ? 1 : 0)",
         ].joined(separator: " ")
     }
 }

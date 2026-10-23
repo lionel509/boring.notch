@@ -283,6 +283,19 @@ final class XPCHelperClient: NSObject {
         }
     }
 
+    /// Turns on the frontmost app's accessibility tree at press time. True if a focused element now resolves.
+    nonisolated func prepareFocus(pid: Int) async -> Bool {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let ok: Bool = try await service.withContinuation { service, continuation in
+                service.prepareFocus(pid) { ok in continuation.resume(returning: ok) }
+            }
+            return ok
+        } catch {
+            return false
+        }
+    }
+
     nonisolated func beginTracking() async -> FocusedField? {
         do {
             let service = await MainActor.run { ensureRemoteService() }

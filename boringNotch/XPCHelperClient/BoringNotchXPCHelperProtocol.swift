@@ -51,6 +51,8 @@ import Foundation
     func focusedTextValue(with reply: @escaping (String?) -> Void)
     /// Records the focused element for the swaps. JSON of FocusedField, or nil.
     func beginTracking(with reply: @escaping (String?) -> Void)
+    /// Turns on app pid's accessibility tree (Chromium/Electron build it only on request) and remembers pid as the take's app. True if a focused element now resolves.
+    func prepareFocus(_ pid: Int, with reply: @escaping (Bool) -> Void)
     /// UTF-16 caret. -1 unknown, -2 focus moved or nothing tracked.
     func caretLocation(with reply: @escaping (Int) -> Void)
     func stringForRange(_ location: Int, _ length: Int, with reply: @escaping (String?) -> Void)
