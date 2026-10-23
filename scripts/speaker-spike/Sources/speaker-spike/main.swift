@@ -541,6 +541,12 @@ let mixMode = args.contains("--mix")
 let wantSeq = args.contains("--seq")
 let wantDiarizer = args.contains("--diarizer")
 let voiceOnly = args.contains("--voice-only")
+let wantMemory = args.contains("--memory")
+let memEmbedder = flagValue("--embedder") ?? "v2"  // v2 | int8
+let memCompute = flagValue("--compute") ?? "all"  // all | ane | cpu
+let memSeg = flagValue("--seg") ?? "own"  // own | same
+let memTile = Int(flagValue("--tile") ?? "10") ?? 10  // seconds of input per embedder call
+normaliseOn = args.contains("--normalise")  // round 7: explicit -26 dBFS normalisation before STT, stats and sequences
 var bestPrompt: [String: String] = [:]  // clip name -> the prompt its STT matched best (round 4 step 1)
 var sttValid = true  // false when clip 1's best WER > 0.5: the STT path is wrong, leak and WER are not printed
 
@@ -624,6 +630,15 @@ guard loaded.contains(where: { $0.name == "me1" }) else {
     throw SpikeError.missingClip("me1 (record the voice set with --voice-only)")
 }
 print("Scoring \(loaded.count) clips (no mic).\n")
+
+if wantMemory {
+    do {
+        try runMemory(embedder: memEmbedder, compute: memCompute, seg: memSeg, tile: memTile, loaded: loaded)
+    } catch {
+        print("MEM n/a: \(error)")
+    }
+    exit(0)
+}
 
 // MARK: - Model
 
@@ -916,12 +931,6 @@ func mixSource(name: String, label: String, x: [Float], voiceprint: [Float], pro
     return rows
 }
 
-/// The say voices of the mix and the --seq sequences, in truth order (Samantha, Daniel, Karen).
-let sayVoices: [(file: String, voice: String, text: String)] = [
-    ("say-samantha", "Samantha", "The committee approved the new budget after a long discussion about the harbour bridge."),
-    ("say-daniel", "Daniel", "Remember to water the plants on the balcony before the weekend, because the forecast says it will be hot."),
-    ("say-karen", "Karen", "Our train was delayed twice, so we walked the last few miles along the river to the old market."),
-]
 
 @available(macOS 26.0, *)
 func runMix(wantSTT: Bool) async throws {
@@ -1228,6 +1237,13 @@ print("\nsummary: L1 fail set \(l1Fail.isEmpty ? "none" : l1Fail.joined(separato
     + "budget \(budgetOK ? "PASS" : "FLAG"); determinism \(determinismHash.prefix(16))")
 
 if wantSeq || wantDiarizer {
-    try runOffline(wantSeq: wantSeq, wantDiarizer: wantDiarizer)
+    try runOffline(loaded: loaded, wantSeq: wantSeq, wantDiarizer: wantDiarizer)
+}
+if normaliseOn {
+    if #available(macOS 26.0, *) {
+        try await runNormaliseReport(loaded: loaded)
+    }
+    _ = try runStats(loaded: loaded, normalise: false)
+    _ = try runStats(loaded: loaded, normalise: true)
 }
 printRSSStages()

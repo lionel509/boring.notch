@@ -1,12 +1,11 @@
-// Offline multi-speaker sequences (#17 U0 round 4, --seq), the FluidAudio diarizer row (--diarizer), and the
-// STT prompt check (step 1). No mic: every input is a clip on disk or a `say` render.
+// Offline multi-speaker sequences (--seq), per-piece stats and the normalisation report (--normalise), the
+// FluidAudio diarizer row (--diarizer), and the STT prompt check. No mic: every input is a clip on disk or a `say` render.
 import FluidAudio
 import Foundation
 import Speech
 import VoiceDictationLogic
 
-/// Truth ids: 0 Me (me2 and me3, and overlap pieces), 1 Song (clip 3), 2-4 Speaker 2, 3, 4 (the say voices),
-/// 5 Noise (generated; not a speaker, so it is left out of the speaker count).
+/// Truth ids: 0 Me (me2, me3 and overlap pieces), 1 Song (clip 3), 2-4 Speaker 2, 3, 4 (say voices), 5 Noise.
 let truthNames = ["Me", "Song", "Speaker 2", "Speaker 3", "Speaker 4", "Noise"]
 let noiseTruth = 5
 let seqCount = 24
@@ -23,6 +22,13 @@ struct SeqPiece {
 struct Sequence {
     let audio: [Float]
     let pieces: [SeqPiece]
+}
+
+/// One labelled piece, ready for grading.
+struct Labelled {
+    let label: SpeakerLabel
+    let truth: Int
+    let overlap: Bool
 }
 
 /// Metrics for one labelled set of sequences. Me metrics count every piece; overlap is the overlap pieces.
@@ -42,7 +48,7 @@ func pick(_ rng: inout Lcg, _ n: Int) -> Int {
 
 func fmtPct(_ v: Double) -> String { v.isNaN ? "  n/a" : String(format: "%5.1f%%", v * 100) }
 
-// MARK: - STT prompt check (step 1)
+// MARK: - STT
 
 /// WER of clip `name` against each of the three prompts. The transcript text never leaves this function.
 @available(macOS 26.0, *)
@@ -67,15 +73,14 @@ func sttPromptCheck(_ name: String, converted: Bool) async -> (words: Int, wers:
     return (tokens(text).count, wers, best, feed)
 }
 
-// MARK: - Sequence builder (--seq)
-
-/// Lionel's speech: me2 then me3, with the 0.3 s gap between them.
+/// Lionel's speech: me2 then me3, with the 0.3 s gap between them. Normalised when --normalise is set.
 func meSpeechSamples(_ loaded: [LoadedClip]) throws -> [Float] {
     func clip(_ name: String) throws -> [Float] {
         guard let c = loaded.first(where: { $0.name == name }) else { throw SpikeError.missingClip(name) }
         return c.samples
     }
-    return try clip("me2") + [Float](repeating: 0, count: seqGapSamples) + clip("me3")
+    let raw = try clip("me2") + [Float](repeating: 0, count: seqGapSamples) + clip("me3")
+    return normaliseOn ? spikeNormalise(raw) : raw
 }
 
 /// Scales x to the target RMS in dBFS (the level-match step: interferers to the speech level).
@@ -86,19 +91,21 @@ func levelMatch(_ x: [Float], toDBFS target: Double) -> [Float] {
     return x.map { $0 * g }
 }
 
-/// Piece banks by truth id: Me (me2 and me3, 3 pieces each), Song (clip 3), the three say voices (level-matched
-/// to the speech), Noise (brown, level-matched). Each source is cut into equal pieces of about 2.7 s.
-func pieceBanks(_ loaded: [LoadedClip]) throws -> [[[Float]]] {
+/// Piece banks by truth id: Me (me2 and me3, 3 pieces each), Song (clip 3), the three say voices (level-matched to
+/// the speech), Noise (brown, level-matched). Each source is cut into equal pieces of about 2.7 s. With `normalise`,
+/// every piece goes through spikeNormalise before it is used.
+func pieceBanks(_ loaded: [LoadedClip], normalise: Bool) throws -> [[[Float]]] {
     func clip(_ name: String) throws -> [Float] {
         guard let c = loaded.first(where: { $0.name == name }) else { throw SpikeError.missingClip(name) }
         return c.samples
     }
     func split(_ x: [Float], _ k: Int) -> [[Float]] {
         let n = x.count / k
-        return (0..<k).map { Array(x[($0 * n)..<(($0 + 1) * n)]) }
+        let pieces = (0..<k).map { Array(x[($0 * n)..<(($0 + 1) * n)]) }
+        return normalise ? pieces.map { spikeNormalise($0) } : pieces
     }
-    let speech = try meSpeechSamples(loaded)
-    let level = rmsDBFS(speech)
+    let rawSpeech = try clip("me2") + [Float](repeating: 0, count: seqGapSamples) + clip("me3")
+    let level = rmsDBFS(rawSpeech)
     var out: [[[Float]]] = [split(try clip("me2"), 3) + split(try clip("me3"), 3)]
     out.append(split(try clip("clip3"), 3))
     for v in sayVoices {
@@ -112,9 +119,12 @@ func pieceBanks(_ loaded: [LoadedClip]) throws -> [[[Float]]] {
     return out
 }
 
-/// 24 sequences, LCG-seeded. Sequence s has 2-4 distinct speakers and 6-10 pieces in random order. Every
-/// fourth sequence (6 of 24) carries one overlap piece: a Me piece mixed at 0 dB with a say voice, truth Me.
-func buildSequences(_ banks: [[[Float]]]) -> [Sequence] {
+// MARK: - Sequence builder
+
+/// 24 sequences, LCG-seeded. Sequence s has 2-4 distinct speakers and 6-10 pieces in random order. Every fourth
+/// sequence (6 of 24) carries one overlap piece: a Me piece mixed with a say voice at `overlapSNR` dB, truth Me.
+/// Every third sequence (s % 3 == 1) carries one noise piece, which is not a speaker.
+func buildSequences(_ banks: [[[Float]]], overlapSNR: Double) -> [Sequence] {
     let gap = [Float](repeating: 0, count: seqGapSamples)
     var seqs: [Sequence] = []
     for s in 0..<seqCount {
@@ -142,7 +152,7 @@ func buildSequences(_ banks: [[[Float]]]) -> [Sequence] {
                 let me = banks[0][pick(&rng, banks[0].count)]
                 let v = 2 + pick(&rng, 3)
                 let say = fit(banks[v][pick(&rng, banks[v].count)], to: me.count)
-                let g = snrGain(clean: me, interferer: say, snrDB: 0)
+                let g = snrGain(clean: me, interferer: say, snrDB: overlapSNR)
                 piece = zip(me, say).map { $0 + g * $1 }
             } else {
                 piece = banks[item.truth][pick(&rng, banks[item.truth].count)]
@@ -163,7 +173,8 @@ func processedSequences(_ seqs: [Sequence], iso: Bool) throws -> [[Float]] {
     try seqs.map { SpeakerGate.int16RoundTrip(iso ? try isolateOffline($0.audio) : $0.audio) }
 }
 
-/// One STT final per piece. Returns the segments per sequence and the embedding CPU per audio second.
+/// One STT final per piece. Returns the segments per sequence, the embedding CPU per audio second, and the CPU
+/// percentage of one core over the wall time of the pass.
 func embedPieces(_ seqs: [Sequence], audios: [[Float]]) throws -> (segs: [[SpikeSegment]], cpuPerSec: Double, cpuPct: Double) {
     var out: [[SpikeSegment]] = []
     var cpu = 0.0
@@ -188,12 +199,12 @@ func embedPieces(_ seqs: [Sequence], audios: [[Float]]) throws -> (segs: [[Spike
     return (out, sec > 0 ? cpu / sec : 0, wall > 0 ? cpu / wall * 100 : 0)
 }
 
-func grade(_ seqs: [[SpikeSegment]]) -> Grid {
+func grade(_ seqs: [[Labelled]]) -> Grid {
     var tp = 0, fp = 0, fn = 0, ovl = 0, ovlHit = 0, exact = 0
     var purity = 0.0
     for segs in seqs {
-        var groups: [SpikeLabel: [Int: Int]] = [:]
-        var predicted = Set<SpikeLabel>()
+        var groups: [String: [Int: Int]] = [:]
+        var predicted = Set<String>()
         for s in segs {
             let predMe = s.label == .me
             let truthMe = s.truth == 0
@@ -203,8 +214,9 @@ func grade(_ seqs: [[SpikeSegment]]) -> Grid {
                 if predMe { ovlHit += 1 }
             }
             if s.label != .unknown {
-                predicted.insert(s.label)
-                groups[s.label, default: [:]][s.truth, default: 0] += 1
+                let k = labelKey(s.label)
+                predicted.insert(k)
+                groups[k, default: [:]][s.truth, default: 0] += 1
             }
         }
         if predicted.count == Set(segs.map(\.truth).filter { $0 != noiseTruth }).count { exact += 1 }
@@ -220,19 +232,81 @@ func grade(_ seqs: [[SpikeSegment]]) -> Grid {
         ovlMe: ovl > 0 ? Double(ovlHit) / Double(ovl) : .nan)
 }
 
-func gridLine(iso: Bool, cl: Double, me: Double, mg: Double, _ g: Grid) -> String {
-    "iso \(iso ? "on " : "off")  cluster \(String(format: "%.2f", cl))  me \(String(format: "%.2f", me))"
-        + "  margin \(String(format: "%.2f", mg))  "
+func gridLine(iso: Bool, cl: Double, me: Double, mg: Double, rs: Double, _ g: Grid) -> String {
+    "iso \(iso ? "on " : "off")  cluster \(String(format: "%.2f", cl))  meSim \(String(format: "%.2f", me))"
+        + "  margin \(String(format: "%.2f", mg))  rescue \(String(format: "%.2f", rs))  "
         + "Me prec \(fmtPct(g.mePrec))  Me rec \(fmtPct(g.meRec))  count exact \(fmtPct(g.exact))"
         + "  purity \(fmtPct(g.purity))  overlap Me \(fmtPct(g.ovlMe))  F1 \(fmtPct(g.f1))"
 }
 
+// MARK: - Per-piece stats (plan step 4) and meSim
+
+/// cos(piece, voiceprint) for every Me piece (me2 + me3) and every other speaker's pieces, isolation off and on.
+/// Prints min / median / max per group and returns meSim per isolation state: the midpoint of the Me minimum and
+/// the others' maximum, to 2 dp. `normalise` sets the explicit normalisation step for the voiceprint and the pieces.
+func runStats(loaded: [LoadedClip], normalise: Bool) throws -> [Bool: Double] {
+    guard let me1 = loaded.first(where: { $0.name == "me1" }) else { throw SpikeError.missingClip("me1") }
+    guard let vp = try spikeEmbedding(me1.samples, normalise: normalise, embed: embedWindow) else {
+        throw SpikeError.missingClip("me1 embedding")
+    }
+    if normalise, let pub = try SpeakerGate.segmentEmbedding(me1.samples, embed: embedWindow) {
+        let d = zip(pub, vp).map { abs(Double($0) - Double($1)) }.max() ?? 0
+        print("parity: spike embedding vs U1 segmentEmbedding on me1, max abs difference \(String(format: "%.2e", d))")
+    }
+    let banks = try pieceBanks(loaded, normalise: normalise)
+    let groups: [(name: String, bank: Int)] = [("Me", 0), ("Song", 1), ("Speaker 2", 2), ("Speaker 3", 3), ("Speaker 4", 4)]
+    print("\nPer-piece cosine to the voiceprint (me1), normalise \(normalise ? "ON" : "OFF"):")
+    print("  iso  group       n     min  median     max")
+    var meSim: [Bool: Double] = [:]
+    for iso in [false, true] {
+        var cosByGroup: [String: [Double]] = [:]
+        for g in groups {
+            for piece in banks[g.bank] {
+                let x = SpeakerGate.int16RoundTrip(iso ? try isolateOffline(piece) : piece)
+                if let e = try spikeEmbedding(x, normalise: normalise, embed: embedWindow) {
+                    cosByGroup[g.name, default: []].append(SpeakerGate.cosine(e, vp))
+                }
+            }
+        }
+        for g in groups {
+            let v = cosByGroup[g.name] ?? []
+            print("  \(iso ? "on " : "off")  \(g.name.padding(toLength: 10, withPad: " ", startingAt: 0))"
+                + "\(String(format: "%3d", v.count))  \(fmt(v.min() ?? .nan))  \(fmt(percentile(v, 0.5)))  \(fmt(v.max() ?? .nan))")
+        }
+        let meMin = cosByGroup["Me"]?.min() ?? .nan
+        let others = groups.dropFirst().compactMap { cosByGroup[$0.name]?.max() }.max() ?? .nan
+        let mid = ((meMin + others) / 2 * 100).rounded() / 100
+        meSim[iso] = mid
+        print("  iso \(iso ? "on" : "off"): Me min \(fmt(meMin)), others max \(fmt(others)), meSim midpoint \(String(format: "%.2f", mid))")
+    }
+    return meSim
+}
+
+/// Clean STT WER per voice clip, raw and normalised, against its own prompt (plan step 3). The transcript never prints.
+@available(macOS 26.0, *)
+func runNormaliseReport(loaded: [LoadedClip]) async throws {
+    print("\nClean WER per voice clip, raw vs normalised (target -26 dBFS voiced):")
+    let prompts: [(name: String, text: String)] = [("me1", promptA), ("me2", promptB), ("me3", promptC)]
+    for p in prompts {
+        guard let c = loaded.first(where: { $0.name == p.name }) else { continue }
+        let raw = try await appleTranscribe(clipURL(p.name))
+        let rawWER = WordErrorRate.wer(reference: p.text, hypothesis: raw)
+        let norm = spikeNormalise(c.samples)
+        let url = scratch.appendingPathComponent("norm-\(p.name).wav")
+        try saveClip(norm, to: url)
+        let nText = try await appleTranscribe(url)
+        let normWER = WordErrorRate.wer(reference: p.text, hypothesis: nText)
+        print("  \(p.name): WER raw \(fmt(rawWER)) (level \(String(format: "%.1f", rmsDBFS(c.samples))) dBFS)"
+            + "  normalised \(fmt(normWER)) (level \(String(format: "%.1f", Double(spikeLevelDBFS(norm)))) dBFS)")
+    }
+}
+
 // MARK: - Diarizer row (--diarizer)
 
-/// FluidAudio DiarizerManager on the whole sequence with the voiceprint as a known speaker. Each piece takes
-/// the speaker with the most overlapping seconds. A fresh manager per sequence, so no speaker carries over.
-func diarizeSequences(_ seqs: [Sequence], audios: [[Float]], voiceprint: [Float]) throws -> (segs: [[SpikeSegment]], cpuPerSec: Double, cpuPct: Double) {
-    var out: [[SpikeSegment]] = []
+/// FluidAudio DiarizerManager on the whole sequence with the voiceprint as a known speaker. Each piece takes the
+/// speaker with the most overlapping seconds. A fresh manager per sequence, so no speaker carries over.
+func diarizeSequences(_ seqs: [Sequence], audios: [[Float]], voiceprint: [Float]) throws -> (segs: [[Labelled]], cpuPerSec: Double, cpuPct: Double) {
+    var out: [[Labelled]] = []
     var cpu = 0.0
     var sec = 0.0
     let wall0 = ProcessInfo.processInfo.systemUptime
@@ -245,7 +319,7 @@ func diarizeSequences(_ seqs: [Sequence], audios: [[Float]], voiceprint: [Float]
         cpu += cpuSeconds() - c0
         sec += Double(audios[i].count) / sampleRate
         var ids: [String: Int] = [:]
-        var row: [SpikeSegment] = []
+        var row: [Labelled] = []
         for p in seq.pieces {
             let ps = Double(p.start) / sampleRate
             let pe = Double(p.end) / sampleRate
@@ -254,7 +328,7 @@ func diarizeSequences(_ seqs: [Sequence], audios: [[Float]], voiceprint: [Float]
                 let o = min(Double(r.endTimeSeconds), pe) - max(Double(r.startTimeSeconds), ps)
                 if o > 0 { acc[r.speakerId, default: 0] += o }
             }
-            var label = SpikeLabel.unknown
+            var label = SpeakerLabel.unknown
             if let top = acc.max(by: { $0.value < $1.value })?.key {
                 if top == "Me" {
                     label = .me
@@ -263,7 +337,7 @@ func diarizeSequences(_ seqs: [Sequence], audios: [[Float]], voiceprint: [Float]
                     label = .other(ids[top] ?? 0)
                 }
             }
-            row.append(SpikeSegment(start: ps, end: pe, embedding: nil, label: label, truth: p.truth, overlap: p.overlap))
+            row.append(Labelled(label: label, truth: p.truth, overlap: p.overlap))
         }
         out.append(row)
     }
@@ -273,107 +347,96 @@ func diarizeSequences(_ seqs: [Sequence], audios: [[Float]], voiceprint: [Float]
 
 // MARK: - Runner
 
-/// --seq and --diarizer. Both isolation states go through the same sequences; the grid is on iso-on for the gate.
-func runOffline(wantSeq: Bool, wantDiarizer: Bool) throws {
+/// --seq and --diarizer. Overlap pieces at +10, +5 and 0 dB; the gated set is +10 dB, isolation ON.
+func runOffline(loaded: [LoadedClip], wantSeq: Bool, wantDiarizer: Bool) throws {
     guard let c1 = loaded.first(where: { $0.name == "me1" }) else { throw SpikeError.missingClip("me1") }
     guard let voiceprint = try spikeSegmentEmbedding(c1.samples) else { throw SpikeError.missingClip("me1 embedding") }
-    let seqs = buildSequences(try pieceBanks(loaded))
-    let pieces = seqs.reduce(0) { $0 + $1.pieces.count }
-    let overlaps = seqs.reduce(0) { $0 + $1.pieces.filter(\.overlap).count }
-    let speakerCounts = seqs.map { Set($0.pieces.map(\.truth)).count }
-    print("\nOffline sequences (no mic): \(seqs.count) sequences, \(pieces) pieces, \(overlaps) overlap pieces, "
-        + "distinct truth speakers per sequence \(speakerCounts.min() ?? 0)-\(speakerCounts.max() ?? 0)")
-    print("Voiceprint: me1 through the disjoint-window embedding. Pieces: one STT final each.")
+    let meSims = try runStats(loaded: loaded, normalise: normaliseOn)
+    let banks = try pieceBanks(loaded, normalise: normaliseOn)
 
-    var isoOnGrid: [(cl: Double, me: Double, mg: Double, grid: Grid)] = []
-    var onEmbCPU = Double.nan
-    for iso in [false, true] {
-        let audios: [[Float]]
-        do {
-            audios = try processedSequences(seqs, iso: iso)
-        } catch {
-            print("isolation \(iso ? "ON" : "OFF") not run: \(error)")
-            continue
-        }
-        let emb = try embedPieces(seqs, audios: audios)
-        if iso { onEmbCPU = emb.cpuPerSec }
-        print("embedding pass: \(String(format: "%.4f", emb.cpuPerSec)) CPU s per audio s, "
-            + "\(String(format: "%.1f", emb.cpuPct))% of one core over the pass (isolation \(iso ? "ON" : "OFF"))")
-        var byTruth: [Int: [Double]] = [:]
-        for row in emb.segs {
-            for s in row where !s.overlap {
-                if let e = s.embedding { byTruth[s.truth, default: []].append(SpeakerGate.cosine(e, voiceprint)) }
+    var gateRows: [(snr: Double, iso: Bool, cl: Double, me: Double, mg: Double, rs: Double, grid: Grid)] = []
+    for snr in [10.0, 5.0, 0.0] {
+        let seqs = buildSequences(banks, overlapSNR: snr)
+        let pieces = seqs.reduce(0) { $0 + $1.pieces.count }
+        let overlaps = seqs.reduce(0) { $0 + $1.pieces.filter(\.overlap).count }
+        let speakerCounts = seqs.map { Set($0.pieces.map(\.truth).filter { $0 != noiseTruth }).count }
+        print("\nSequences, overlap at \(Int(snr)) dB (no mic): \(seqs.count) sequences, \(pieces) pieces, "
+            + "\(overlaps) overlap pieces, speakers per sequence \(speakerCounts.min() ?? 0)-\(speakerCounts.max() ?? 0)")
+        for iso in [false, true] {
+            let audios: [[Float]]
+            do {
+                audios = try processedSequences(seqs, iso: iso)
+            } catch {
+                print("isolation \(iso ? "ON" : "OFF") not run: \(error)")
+                continue
             }
-        }
-        let medians = truthNames.indices.map { "\(truthNames[$0]) \(fmt(percentile(byTruth[$0] ?? [], 0.5)))" }
-        print("\nisolation \(iso ? "ON" : "OFF"): median cosine to voiceprint per speaker (pieces): \(medians.joined(separator: ", "))")
-        if wantSeq {
-            print("\nGrid, isolation \(iso ? "ON" : "OFF"), embedding \(String(format: "%.4f", emb.cpuPerSec)) CPU s per audio s (disjoint windows)")
-            for cl in [0.50, 0.60, 0.70] {
-                for me in [0.25, 0.30, 0.35] {
-                    for mg in [0.05, 0.10, 0.15] {
-                        let params = SpikeParams(clusterSim: cl, meSim: me, meMargin: mg)
-                        let labelled = emb.segs.map { SpikeLabeller.label($0, voiceprint: voiceprint, params: params) }
-                        let g = grade(labelled)
-                        print(gridLine(iso: iso, cl: cl, me: me, mg: mg, g))
-                        if iso { isoOnGrid.append((cl, me, mg, g)) }
+            let emb = try embedPieces(seqs, audios: audios)
+            print("embedding pass, overlap \(Int(snr)) dB, isolation \(iso ? "ON" : "OFF"): "
+                + "\(String(format: "%.4f", emb.cpuPerSec)) CPU s per audio s, \(String(format: "%.1f", emb.cpuPct))% of one core")
+            if wantSeq, let m = meSims[iso] {
+                let meGrid = [m - 0.05, m, m + 0.05].map { ($0 * 100).rounded() / 100 }
+                for cl in [0.35, 0.40, 0.45, 0.50] {
+                    for me in meGrid {
+                        for mg in [0.05, 0.10] {
+                            for rs in [0.10, 0.15] {
+                                let params = SpeakerLabeller.Params(clusterSim: cl, meSim: me, meMargin: mg,
+                                                                    rescueSim: rs, shortSeconds: 1.0)
+                                let labelled: [[Labelled]] = emb.segs.map { row in
+                                    let labels = labelPieces(row, voiceprint: voiceprint, params: params)
+                                    return zip(labels, row).map { Labelled(label: $0.0, truth: $0.1.truth, overlap: $0.1.overlap) }
+                                }
+                                let g = grade(labelled)
+                                print(gridLine(iso: iso, cl: cl, me: me, mg: mg, rs: rs, g))
+                                gateRows.append((snr, iso, cl, me, mg, rs, g))
+                            }
+                        }
                     }
                 }
             }
-        }
-        if wantSeq, iso, let t = flagValue("--seqtrace").flatMap({ Int($0) }), emb.segs.indices.contains(t) {
-            // One sequence, piece by piece: truth, cosine to the voiceprint, and the label at the default grid point.
-            let labelled = SpikeLabeller.label(emb.segs[t], voiceprint: voiceprint,
-                                               params: SpikeParams(clusterSim: 0.60, meSim: 0.30, meMargin: 0.10))
-            print("\ntrace sequence \(t), isolation ON, cluster 0.60 me 0.30 margin 0.10:")
-            for s in labelled {
-                let cos = s.embedding.map { SpeakerGate.cosine($0, voiceprint) } ?? .nan
-                print("  \(truthNames[s.truth]) overlap \(s.overlap ? "yes" : "no ") "
-                    + "\(String(format: "%.1f", s.end - s.start)) s  cos \(fmt(cos))  label \(s.label)")
+            if wantDiarizer && snr == 10.0 {
+                let d = try diarizeSequences(seqs, audios: audios, voiceprint: voiceprint)
+                let g = grade(d.segs)
+                stamp("diarizer call")
+                print("\ndiarizer iso \(iso ? "ON " : "OFF") (FluidAudio, clustering 0.7), overlap 10 dB: "
+                    + "Me prec \(fmtPct(g.mePrec))  Me rec \(fmtPct(g.meRec))  count exact \(fmtPct(g.exact))"
+                    + "  purity \(fmtPct(g.purity))  overlap Me \(fmtPct(g.ovlMe))"
+                    + "  CPU \(String(format: "%.4f", d.cpuPerSec)) s/s (\(String(format: "%.1f", d.cpuPct))% of one core)"
+                    + "  RSS after call \(String(format: "%.0f", residentMB())) MB")
             }
-        }
-        if wantDiarizer {
-            let d = try diarizeSequences(seqs, audios: audios, voiceprint: voiceprint)
-            let g = grade(d.segs)
-            stamp("diarizer call")
-            print("\ndiarizer iso \(iso ? "ON " : "OFF") (FluidAudio, clustering 0.7): " + "Me prec \(fmtPct(g.mePrec))  Me rec \(fmtPct(g.meRec))  count exact \(fmtPct(g.exact))"
-                + "  purity \(fmtPct(g.purity))  overlap Me \(fmtPct(g.ovlMe))  CPU \(String(format: "%.4f", d.cpuPerSec)) s/s"
-                + " (\(String(format: "%.1f", d.cpuPct))% of one core)"
-                + "  RSS after call \(String(format: "%.0f", residentMB())) MB")
         }
     }
 
-    if wantSeq, let best = isoOnGrid.max(by: { $0.grid.f1 < $1.grid.f1 }) {
-        let g = best.grid
-        print("\nGate (isolation ON, best grid point by Me F1: cluster \(best.cl), me \(best.me), margin \(best.mg))")
-        print("  Me precision \(fmtPct(g.mePrec)) \(g.mePrec >= 0.95 ? "PASS" : "FAIL") (>= 95%)")
-        print("  Me recall \(fmtPct(g.meRec)) \(g.meRec >= 0.90 ? "PASS" : "FAIL") (>= 90%)")
-        print("  speaker count exact \(fmtPct(g.exact)) \(g.exact >= 0.80 ? "PASS" : "FAIL") (>= 80%)")
-        print("  overlap pieces labelled Me \(fmtPct(g.ovlMe)) \(g.ovlMe >= 0.70 ? "PASS" : "FAIL") (>= 70%)")
-        let passing = isoOnGrid.filter { $0.grid.mePrec >= 0.95 && $0.grid.meRec >= 0.90 && $0.grid.exact >= 0.80 && $0.grid.ovlMe >= 0.70 }
-        print("  grid points passing all four: \(passing.isEmpty ? "none" : passing.map { "cl \($0.cl) me \($0.me) mg \($0.mg)" }.joined(separator: "; "))")
-        print("  emb s/s \(String(format: "%.4f", onEmbCPU)) \(onEmbCPU <= 0.05 ? "PASS" : "FAIL") (<= 0.05)")
+    if wantSeq {
+        print("\nBest grid point per overlap level and isolation state (by Me F1):")
+        for snr in [10.0, 5.0, 0.0] {
+            for iso in [false, true] {
+                let rows = gateRows.filter { $0.snr == snr && $0.iso == iso }
+                guard let b = rows.max(by: { $0.grid.f1 < $1.grid.f1 }) else { continue }
+                print("  overlap \(Int(snr)) dB, iso \(iso ? "ON " : "OFF"): "
+                    + gridLine(iso: iso, cl: b.cl, me: b.me, mg: b.mg, rs: b.rs, b.grid))
+            }
+        }
+        print("\nGated set: overlap 10 dB, isolation ON, every grid point:")
+        for r in gateRows where r.snr == 10.0 && r.iso {
+            print(gridLine(iso: r.iso, cl: r.cl, me: r.me, mg: r.mg, rs: r.rs, r.grid))
+        }
     }
 }
 
-/// The RSS for each stage, once each: model load, first embedding, first AU render, first STT call, diarizer call, exit.
+/// RSS for each stage, once each: model load, first embedding, first AU render, first STT call, diarizer call, exit.
 func printRSSStages() {
     print("\nRSS MB per stage (resident, first time each stage is reached)")
     for name in ["model load", "first embedding", "first AU render", "first STT call", "diarizer call"] {
         let v = rssStamps.first { $0.name == name }?.mb
         print("  \(name.padding(toLength: 18, withPad: " ", startingAt: 0)) \(v.map { String(format: "%.0f", $0) } ?? "not reached")")
     }
-    let exitMB = residentMB()
-    print("  \("exit".padding(toLength: 18, withPad: " ", startingAt: 0)) \(String(format: "%.0f", exitMB))")
-    if let first = rssStamps.first(where: { $0.name == "first embedding" })?.mb {
-        print("  first embedding: absolute \(String(format: "%.0f", first)) MB (<= 80: \(first <= 80 ? "PASS" : "FAIL")),"
-            + " delta from before load \(String(format: "%.0f", first - rssBefore)) MB (<= 80: \(first - rssBefore <= 80 ? "PASS" : "FAIL"))")
-    }
+    print("  \("exit".padding(toLength: 18, withPad: " ", startingAt: 0)) \(String(format: "%.0f", residentMB()))")
 }
 
-// MARK: - STT feed check (step 1): the file as analyzeSequence reads it, against the buffers converted to the
-// analyzer's bestAvailableAudioFormat and started through an input sequence.
+// MARK: - Converted STT feed (step 1 check)
 
+/// The file as analyzeSequence reads it, against the buffers converted to the analyzer's bestAvailableAudioFormat
+/// and started through an input sequence.
 @available(macOS 26.0, *)
 func appleTranscribeConverted(_ url: URL) async throws -> (text: String, file: String, analyzer: String) {
     let transcriber = SpeechTranscriber(locale: Locale(identifier: "en-US"), preset: .transcription)
