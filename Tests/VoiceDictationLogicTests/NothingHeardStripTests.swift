@@ -17,14 +17,13 @@ final class NothingHeardStripTests: XCTestCase {
         }
     }
 
-    /// Source: the error branch of the activity draws no bars and the message is not wrapped in the bars cell.
-    func testErrorStateHidesTheBars() throws {
+    /// r5 notice: the failure is no longer drawn in the strip, so the old assertions are inverted. The
+    /// activity has no failure branch that reads the message, and the failure draws no bars next to text.
+    func testFailureStateDrawsNoHeadlineInTheStrip() throws {
         let text = try appSource("boringNotch/Voice/VoiceDictationLiveActivity.swift")
-        let start = try XCTUnwrap(text.range(of: "case .failed(let message):"), "the failed branch moved; re-check this test")
-        let end = try XCTUnwrap(text.range(of: "    }\n\n    /// The strip's bars cell", range: start.upperBound..<text.endIndex))
-        let branch = String(text[start.lowerBound..<end.lowerBound])
-        XCTAssertFalse(branch.contains("bars("), "the failure branch still draws the level bars next to the text")
-        XCTAssertTrue(branch.contains("DictationStrip.failureCellWidth"), "the failure text is not sized to the shared cell width")
+        XCTAssertFalse(text.contains("case .failed(let message):"), "the strip still reads the failure message")
+        XCTAssertFalse(text.contains("DictationStrip.headline(message)"), "the strip still shows a failure headline")
+        XCTAssertFalse(text.contains("DictationStrip.failureCellWidth"), "the strip still reserves a failure text cell")
     }
 
     /// Source: the chin and the activity both take the width from the same constant, so the failure cell cannot drift.
@@ -32,9 +31,9 @@ final class NothingHeardStripTests: XCTestCase {
         let chin = try appSource("boringNotch/ContentView.swift")
         XCTAssertTrue(chin.contains("DictationStrip.extraWidth"), "the chin no longer takes its width from DictationStrip")
         let activity = try appSource("boringNotch/Voice/VoiceDictationLiveActivity.swift")
-        XCTAssertTrue(
+        XCTAssertFalse(
             activity.contains("DictationStrip.failureCellWidth(side: side)"),
-            "the activity sizes the failure cell from something other than the shared DictationStrip width")
+            "the activity still sizes a failure text cell; the failure is a notice now")
         let failureRule = try appSource("boringNotch/Voice/Logic/DictationStrip.swift")
         XCTAssertTrue(failureRule.contains("static func failureCellWidth(side: CGFloat) -> CGFloat"), "the shared width is missing")
         XCTAssertFalse(
