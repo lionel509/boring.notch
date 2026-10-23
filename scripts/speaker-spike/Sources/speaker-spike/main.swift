@@ -17,10 +17,14 @@ import VoiceDictationLogic
 
 setvbuf(stdout, nil, _IONBF, 0)  // every probe line shows at once, even when a take dies
 
-let scratch = URL(
-    fileURLWithPath: (NSHomeDirectory() as NSString)
-        .appendingPathComponent("worktrees/boring.notch/.target/speaker-spike-scratch"),
-    isDirectory: true)
+/// Clips live here. `--scratch DIR` points the spike at another folder (the synthetic smoke test uses this).
+let scratch: URL = {
+    if let i = CommandLine.arguments.firstIndex(of: "--scratch"), i + 1 < CommandLine.arguments.count {
+        return URL(fileURLWithPath: CommandLine.arguments[i + 1], isDirectory: true)
+    }
+    return URL(fileURLWithPath: (NSHomeDirectory() as NSString)
+        .appendingPathComponent("worktrees/boring.notch/.target/speaker-spike-scratch"), isDirectory: true)
+}()
 let clipSeconds = 8.0
 let sampleRate = 16_000.0
 let segmentLengths = [2, 3, 5, 8]
@@ -536,6 +540,7 @@ let wantSTT = args.contains("--stt")
 let mixMode = args.contains("--mix")
 let wantSeq = args.contains("--seq")
 let wantDiarizer = args.contains("--diarizer")
+let voiceOnly = args.contains("--voice-only")
 var bestPrompt: [String: String] = [:]  // clip name -> the prompt its STT matched best (round 4 step 1)
 var sttValid = true  // false when clip 1's best WER > 0.5: the STT path is wrong, leak and WER are not printed
 
@@ -548,6 +553,10 @@ if let v = flagValue("--record") {
     recordList = nums
 }
 if replay && recordList != nil { throw SpikeError.badFlag("--replay and --record cannot be combined") }
+// --record's Return-based flow needs a terminal: without one, the old run recorded back to back and captured music.
+if recordList != nil && isatty(0) == 0 {
+    throw SpikeError.badFlag("--record needs a terminal (Return starts each take). Use --voice-only, which counts down instead.")
+}
 var variantList: [Variant] = [.a, .b, .c]
 if let v = flagValue("--vp") {
     let parsed = v.split(separator: ",").compactMap { Variant(rawValue: String($0).uppercased()) }
@@ -558,6 +567,15 @@ if let v = flagValue("--vp") {
 // MARK: - Record
 
 try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+
+if voiceOnly {
+    if #available(macOS 26.0, *) {
+        try await recordVoiceOnly()
+    } else {
+        print("--voice-only needs macOS 26 (SpeechAnalyzer for the WER check).")
+    }
+    exit(0)
+}
 
 if let list = recordList {
     print("Recording scenes \(list.map(String.init).joined(separator: ",")) from the default mic. "
@@ -586,18 +604,25 @@ if let list = recordList {
 
 // MARK: - Load (live and replay take the same path: file, then Int16 round trip)
 
+// The voice set (round 5): me1 is the voiceprint, me2 and me3 are Lionel's speech, clip3 is a real song.
+// Clips 1, 2, 4 and 5 were recorded without a terminal and are not Lionel, so they are not loaded.
+let voiceSet: [(name: String, scene: Scene)] = [
+    ("me1", Scene(number: 0, label: "Lionel, prompt A (voiceprint)", instruction: "", prompt: promptA, pair: false)),
+    ("me2", Scene(number: 0, label: "Lionel, prompt B", instruction: "", prompt: promptB, pair: false)),
+    ("me3", Scene(number: 0, label: "Lionel, prompt C", instruction: "", prompt: promptC, pair: false)),
+    ("clip3", scenes[2]),
+]
 var loaded: [LoadedClip] = []
-for scene in scenes {
-    for vp in (scene.pair ? [false, true] : [false]) {
-        let name = clipName(scene.number, vp: vp)
-        guard FileManager.default.fileExists(atPath: clipURL(name).path) else { continue }
-        let raw = try loadClip(clipURL(name))
-        let meta = try? JSONDecoder().decode(CaptureMeta.self, from: Data(contentsOf: metaURL(name)))
-        loaded.append(LoadedClip(scene: scene, vp: vp, name: name,
-                                 samples: SpeakerGate.int16RoundTrip(raw), meta: meta))
-    }
+for (name, scene) in voiceSet {
+    guard FileManager.default.fileExists(atPath: clipURL(name).path) else { continue }
+    let raw = try loadClip(clipURL(name))
+    let meta = try? JSONDecoder().decode(CaptureMeta.self, from: Data(contentsOf: metaURL(name)))
+    loaded.append(LoadedClip(scene: scene, vp: false, name: name,
+                             samples: SpeakerGate.int16RoundTrip(raw), meta: meta))
 }
-guard loaded.contains(where: { $0.name == "clip1" }) else { throw SpikeError.missingClip("clip 1") }
+guard loaded.contains(where: { $0.name == "me1" }) else {
+    throw SpikeError.missingClip("me1 (record the voice set with --voice-only)")
+}
 print("Scoring \(loaded.count) clips (no mic).\n")
 
 // MARK: - Model
@@ -900,40 +925,41 @@ let sayVoices: [(file: String, voice: String, text: String)] = [
 
 @available(macOS 26.0, *)
 func runMix(wantSTT: Bool) async throws {
-    guard let c1 = loaded.first(where: { $0.name == "clip1" }),
-          let c2 = loaded.first(where: { $0.name == "clip2" }),
-          let c3 = loaded.first(where: { $0.name == "clip3" }),
-          let c5 = loaded.first(where: { $0.name == "clip5" })
-    else { throw SpikeError.missingClip("clip 1, 2, 3 and 5") }
+    guard let c1 = loaded.first(where: { $0.name == "me1" }),
+          let c3 = loaded.first(where: { $0.name == "clip3" })
+    else { throw SpikeError.missingClip("me1 and clip3") }
     guard let voiceprint = try SpeakerGate.segmentEmbedding(c1.samples, embed: embedWindow) else {
-        throw SpikeError.missingClip("clip 1 embedding")
+        throw SpikeError.missingClip("me1 embedding")
     }
-    let n = c2.samples.count
-    let prompt = bestPrompt["clip2"] ?? c2.scene.prompt
-    print("Mix (offline, no mic): clip 2 speech, clip 1 voiceprint, 3 s segments, hop 1 s.")
+    let meSpeech = try meSpeechSamples(loaded)
+    let n = meSpeech.count
+    let meLevel = rmsDBFS(meSpeech)
+    let prompt = promptB + " " + promptC
+    print("Mix (offline, no mic): me2 + me3 speech, me1 voiceprint, 3 s segments, hop 1 s. "
+        + "Say voices level-matched to the speech (\(String(format: "%.1f", meLevel)) dBFS).")
     print("row                    iso  min     median  max      leak    WER    words   iso s/s  emb s/s")
 
     var interferers: [(String, [Float])] = [
         ("song", fit(c3.samples, to: n)),
-        ("talker", fit(c5.samples, to: n)),
     ]
     for v in sayVoices {
         let url = scratch.appendingPathComponent("\(v.file).aiff")
         try sayClip(voice: v.voice, text: v.text, to: url)
-        interferers.append((v.file, fit(SpeakerGate.int16RoundTrip(try loadClip(url)), to: n)))
+        let level = levelMatch(SpeakerGate.int16RoundTrip(try loadClip(url)), toDBFS: meLevel)
+        interferers.append((v.file, fit(level, to: n)))
     }
     interferers.append(("brown", fit(brownNoise(n, seed: 11), to: n)))
     interferers.append(("pink", fit(pinkNoise(n, seed: 23), to: n)))
     interferers.append(("mower", fit(mowerNoise(n, seed: 37), to: n)))
 
     var results: [MixResult] = []
-    results += try await mixSource(name: "clean", label: "clean", x: c2.samples, voiceprint: voiceprint,
+    results += try await mixSource(name: "clean", label: "clean", x: meSpeech, voiceprint: voiceprint,
                                    prompt: prompt, wantSTT: wantSTT)
     for (name, x) in interferers {
         for snr in [10.0, 5.0, 0.0, -5.0] {
-            let g = snrGain(clean: c2.samples, interferer: x, snrDB: snr)
+            let g = snrGain(clean: meSpeech, interferer: x, snrDB: snr)
             var mix = [Float](repeating: 0, count: n)
-            for i in 0..<n { mix[i] = c2.samples[i] + g * x[i] }
+            for i in 0..<n { mix[i] = meSpeech[i] + g * x[i] }
             let label = snr > 0 ? "+\(Int(snr))" : "\(Int(snr))"
             let url = scratch.appendingPathComponent("mix-\(name)-\(label).wav")
             try saveClip(mix, to: url)
@@ -942,7 +968,7 @@ func runMix(wantSTT: Bool) async throws {
                                            prompt: prompt, wantSTT: wantSTT)
         }
         // Interferer alone at the 0 dB gain: the layer 2 negatives (no Lionel).
-        let g0 = snrGain(clean: c2.samples, interferer: x, snrDB: 0)
+        let g0 = snrGain(clean: meSpeech, interferer: x, snrDB: 0)
         let only = x.map { $0 * g0 }
         let url = scratch.appendingPathComponent("only-\(name).wav")
         try saveClip(only, to: url)
@@ -979,8 +1005,8 @@ func runMix(wantSTT: Bool) async throws {
         print("  isolation \(iso ? "ON " : "OFF"): his min \(fmt(hisMin)), negatives max \(fmt(othersMax)), "
             + "gap \(fmt(gap)) \(gap >= 0.20 ? "PASS" : "FAIL"), candidate threshold \(String(format: "%.2f", threshold))")
     }
-    print("\nClip 2 in mix, 0 dB, isolation ON, 3 s median:")
-    for (label, names) in [("song", ["song"]), ("talker", ["talker"]), ("noise", ["brown", "pink", "mower"])] {
+    print("\nMe speech in mix, 0 dB, isolation ON, 3 s median:")
+    for (label, names) in [("song", ["song"]), ("say", sayVoices.map(\.file)), ("noise", ["brown", "pink", "mower"])] {
         let parts = names.map { nm -> String in
             let v = results.first { $0.name == nm && $0.label == "0" && $0.iso }
             return "\(nm) \(v.map { fmt($0.med) } ?? "n/a")"
@@ -993,7 +1019,7 @@ func runMix(wantSTT: Bool) async throws {
 // Step 1: the STT prompt check. Clips 1 and 2 are scored against all three prompts; each takes its best.
 if wantSTT, #available(macOS 26.0, *) {
     var parts: [String] = []
-    for name in ["clip1", "clip2"] where loaded.contains(where: { $0.name == name }) {
+    for name in ["me1", "me2", "me3"] where loaded.contains(where: { $0.name == name }) {
         // Feed 1 is the file as analyzeSequence reads it (the path every earlier round used). Feed 2 is the same
         // file converted to the analyzer's bestAvailableAudioFormat and started through an input sequence.
         guard let c = await sttPromptCheck(name, converted: false) else {
@@ -1009,11 +1035,11 @@ if wantSTT, #available(macOS 26.0, *) {
         }
         bestPrompt[name] = sttPrompts[c.best].text
         parts.append("\(name) \(sttPrompts[c.best].letter)")
-        if name == "clip1" && c.wers[c.best] > 0.5 { sttValid = false }
+        if c.wers[c.best] > 0.5 { sttValid = false }
     }
     print("STT prompt matched: \(parts.joined(separator: ", "))")
     if !sttValid {
-        print("STT: invalid (clip 1's best WER is above 0.5, so the STT path is wrong). Leak and WER are not printed.")
+        print("STT: invalid (a voice clip's best WER is above 0.5). Leak and WER are not printed.")
     }
 }
 
@@ -1039,7 +1065,7 @@ for c in loaded {
     if let e { segEmb[c.name] = e }
 }
 // VP-off clips are scored against clip 1; VP-on clips against clip 6-vp (the enrolment taken through VP).
-let vpOffPrint = segEmb["clip1"]
+let vpOffPrint = segEmb["me1"]
 let vpOnPrint = segEmb["clip6-vp"]
 
 var results: [ClipResult] = []
@@ -1164,9 +1190,9 @@ print("  L1 fail set: \(l1Fail.isEmpty ? "none" : "{" + l1Fail.joined(separator:
     + (l1Pending.isEmpty ? "" : "  (pending STT: \(l1Pending.joined(separator: ", ")))"))
 
 print("\nLayer 2 (VP-off speaker vs others), gate: min(his 3 s) - max(others 3 s) >= 0.20")
-let his = row("clip6-vp") ?? row("clip1")
-let others = ["clip9-vp", "clip5"].compactMap { row($0) }
-let hisName = row("clip6-vp") != nil ? "clip 6-vp" : "clip 1"
+let his = row("me2")
+let others = ["clip3"].compactMap { row($0) }
+let hisName = "me2 (Lionel)"
 if let his, !others.isEmpty {
     let hisMin = his.byLength[3]?.min() ?? .nan
     let othersMax = others.compactMap { $0.byLength[3]?.max() }.max() ?? .nan
