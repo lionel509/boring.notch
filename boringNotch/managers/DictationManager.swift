@@ -25,8 +25,11 @@ import Foundation
 final class DictationManager: ObservableObject {
     static let shared = DictationManager()
 
+    /// Every app holding the microphone right now. Call detection reads this; the indicator reads `recordingApp`.
+    @Published private(set) var micClients: [MicClient] = []
+
     /// The app currently recording, by display name. Nil when the mic is idle.
-    @Published private(set) var recordingApp: String?
+    var recordingApp: String? { CallApps.indicatorName(micClients) }
 
     var isRecording: Bool { recordingApp != nil }
 
@@ -79,11 +82,11 @@ final class DictationManager: ObservableObject {
     private func refresh() {
         Task.detached(priority: .utility) {
             let processes = Self.processObjects()
-            let recording = Self.recordingAppName(among: processes)
+            let clients = Self.micClients(among: processes)
 
             await MainActor.run {
                 self.registerInputListeners(for: processes)
-                if self.recordingApp != recording { self.recordingApp = recording }
+                if self.micClients != clients { self.micClients = clients }
             }
         }
     }
@@ -106,9 +109,9 @@ final class DictationManager: ObservableObject {
     /// The cheap half: who is recording, without touching listener registration.
     private func refreshRecordingOnly() {
         Task.detached(priority: .utility) {
-            let recording = Self.recordingAppName(among: Self.processObjects())
+            let clients = Self.micClients(among: Self.processObjects())
             await MainActor.run {
-                if self.recordingApp != recording { self.recordingApp = recording }
+                if self.micClients != clients { self.micClients = clients }
             }
         }
     }
@@ -146,26 +149,44 @@ final class DictationManager: ObservableObject {
         return value
     }
 
-    /// The recording app's display name, or nil if only the system is listening.
+    /// Every process holding the microphone, in process-list order.
     ///
     /// Processes with no bundle identifier are skipped, which is not a shortcut:
     /// `corespeechd` - the "Hey Siri" daemon - holds the microphone open permanently, so
-    /// counting it would leave the indicator lit forever, telling you nothing.
-    private nonisolated static func recordingAppName(among processes: [AudioObjectID]) -> String? {
+    /// counting it would leave the indicator lit forever, telling you nothing. A client
+    /// with no `name` is kept for call detection but never named by the indicator.
+    private nonisolated static func micClients(among processes: [AudioObjectID]) -> [MicClient] {
+        var clients: [MicClient] = []
         for process in processes where isRunningInput(process) {
             let processID = pid(of: process)
-            guard processID > 0,
-                  let app = NSRunningApplication(processIdentifier: processID),
-                  let identifier = app.bundleIdentifier,
+            guard processID > 0 else { continue }
+            let app = NSRunningApplication(processIdentifier: processID)
+            guard let identifier = app?.bundleIdentifier ?? coreAudioBundleID(process),
+                  !identifier.isEmpty,
                   // Not us. The spectrum's own process tap counts as an input stream, so
                   // the notch would light up to announce that the notch is listening --
                   // every time music plays, which is exactly when nobody is recording.
                   identifier != Bundle.main.bundleIdentifier,
-                  let name = app.localizedName
+                  app?.bundleIdentifier != Bundle.main.bundleIdentifier
             else { continue }
-            return friendlyName(name)
+            // Named only when the indicator always could name it: a running app with a bundle and a name.
+            let name = app?.bundleIdentifier == nil ? nil : app?.localizedName.map(friendlyName)
+            clients.append(MicClient(bundleID: identifier, pid: processID, name: name))
         }
-        return nil
+        return clients
+    }
+
+    /// The bundle identifier CoreAudio reports for a process. Covers the processes with no
+    /// `NSRunningApplication` (FaceTime's `avconferenced`, for one).
+    private nonisolated static func coreAudioBundleID(_ process: AudioObjectID) -> String? {
+        var address = self.address(kAudioProcessPropertyBundleID)
+        var value: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(process, &address, 0, nil, &size, &value) == noErr,
+              let cfValue = value
+        else { return nil }
+        let identifier = cfValue.takeRetainedValue() as String
+        return identifier.isEmpty ? nil : identifier
     }
 
     /// Electron apps record from a helper process, whose name is the app's plus a suffix

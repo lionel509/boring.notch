@@ -29,6 +29,8 @@ enum SneakContentType: Equatable {
     /// A dictation take that failed or was too short. A one-line notice like a system alert:
     /// the icon, the headline and an optional second beat, never text inside the closed strip.
     case dictation
+    /// "Call detected" with fn+Y / fn+N / fn+D. Shown as the dictation row, cleared by `dismissAnnouncement`.
+    case callPrompt
 }
 
 extension SneakContentType {
@@ -42,7 +44,7 @@ extension SneakContentType {
     /// of them were in the set.
     var isAnnouncement: Bool {
         switch self {
-        case .wifi, .bluetooth, .systemAlert, .dictation: true
+        case .wifi, .bluetooth, .systemAlert, .dictation, .callPrompt: true
         default: false
         }
     }
@@ -384,6 +386,14 @@ class BoringViewCoordinator: ObservableObject {
             sneakPeek.detailSecondary = next.detailSecondary
             sneakPeek.label = next.label
             sneakPeek.tint = next.tint
+        }
+    }
+
+    /// Removes a queued announcement of this type and hides it if it is on screen now.
+    func dismissAnnouncement(type: SneakContentType) {
+        announcementQueue.removeAll { $0.type == type }
+        if sneakPeek.show && sneakPeek.type == type {
+            withAnimation(.smooth) { sneakPeek.show = false }
         }
     }
 
