@@ -57,9 +57,9 @@ enum CallApps {
         browsers.contains { matches(bundleID, base: $0) }
     }
 
-    /// Services in table order are the priority: the specific matches (Meet, Zoom, Teams, Jitsi) beat the
-    /// bare words (Webex, Whereby, Discord, Slack). The first title that matches the top service wins, so a
-    /// stray tab cannot rename the real call. Only the table's id and name leave this function.
+    /// Services in table order are the priority: a title matching a specific service (Meet, Zoom, Teams,
+    /// Jitsi) beats the bare words (Webex, Whereby, Discord, Slack). Keyword matching can be fooled by a
+    /// non-call tab that names a service; only the table's id and name leave this function.
     static func browserCall(titles: [String], pid: Int32) -> DetectedCall? {
         let lowered = titles.map { $0.lowercased() }
         for service in services where lowered.contains(where: { serviceMatches(service, lowercasedTitle: $0) }) {
