@@ -63,6 +63,8 @@ final class VoiceDictationManager: ObservableObject {
     /// Ends a stopped take that never got its engine running within `startGrace` seconds.
     private var startGraceTask: Task<Void, Never>?
     private static let startGrace: Double = 10
+    /// Plays the start cue once the fn hold is confirmed (`DictationHotkeyLogic.startCueDue`).
+    private var startCueTask: Task<Void, Never>?
     /// Owns the pending clipboard restore across overlapping takes.
     private var clipboard = ClipboardKeeper()
     private var clipboardRestoreTask: Task<Void, Never>?
@@ -132,7 +134,13 @@ final class VoiceDictationManager: ObservableObject {
                 old.cancel()
                 closeRewrite(old)
             }
-            DictationSounds.playStart()
+            // The cue waits for the hold to be confirmed, so a quick fn tap (the Globe key's own job) stays silent.
+            startCueTask?.cancel()
+            startCueTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(DictationHotkeyLogic.tapThreshold))
+                guard !Task.isCancelled, let self, DictationHotkeyLogic.startCueDue(self.hotkey, at: self.now) else { return }
+                DictationSounds.playStart()
+            }
             // A take still open here was superseded before it ended. Log it so every take has one line.
             endTake(.discarded)
             // Cancel the stored engine of a superseded take. One still inside analyzer.start is torn down when start returns (begin).
@@ -186,6 +194,7 @@ final class VoiceDictationManager: ObservableObject {
             }
             Task { await begin(take) }
         case .stop:
+            startCueTask?.cancel()
             DictationSounds.playStop()
             releaseAt = now
             if let started = takeStartedAt {
