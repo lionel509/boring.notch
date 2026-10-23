@@ -15,6 +15,8 @@ import Foundation
 import Speech
 import VoiceDictationLogic
 
+setvbuf(stdout, nil, _IONBF, 0)  // every probe line shows at once, even when a take dies
+
 let scratch = URL(
     fileURLWithPath: (NSHomeDirectory() as NSString)
         .appendingPathComponent("worktrees/boring.notch/.target/speaker-spike-scratch"),
@@ -192,6 +194,13 @@ final class TapBox: @unchecked Sendable {
     var channelRMS: [Double] = []
 }
 
+/// Result of one take. Capture never throws: a failed take carries its reason and the caller decides.
+struct TakeResult {
+    let samples: [Float]  // 16 kHz mono
+    let meta: CaptureMeta
+    let failure: String?
+}
+
 func describe(_ input: AVAudioInputNode) -> String {
     "in \(formatText(input.inputFormat(forBus: 0))) out \(formatText(input.outputFormat(forBus: 0)))"
 }
@@ -206,29 +215,66 @@ func micModeName() -> String {
     }
 }
 
-/// One take at the mic. off: plain capture. A: VP on, tap format read after prepare. B: A plus the VPIO render
-/// side (mixer to output at volume 0). C: B, with Voice Isolation picked by Lionel in the system panel.
-/// Returns 16 kHz mono from channel 0 (the MicChannelPick.monoSource rule); per-channel RMS is recorded.
-func capture(seconds: Double, variant: Variant) throws -> (samples: [Float], meta: CaptureMeta) {
+/// Builds the take from what the tap collected. Called on every path, success or failure.
+func takeResult(_ box: TapBox, variant: String, before: String, after: String, tap: String,
+                wall: Double, cpu: Double, failure: String?) -> TakeResult {
+    box.lock.lock()
+    let raw = box.samples
+    let rate = box.rate
+    let buffers = box.buffers
+    let rms = box.channelRMS
+    box.lock.unlock()
+    var failure = failure
+    var samples: [Float] = []
+    if !raw.isEmpty && rate > 0 {
+        do { samples = try resample(raw, from: rate, to: sampleRate) } catch { failure = failure ?? "resample: \(error)" }
+    }
+    if failure == nil && buffers == 0 { failure = "no buffers delivered" }
+    let meta = CaptureMeta(
+        variant: variant, micMode: micModeName(), inputBefore: before, inputAfter: after,
+        tapFormat: tap, buffers: buffers, channelRMS: rms, levelDBFS: rmsDBFS(samples),
+        captureCPUFraction: wall > 0 ? cpu / wall : 0, wallSeconds: wall)
+    return TakeResult(samples: samples, meta: meta, failure: failure)
+}
+
+/// One take on a fresh engine. off: plain capture, tap format read after prepare. A: VP on. B: A plus the VPIO
+/// render side (mixer to output, volume 0). C: B, with Voice Isolation picked by Lionel. Channel 0 is recorded
+/// (MicChannelPick.monoSource rule); per-channel dBFS of the first buffer is recorded.
+func capture(seconds: Double, variant: Variant) -> TakeResult {
     let engine = AVAudioEngine()
     let input = engine.inputNode
-    guard input.inputFormat(forBus: 0).sampleRate > 0 else { throw SpikeError.noInput }
+    let box = TapBox()
     let before = describe(input)
+    guard input.inputFormat(forBus: 0).sampleRate > 0 else {
+        return takeResult(box, variant: variant.rawValue, before: before, after: before, tap: "none",
+                          wall: 0, cpu: 0, failure: "input sampleRate 0 (no input device or no mic grant)")
+    }
     if variant != .off {
-        try input.setVoiceProcessingEnabled(true)
+        do {
+            try input.setVoiceProcessingEnabled(true)
+        } catch {
+            return takeResult(box, variant: variant.rawValue, before: before, after: describe(input), tap: "none",
+                              wall: 0, cpu: 0, failure: "setVoiceProcessingEnabled(true): \(error)")
+        }
         input.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
             enableAdvancedDucking: false, duckingLevel: .min)
     }
     let after = describe(input)
     if variant == .b || variant == .c {
+        guard engine.outputNode.outputFormat(forBus: 0).sampleRate > 0 else {
+            return takeResult(box, variant: variant.rawValue, before: before, after: after, tap: "none",
+                              wall: 0, cpu: 0, failure: "output node 0 Hz: variant \(variant.rawValue) needs an output device")
+        }
         engine.connect(input, to: engine.mainMixerNode, format: nil)
         engine.mainMixerNode.outputVolume = 0
     }
     engine.prepare()
     let tapFormat = input.outputFormat(forBus: 0)
-    guard tapFormat.sampleRate > 0 else { throw SpikeError.noInput }
-
-    let box = TapBox()
+    guard tapFormat.sampleRate > 0, tapFormat.channelCount > 0 else {
+        return takeResult(box, variant: variant.rawValue, before: before, after: after,
+                          tap: formatText(tapFormat), wall: 0, cpu: 0,
+                          failure: "tap format \(formatText(tapFormat)) not usable")
+    }
     input.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { buffer, _ in
         guard let data = buffer.floatChannelData else { return }
         let frames = Int(buffer.frameLength)
@@ -247,68 +293,124 @@ func capture(seconds: Double, variant: Variant) throws -> (samples: [Float], met
     }
     let cpu0 = cpuSeconds()
     let wall0 = Date()
-    try engine.start()
-    let mode = micModeName()
-    Thread.sleep(forTimeInterval: seconds)
+    var failure: String? = nil
+    do {
+        try engine.start()
+        Thread.sleep(forTimeInterval: seconds)
+    } catch {
+        failure = "engine.start: \(error)"
+    }
     input.removeTap(onBus: 0)
     engine.stop()
     let wall = Date().timeIntervalSince(wall0)
     let cpu = cpuSeconds() - cpu0
-
-    box.lock.lock()
-    let raw = box.samples
-    let rate = box.rate
-    let buffers = box.buffers
-    let rms = box.channelRMS
-    box.lock.unlock()
-    var samples: [Float] = []
-    if !raw.isEmpty && rate > 0 { samples = try resample(raw, from: rate, to: sampleRate) }
-    let meta = CaptureMeta(
-        variant: variant.rawValue, micMode: mode, inputBefore: before, inputAfter: after,
-        tapFormat: formatText(tapFormat), buffers: buffers, channelRMS: rms,
-        levelDBFS: rmsDBFS(samples), captureCPUFraction: wall > 0 ? cpu / wall : 0, wallSeconds: wall)
-    return (samples, meta)
+    return takeResult(box, variant: variant.rawValue, before: before, after: after,
+                      tap: formatText(tapFormat), wall: wall, cpu: cpu, failure: failure)
 }
 
-func printProbe(_ m: CaptureMeta) {
+/// The round-1 capture path (format nil, channels averaged), used for the VP-off half of every scene so the
+/// VP-off clips are made the way clips 1-5 were. Never throws.
+func captureRound1(seconds: Double) -> TakeResult {
+    let engine = AVAudioEngine()
+    let input = engine.inputNode
+    let box = TapBox()
+    let before = describe(input)
+    guard input.inputFormat(forBus: 0).sampleRate > 0 else {
+        return takeResult(box, variant: "round1", before: before, after: before, tap: "nil",
+                          wall: 0, cpu: 0, failure: "input sampleRate 0 (no input device or no mic grant)")
+    }
+    input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, _ in
+        guard let data = buffer.floatChannelData else { return }
+        let frames = Int(buffer.frameLength)
+        let channels = Int(buffer.format.channelCount)
+        guard frames > 0, channels > 0 else { return }
+        var chunk = [Float](repeating: 0, count: frames)
+        for c in 0..<channels {
+            let p = data[c]
+            for i in 0..<frames { chunk[i] += p[i] }
+        }
+        let scale = 1 / Float(channels)
+        for i in 0..<frames { chunk[i] *= scale }
+        box.lock.lock()
+        if box.buffers == 0 {
+            box.channelRMS = (0..<channels).map { c in
+                rmsDBFS(Array(UnsafeBufferPointer(start: data[c], count: frames)))
+            }
+        }
+        box.buffers += 1
+        box.rate = buffer.format.sampleRate
+        box.samples.append(contentsOf: chunk)
+        box.lock.unlock()
+    }
+    let cpu0 = cpuSeconds()
+    let wall0 = Date()
+    var failure: String? = nil
+    do {
+        try engine.start()
+        Thread.sleep(forTimeInterval: seconds)
+    } catch {
+        failure = "engine.start: \(error)"
+    }
+    input.removeTap(onBus: 0)
+    engine.stop()
+    let wall = Date().timeIntervalSince(wall0)
+    let cpu = cpuSeconds() - cpu0
+    return takeResult(box, variant: "round1", before: before, after: describe(input), tap: "nil, channels averaged",
+                      wall: wall, cpu: cpu, failure: failure)
+}
+
+func printTake(_ label: String, _ take: TakeResult) {
+    let m = take.meta
     let chans = m.channelRMS.map { String(format: "%.1f", $0) }.joined(separator: " ")
-    print("  \(m.variant)  \(m.inputBefore) | after VP \(m.inputAfter) | tap \(m.tapFormat) | buffers \(m.buffers)"
+    print("  \(label)  \(m.inputBefore) | after VP \(m.inputAfter) | tap \(m.tapFormat) | buffers \(m.buffers)"
         + " | ch dBFS \(chans) | level \(String(format: "%.1f", m.levelDBFS)) | mic \(m.micMode)")
+    if let why = take.failure { print("  \(label)  FAILED: \(why)") }
 }
 
-/// Probes the capture variants for 3 s each, in order. Returns the first that delivers buffers.
-func probeCaptureVariants(_ variants: [Variant]) throws -> (variant: Variant, meta: CaptureMeta)? {
+/// Probes the capture variants for 3 s each, in order, each on a fresh engine. Returns the first that delivers
+/// buffers. Every variant's result is printed, failures included.
+func probeCaptureVariants(_ variants: [Variant]) -> (variant: Variant, meta: CaptureMeta)? {
     print("Capture probe, 3 s per variant, first that delivers buffers is used: \(variants.map(\.rawValue).joined(separator: ","))")
+    var reasons: [String] = []
     for v in variants {
         if v == .c {
             print("Variant C: the system mic panel opens. Pick Voice Isolation in Control Center, then press Return.")
             AVCaptureDevice.showSystemUserInterface(.microphoneModes)
             _ = readLine()
         }
-        do {
-            let take = try capture(seconds: 3, variant: v)
-            printProbe(take.meta)
-            if take.meta.buffers > 0 { return (v, take.meta) }
-        } catch {
-            print("  \(v.rawValue)  failed: \(error)")
-        }
+        let take = capture(seconds: 3, variant: v)
+        printTake(v.rawValue, take)
+        if take.failure == nil && take.meta.buffers > 0 { return (v, take.meta) }
+        reasons.append("\(v.rawValue): \(take.failure ?? "no buffers")")
     }
+    print("VP: none delivered. " + reasons.joined(separator: "; "))
     return nil
 }
 
-func recordTake(_ scene: Scene, vp: Bool, variant: Variant) throws {
+/// Records one take and saves it. Returns false when the take produced no audio. Never throws.
+func recordTake(_ scene: Scene, vp: Bool, variant: Variant?) -> Bool {
     let name = clipName(scene.number, vp: vp)
-    print("Take \(name) [\(scene.label)] \(vp ? "VP on, variant \(variant.rawValue)" : "VP off")")
+    let label = vp ? "VP on, variant \(variant?.rawValue ?? "?")" : "VP off, round-1 path"
+    print("Take \(name) [\(scene.label)] \(label)")
     print("  \(scene.instruction)")
     print("  Press Return to start.", terminator: " ")
     _ = readLine()
     print("  Recording...")
-    let take = try capture(seconds: clipSeconds, variant: variant)
-    guard take.meta.buffers > 0 else { throw SpikeError.noInput }
-    try saveClip(take.samples, to: clipURL(name))
-    try JSONEncoder().encode(take.meta).write(to: metaURL(name))
+    let take = vp ? capture(seconds: clipSeconds, variant: variant ?? .a) : captureRound1(seconds: clipSeconds)
+    guard !take.samples.isEmpty else {
+        print("  FAILED: \(take.failure ?? "no audio")\n")
+        return false
+    }
+    do {
+        try saveClip(take.samples, to: clipURL(name))
+        try JSONEncoder().encode(take.meta).write(to: metaURL(name))
+    } catch {
+        print("  FAILED to save: \(error)\n")
+        return false
+    }
     print("  Saved. level \(String(format: "%.1f", take.meta.levelDBFS)) dBFS, capture CPU "
         + "\(String(format: "%.1f", take.meta.captureCPUFraction * 100))% of one core\n")
+    return true
 }
 
 // MARK: - Files
@@ -444,13 +546,23 @@ if let list = recordList {
         + "Read each instruction, press Return, then the take records 8 s.\n")
     var chosen: (variant: Variant, meta: CaptureMeta)? = nil
     if list.contains(where: { scenes[$0 - 1].pair }) {
-        chosen = try probeCaptureVariants(variantList)
-        if chosen == nil { print("No capture variant delivered buffers. VP-on takes are skipped.\n") }
+        chosen = probeCaptureVariants(variantList)
     }
+    var vpOffFailed = false
     for n in list {
         let scene = scenes[n - 1]
-        try recordTake(scene, vp: false, variant: .off)
-        if scene.pair, let c = chosen { try recordTake(scene, vp: true, variant: c.variant) }
+        if !recordTake(scene, vp: false, variant: nil) { vpOffFailed = true }
+        if scene.pair {
+            if let c = chosen {
+                _ = recordTake(scene, vp: true, variant: c.variant)
+            } else {
+                print("  VP none delivered: the VP-on take of scene \(n) is skipped.\n")
+            }
+        }
+    }
+    if vpOffFailed {
+        fputs("A VP-off take failed. Check the mic and the Terminal mic grant.\n", stderr)
+        exit(1)
     }
 }
 
