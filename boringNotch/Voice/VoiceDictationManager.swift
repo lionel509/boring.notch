@@ -222,6 +222,7 @@ final class VoiceDictationManager: ObservableObject {
     /// pasted and the clipboard is not touched.
     private func discard() {
         takeID += 1
+        startCueTask?.cancel()
         ceilingTask?.cancel()
         startGraceTask?.cancel()
         resetTask?.cancel()

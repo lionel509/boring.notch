@@ -181,12 +181,45 @@ final class DictationHotkeyLogicTests: XCTestCase {
         XCTAssertTrue(Logic.startCueDue(s, at: 1.5))
     }
 
-    func testQuickTapNeverCues() {
+    /// A shortcut tap under the threshold latches hands-free; the take is audible, so it still cues.
+    func testTapLatchedHandsFreeTakeCues() {
         var s = Logic.State()
         XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
         XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.1), .none)
         XCTAssertTrue(s.handsFree)
+        XCTAssertTrue(Logic.startCueDue(s, at: Logic.tapThreshold))
+    }
+
+    /// A quick fn tap is classified as a cancel, so no take exists to cue.
+    func testQuickFnTapNeverCues() {
+        var fn = FnKeyLogic.State()
+        var s = Logic.State()
+        let down = FnKeyLogic.classify(&fn, .flags(keyCode: FnKeyLogic.fnKeyCode, fn: true, otherModifiers: false), at: 0)
+        if let event = down.event { XCTAssertEqual(Logic.reduce(&s, event, at: 0), .start) } else { XCTFail("fn down emits keyDown") }
+        let up = FnKeyLogic.classify(&fn, .flags(keyCode: FnKeyLogic.fnKeyCode, fn: false, otherModifiers: false), at: 0.1)
+        if let event = up.event { XCTAssertEqual(Logic.reduce(&s, event, at: 0.1), .discard) } else { XCTFail("fn up emits cancel") }
         XCTAssertFalse(Logic.startCueDue(s, at: 1.0))
+    }
+
+    /// Break 1 (review): fn+Space latch inside the lead-in. The take is hands-free before the cue is
+    /// due, so the Tink must still come due; the stop Pop must then follow a Tink.
+    func testFnSpaceLatchInLeadInStillCues() {
+        var fn = FnKeyLogic.State()
+        var s = Logic.State()
+        var actions: [Logic.Action] = []
+        var cueDue: [TimeInterval] = []
+        func feed(_ input: FnKeyLogic.Input, at t: TimeInterval) {
+            guard let event = FnKeyLogic.classify(&fn, input, at: t).event else { return }
+            actions.append(Logic.reduce(&s, event, at: t))
+        }
+        feed(.flags(keyCode: FnKeyLogic.fnKeyCode, fn: true, otherModifiers: false), at: 0)
+        feed(.keyDown(keyCode: FnKeyLogic.spaceKeyCode, isRepeat: false), at: 0.1)
+        if Logic.startCueDue(s, at: 0.3) { cueDue.append(0.3) }
+        feed(.flags(keyCode: FnKeyLogic.fnKeyCode, fn: false, otherModifiers: false), at: 0.5)
+        feed(.flags(keyCode: FnKeyLogic.fnKeyCode, fn: true, otherModifiers: false), at: 2.0)
+        feed(.flags(keyCode: FnKeyLogic.fnKeyCode, fn: false, otherModifiers: false), at: 2.1)
+        XCTAssertEqual(actions.filter { $0 != .none }, [.start, .stop])
+        XCTAssertFalse(cueDue.isEmpty, "stop cue (Pop) played for a take whose start cue (Tink) never came due")
     }
 
     func testCancelledOrAbortedTakeNeverCues() {
