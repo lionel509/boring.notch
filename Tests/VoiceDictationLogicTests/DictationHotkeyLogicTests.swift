@@ -165,6 +165,46 @@ final class DictationHotkeyLogicTests: XCTestCase {
         XCTAssertGreaterThan(totalDiscards, 0, "no take was ever discarded, so the checks pass vacuously")
     }
 
+    // MARK: start cue (a quick fn tap stays silent, a held fn cues once the hold is confirmed)
+
+    func testStartCueIsNotDueOnThePressItself() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertFalse(Logic.startCueDue(s, at: 0))
+        XCTAssertFalse(Logic.startCueDue(s, at: Logic.tapThreshold - 0.01))
+    }
+
+    func testStartCueIsDueOnceAHeldFnPassesTheTapThreshold() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertTrue(Logic.startCueDue(s, at: Logic.tapThreshold))
+        XCTAssertTrue(Logic.startCueDue(s, at: 1.5))
+    }
+
+    func testQuickTapNeverCues() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.1), .none)
+        XCTAssertTrue(s.handsFree)
+        XCTAssertFalse(Logic.startCueDue(s, at: 1.0))
+    }
+
+    func testCancelledOrAbortedTakeNeverCues() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .cancel, at: 0.05), .discard)
+        XCTAssertFalse(Logic.startCueDue(s, at: 1.0))
+
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 2), .start)
+        XCTAssertEqual(Logic.reduce(&s, .abort, at: 2.5), .discard)
+        XCTAssertFalse(Logic.startCueDue(s, at: 3.0))
+    }
+
+    func testIdleStateNeverCues() {
+        let s = Logic.State()
+        XCTAssertFalse(Logic.startCueDue(s, at: 10))
+    }
+
     // MARK: minimum hold (a release before minHold never pastes)
 
     func testMinHoldIsHalfASecondAndAboveTheTapLatch() {
