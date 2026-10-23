@@ -235,7 +235,7 @@ struct ContentView: View {
                         return view
                             .animation(vm.notchState == .open ? openAnimation : closeAnimation, value: vm.notchState)
                             .animation(.smooth, value: gestureProgress)
-                            .animation(voiceDictation.state == .idle ? DictationMotion.collapse : DictationMotion.expand, value: voiceDictation.state)
+                            .animation(.smooth, value: voiceDictation.state)
                     }
                     .contentShape(Rectangle())
                     .onHover { hovering in
@@ -422,8 +422,7 @@ struct ContentView: View {
                       } else if vm.notchState == .closed && voiceDictation.state != .idle && !vm.hideOnClosed {
                           // Momentary states only, so ranking above music is right.
                           VoiceDictationLiveActivity()
-                              .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                              .animation(DictationMotion.content, value: voiceDictation.state)
+                              .transition(.opacity)
                       } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music) && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle) && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed {
                           MusicLiveActivity()
                               .frame(alignment: .center)
