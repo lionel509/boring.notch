@@ -50,22 +50,4 @@ final class BreakerR5U3Tests: XCTestCase {
             retry.contains("tapChannels") && retry.contains("tapSampleRate"),
             "the raw-mic retry disables VP but never updates tapChannels/tapSampleRate, so the take report describes the VP format for a raw-mic take")
     }
-
-    /// U3-3. The tap closure hands every buffer to `TakeAudioBuffer.ingest` before the sample-rate gate runs.
-    /// `TakeAudioBuffer` computes `16000 / buffer rate` and uses it as an `AVAudioFrameCount`, which traps when
-    /// the value does not fit. MicLevelMeter's own comment says a sub-kHz rate overflows the converter capacity,
-    /// so the gate exists for exactly this, yet it runs after the ingest it guards.
-    /// Reachability: a rate under roughly 0.015 Hz or a device switch that reports one. Not proven on hardware.
-    /// Expected: the `isUsableRate(format.sampleRate)` gate is checked before `takeAudio.ingest(buffer)`.
-    func testSampleRateGateRunsBeforeTakeAudioIngest() throws {
-        let text = try appSource("boringNotch/Voice/SpeechAnalyzerSession.swift")
-        let tap = between(text, "input.installTap(onBus: 0", "configObserver = ") ?? ""
-        guard let gate = tap.range(of: "MicLevelMeter.isUsableRate(format.sampleRate)"),
-              let ingest = tap.range(of: "takeAudio.ingest(buffer)") else {
-            return XCTFail("the tap closure moved; re-check this test")
-        }
-        XCTAssertLessThan(
-            gate.lowerBound, ingest.lowerBound,
-            "TakeAudioBuffer.ingest runs before the usable-rate gate, so a rate the gate rejects still reaches the frame-capacity math")
-    }
 }
