@@ -1782,6 +1782,8 @@ struct Shortcuts: View {
     @Default(.dictationMicSilent) var dictationMicSilent
     @Default(.dictationDictionary) var dictationDictionary
     @Default(.dictationLearnedWords) var learnedWords
+    @Default(.dictateWithFn) var dictateWithFn
+    @Default(.callPromptMuted) var callPromptMuted
 
     var body: some View {
         Form {
@@ -1803,6 +1805,21 @@ struct Shortcuts: View {
             Section {
                 Defaults.Toggle(key: .dictateWithFn) {
                     Text("Hold fn to dictate")
+                }
+                Defaults.Toggle(key: .detectCalls) {
+                    Text("Ask to transcribe calls (fn+Y / fn+N)")
+                }
+                .disabled(!dictateWithFn)
+                if !dictateWithFn {
+                    Text("Needs hold-fn dictation")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+                if !callPromptMuted.isEmpty {
+                    Text("Not asking for: " + callPromptMuted.map { CallApps.displayName(for: $0) }.joined(separator: ", "))
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                    Button("Reset") { Defaults[.callPromptMuted] = [] }
                 }
                 Defaults.Toggle(key: .dictationSounds) {
                     Text("Start and stop sounds")

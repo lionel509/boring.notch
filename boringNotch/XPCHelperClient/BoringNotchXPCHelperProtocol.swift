@@ -49,6 +49,8 @@ import Foundation
     func openRouterKey(with reply: @escaping (String?) -> Void)
     /// The focused text value, or nil when unreadable, secure, or longer than 20 000 characters.
     func focusedTextValue(with reply: @escaping (String?) -> Void)
+    /// Titles of the windows of the app responsible for pid (a browser helper or WebKit GPU process resolves to the browser). Newline-joined, at most 20, nil without Accessibility.
+    func windowTitles(_ pid: Int, with reply: @escaping (String?) -> Void)
     /// Records the focused element for the swaps. JSON of FocusedField, or nil.
     func beginTracking(with reply: @escaping (String?) -> Void)
     /// Turns on app pid's accessibility tree (Chromium/Electron build it only on request) and remembers pid as the take's app. True if a focused element now resolves.

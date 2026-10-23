@@ -23,6 +23,9 @@ final class FnKeyMonitor: ObservableObject {
 
     @Published private(set) var mode: Mode = .off
 
+    /// Set by `CallDetector` while a call prompt is on screen: Y/N/D then answer it.
+    var callPromptArmed = false
+
     /// Every untagged key or mouse event the tap sees, before the fn logic. The rewrite uses it to abort
     /// when the user touches the text. Tagged events (ours) never reach it.
     var userInput: ((CGEventType) -> Void)?
@@ -158,8 +161,14 @@ final class FnKeyMonitor: ObservableObject {
             return Unmanaged.passUnretained(event)
         }
 
+        logic.promptArmed = callPromptArmed && mode == .active
         let output = FnKeyLogic.classify(&logic, input, at: now)
         send(output.event, at: now)
+        if let a = output.answer {
+            DispatchQueue.main.async {
+                CallDetector.shared.answer(a)
+            }
+        }
         // Only the Space of an fn+Space chord is ever swallowed, and only with an active tap.
         if output.swallow && mode == .active {
             return nil
