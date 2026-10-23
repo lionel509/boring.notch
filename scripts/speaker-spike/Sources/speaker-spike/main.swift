@@ -492,22 +492,26 @@ func appleTranscribe(_ url: URL) async throws -> String {
 
 /// Leak = transcript words not matched by the prompt (multiset). Only the counts leave this function.
 @available(macOS 26.0, *)
-func sttRow(_ c: LoadedClip) async -> SttRow {
+func sttFile(_ url: URL, prompt: String) async -> SttRow {
     do {
-        let text = try await appleTranscribe(clipURL(c.name))
+        let text = try await appleTranscribe(url)
         let hyp = tokens(text)
         var left: [String: Int] = [:]
-        for w in tokens(c.scene.prompt) { left[w, default: 0] += 1 }
+        for w in tokens(prompt) { left[w, default: 0] += 1 }
         var leak = 0
         for w in hyp {
             if let n = left[w], n > 0 { left[w] = n - 1 } else { leak += 1 }
         }
-        let wer: Double? = c.scene.prompt.isEmpty
-            ? nil : WordErrorRate.wer(reference: c.scene.prompt, hypothesis: text)
+        let wer: Double? = prompt.isEmpty ? nil : WordErrorRate.wer(reference: prompt, hypothesis: text)
         return SttRow(words: hyp.count, wer: wer, leak: leak, failed: false)
     } catch {
         return SttRow(words: 0, wer: nil, leak: 0, failed: true)
     }
+}
+
+@available(macOS 26.0, *)
+func sttRow(_ c: LoadedClip) async -> SttRow {
+    await sttFile(clipURL(c.name), prompt: c.scene.prompt)
 }
 
 // MARK: - Arguments
@@ -520,6 +524,7 @@ func flagValue(_ flag: String) -> String? {
 let replay = args.contains("--replay")
 let wantSegments = args.contains("--segments")
 let wantSTT = args.contains("--stt")
+let mixMode = args.contains("--mix")
 
 var recordList: [Int]? = nil
 if let v = flagValue("--record") {
@@ -617,6 +622,364 @@ func scoreSegments(_ x: [Float], voiceprint: [Float], seconds: Int) throws -> [D
         s += hop
     }
     return out
+}
+
+// MARK: - Mix (offline, no mic). Clip 2 is the speech, clip 1 the voiceprint. Interferers: song (clip 3), talker
+// (clip 5), three say voices, and generated brown, pink and AM brown (mower) noise. Each mix is scored with the
+// Voice Isolation AU off and on, after an Int16 round trip, through the same SpeakerGate segment path.
+
+enum MixError: Error, CustomStringConvertible {
+    case au(String)
+    case say(String)
+
+    var description: String {
+        switch self {
+        case .au(let why): return "isolation AU: \(why)"
+        case .say(let why): return "say: \(why)"
+        }
+    }
+}
+
+struct Lcg {
+    var state: UInt64
+    mutating func next() -> Double {
+        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return Double(state >> 11) / 9_007_199_254_740_992.0 * 2 - 1  // [-1, 1)
+    }
+}
+
+func unitRMS(_ x: [Float]) -> [Float] {
+    let power = x.reduce(0.0) { $0 + Double($1) * Double($1) } / Double(max(x.count, 1))
+    guard power > 0 else { return x }
+    let r = Float(sqrt(power))
+    return x.map { $0 / r }
+}
+
+func brownNoise(_ n: Int, seed: UInt64) -> [Float] {
+    var rng = Lcg(state: seed)
+    var b = 0.0
+    var out = [Float](repeating: 0, count: n)
+    for i in 0..<n {
+        b = (b + 0.02 * rng.next()) / 1.02
+        out[i] = Float(b)
+    }
+    return unitRMS(out)
+}
+
+func pinkNoise(_ n: Int, seed: UInt64) -> [Float] {
+    var rng = Lcg(state: seed)
+    var b0 = 0.0, b1 = 0.0, b2 = 0.0, b3 = 0.0, b4 = 0.0, b5 = 0.0, b6 = 0.0
+    var out = [Float](repeating: 0, count: n)
+    for i in 0..<n {
+        let w = rng.next()
+        b0 = 0.99886 * b0 + w * 0.0555179
+        b1 = 0.99332 * b1 + w * 0.0750759
+        b2 = 0.96900 * b2 + w * 0.1538520
+        b3 = 0.86650 * b3 + w * 0.3104856
+        b4 = 0.55000 * b4 + w * 0.5329522
+        b5 = -0.7616 * b5 - w * 0.0168980
+        out[i] = Float(b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362)
+        b6 = w * 0.115926
+    }
+    return unitRMS(out)
+}
+
+/// Engine-like: brown noise amplitude-modulated at 30 Hz.
+func mowerNoise(_ n: Int, seed: UInt64) -> [Float] {
+    let brown = brownNoise(n, seed: seed)
+    let am = (0..<n).map { i in
+        brown[i] * Float(0.5 + 0.5 * sin(2 * Double.pi * 30 * Double(i) / sampleRate))
+    }
+    return unitRMS(am)
+}
+
+/// Repeats or truncates x to exactly n samples.
+func fit(_ x: [Float], to n: Int) -> [Float] {
+    guard !x.isEmpty else { return [Float](repeating: 0, count: n) }
+    var out: [Float] = []
+    out.reserveCapacity(n)
+    while out.count < n { out.append(contentsOf: x.prefix(n - out.count)) }
+    return out
+}
+
+/// 20 ms frames within 30 dB of the loudest frame: the voiced part of the clean speech.
+func voicedRanges(_ x: [Float]) -> [Range<Int>] {
+    let f = Int(0.02 * sampleRate)
+    var frames: [(range: Range<Int>, level: Double)] = []
+    var s = 0
+    while s + f <= x.count {
+        frames.append((s..<(s + f), rmsDBFS(Array(x[s..<(s + f)]))))
+        s += f
+    }
+    guard let peak = frames.map(\.level).max() else { return [] }
+    return frames.filter { $0.level >= peak - 30 }.map(\.range)
+}
+
+func meanSquare(_ x: [Float], _ ranges: [Range<Int>]) -> Double {
+    var sum = 0.0
+    var count = 0
+    for r in ranges {
+        for i in r { sum += Double(x[i]) * Double(x[i]) }
+        count += r.count
+    }
+    return count > 0 ? sum / Double(count) : 0
+}
+
+/// Gain for the interferer so that its power over the clean voiced part sits at snrDB.
+func snrGain(clean: [Float], interferer: [Float], snrDB: Double) -> Float {
+    let voiced = voicedRanges(clean)
+    let cp = meanSquare(clean, voiced)
+    let ip = meanSquare(interferer, voiced)
+    guard ip > 0 else { return 0 }
+    return Float(sqrt(cp / ip) / pow(10, snrDB / 20))
+}
+
+func sayClip(voice: String, text: String, to url: URL) throws {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+    p.arguments = ["-v", voice, "-o", url.path, "--data-format=BEF32@16000", text]
+    try p.run()
+    p.waitUntilExit()
+    guard p.terminationStatus == 0 else { throw MixError.say("\(voice) exit \(p.terminationStatus)") }
+}
+
+/// Voice Isolation AU (AUSoundIsolation, 'vois', macOS 13+) in AVAudioEngine manual rendering at 48 kHz.
+/// The 16 kHz input goes up to 48 kHz and the output comes back to 16 kHz, with the AU's own latency removed.
+func isolateOffline(_ x16: [Float]) throws -> [Float] {
+    let x48 = try resample(x16, from: sampleRate, to: 48_000)
+    guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false),
+          let inBuf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(x48.count)),
+          let block = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 4096)
+    else { throw MixError.au("buffers") }
+    inBuf.frameLength = AVAudioFrameCount(x48.count)
+    inBuf.floatChannelData![0].update(from: x48, count: x48.count)
+
+    let desc = AudioComponentDescription(
+        componentType: kAudioUnitType_Effect,
+        componentSubType: kAudioUnitSubType_AUSoundIsolation,
+        componentManufacturer: kAudioUnitManufacturer_Apple,
+        componentFlags: 0, componentFlagsMask: 0)
+    let engine = AVAudioEngine()
+    let player = AVAudioPlayerNode()
+    let unit = AVAudioUnitEffect(audioComponentDescription: desc)
+    do {
+        try engine.enableManualRenderingMode(.offline, format: fmt, maximumFrameCount: 4096)
+    } catch {
+        throw MixError.au("manual rendering: \(error)")
+    }
+    engine.attach(player)
+    engine.attach(unit)
+    engine.connect(player, to: unit, format: fmt)
+    engine.connect(unit, to: engine.mainMixerNode, format: fmt)
+    engine.prepare()
+    do {
+        try engine.start()
+    } catch {
+        throw MixError.au("engine.start: \(error)")
+    }
+    let latency = Int(unit.auAudioUnit.latency * 48_000)
+    let total = x48.count + latency + 4_800  // tail so the unit flushes
+    player.scheduleBuffer(inBuf, completionHandler: nil)
+    player.play()
+    var out: [Float] = []
+    out.reserveCapacity(total)
+    while out.count < total {
+        let want = AVAudioFrameCount(min(4096, total - out.count))
+        let status: AVAudioEngineManualRenderingStatus
+        do {
+            status = try engine.renderOffline(want, to: block)
+        } catch {
+            throw MixError.au("renderOffline: \(error)")
+        }
+        guard status == .success else { throw MixError.au("render status \(status.rawValue)") }
+        out.append(contentsOf: UnsafeBufferPointer(start: block.floatChannelData![0], count: Int(block.frameLength)))
+    }
+    player.stop()
+    engine.stop()
+    let body = Array(out.dropFirst(latency).prefix(x48.count))
+    return try resample(body, from: 48_000, to: sampleRate)
+}
+
+func resampleRoundTrip(_ x: [Float]) throws -> [Float] {
+    try resample(try resample(x, from: sampleRate, to: 48_000), from: 48_000, to: sampleRate)
+}
+
+struct MixResult {
+    let name: String  // source: clean, song, talker, say-*, brown, pink, mower
+    let label: String  // SNR in dB, "only" (interferer alone) or "clean"
+    let iso: Bool
+    let min: Double
+    let med: Double
+    let max: Double
+    let stt: SttRow?
+    let isoCPU: Double?
+    let embCPU: Double
+}
+
+var auFailure: String? = nil
+
+/// One scored row. x is already on the path it is scored on (OFF or ON), Int16 round tripped.
+func mixRow(name: String, label: String, iso: Bool, x: [Float], isoCPU: Double?, voiceprint: [Float],
+            prompt: String, wantSTT: Bool) async throws -> MixResult {
+    let audioSec = Double(x.count) / sampleRate
+    let c0 = cpuSeconds()
+    let scores = try scoreSegments(x, voiceprint: voiceprint, seconds: 3)
+    let embCPU = audioSec > 0 ? (cpuSeconds() - c0) / audioSec : 0
+    var stt: SttRow? = nil
+    if wantSTT, #available(macOS 26.0, *) {
+        let url = scratch.appendingPathComponent("row-\(name)-\(label)-\(iso ? "on" : "off").wav")
+        try saveClip(x, to: url)
+        stt = await sttFile(url, prompt: prompt)
+    }
+    return MixResult(name: name, label: label, iso: iso, min: scores.min() ?? .nan,
+                     med: percentile(scores, 0.5), max: scores.max() ?? .nan, stt: stt,
+                     isoCPU: isoCPU, embCPU: embCPU)
+}
+
+func printMixRow(_ r: MixResult) {
+    let key = "\(r.name) \(r.label)".padding(toLength: 22, withPad: " ", startingAt: 0)
+    var line = "\(key) \(r.iso ? "on " : "off") \(lengthCell(r.min))  \(lengthCell(r.med))  \(lengthCell(r.max))"
+    if let s = r.stt {
+        let wer = s.failed ? "fail" : (s.wer.map { String(format: "%.3f", $0) } ?? "  n/a")
+        line += "  \(String(format: "%4d", s.leak))  \(wer.padding(toLength: 5, withPad: " ", startingAt: 0))"
+            + "  \(String(format: "%5d", s.words))"
+    }
+    let iso = r.isoCPU.map { String(format: "%6.3f", $0) } ?? "     -"
+    line += "   \(iso)   \(String(format: "%6.3f", r.embCPU))"
+    print(line)
+}
+
+/// Scores the source off and on the isolation AU. If the AU cannot render, its rows are dropped and the
+/// reason is kept for the table (isolation OFF rows only).
+func mixSource(name: String, label: String, x: [Float], voiceprint: [Float], prompt: String,
+               wantSTT: Bool) async throws -> [MixResult] {
+    var rows: [MixResult] = []
+    let off = SpeakerGate.int16RoundTrip(try resampleRoundTrip(x))
+    rows.append(try await mixRow(name: name, label: label, iso: false, x: off, isoCPU: nil,
+                                 voiceprint: voiceprint, prompt: prompt, wantSTT: wantSTT))
+    if auFailure == nil {
+        do {
+            let c0 = cpuSeconds()
+            let on = SpeakerGate.int16RoundTrip(try isolateOffline(x))
+            let cpu = cpuSeconds() - c0
+            let audioSec = Double(x.count) / sampleRate
+            rows.append(try await mixRow(name: name, label: label, iso: true, x: on,
+                                         isoCPU: audioSec > 0 ? cpu / audioSec : 0,
+                                         voiceprint: voiceprint, prompt: prompt, wantSTT: wantSTT))
+        } catch {
+            auFailure = "\(error)"
+            print("isolation AU not available offline: \(error). Isolation OFF rows only from here.")
+        }
+    }
+    for r in rows { printMixRow(r) }
+    return rows
+}
+
+@available(macOS 26.0, *)
+func runMix(wantSTT: Bool) async throws {
+    guard let c1 = loaded.first(where: { $0.name == "clip1" }),
+          let c2 = loaded.first(where: { $0.name == "clip2" }),
+          let c3 = loaded.first(where: { $0.name == "clip3" }),
+          let c5 = loaded.first(where: { $0.name == "clip5" })
+    else { throw SpikeError.missingClip("clip 1, 2, 3 and 5") }
+    guard let voiceprint = try SpeakerGate.segmentEmbedding(c1.samples, embed: embedWindow) else {
+        throw SpikeError.missingClip("clip 1 embedding")
+    }
+    let n = c2.samples.count
+    let prompt = c2.scene.prompt
+    print("Mix (offline, no mic): clip 2 speech, clip 1 voiceprint, 3 s segments, hop 1 s.")
+    print("row                    iso  min     median  max      leak    WER    words   iso s/s  emb s/s")
+
+    var sayLines: [(String, String, String)] = [
+        ("say-samantha", "Samantha", "The committee approved the new budget after a long discussion about the harbour bridge."),
+        ("say-daniel", "Daniel", "Remember to water the plants on the balcony before the weekend, because the forecast says it will be hot."),
+        ("say-karen", "Karen", "Our train was delayed twice, so we walked the last few miles along the river to the old market."),
+    ]
+    var interferers: [(String, [Float])] = [
+        ("song", fit(c3.samples, to: n)),
+        ("talker", fit(c5.samples, to: n)),
+    ]
+    for (name, voice, text) in sayLines {
+        let url = scratch.appendingPathComponent("\(name).aiff")
+        try sayClip(voice: voice, text: text, to: url)
+        interferers.append((name, fit(SpeakerGate.int16RoundTrip(try loadClip(url)), to: n)))
+    }
+    interferers.append(("brown", fit(brownNoise(n, seed: 11), to: n)))
+    interferers.append(("pink", fit(pinkNoise(n, seed: 23), to: n)))
+    interferers.append(("mower", fit(mowerNoise(n, seed: 37), to: n)))
+    sayLines = []
+
+    var results: [MixResult] = []
+    results += try await mixSource(name: "clean", label: "clean", x: c2.samples, voiceprint: voiceprint,
+                                   prompt: prompt, wantSTT: wantSTT)
+    for (name, x) in interferers {
+        for snr in [10.0, 5.0, 0.0, -5.0] {
+            let g = snrGain(clean: c2.samples, interferer: x, snrDB: snr)
+            var mix = [Float](repeating: 0, count: n)
+            for i in 0..<n { mix[i] = c2.samples[i] + g * x[i] }
+            let label = snr > 0 ? "+\(Int(snr))" : "\(Int(snr))"
+            let url = scratch.appendingPathComponent("mix-\(name)-\(label).wav")
+            try saveClip(mix, to: url)
+            let stored = SpeakerGate.int16RoundTrip(try loadClip(url))
+            results += try await mixSource(name: name, label: label, x: stored, voiceprint: voiceprint,
+                                           prompt: prompt, wantSTT: wantSTT)
+        }
+        // Interferer alone at the 0 dB gain: the layer 2 negatives (no Lionel).
+        let g0 = snrGain(clean: c2.samples, interferer: x, snrDB: 0)
+        let only = x.map { $0 * g0 }
+        let url = scratch.appendingPathComponent("only-\(name).wav")
+        try saveClip(only, to: url)
+        let stored = SpeakerGate.int16RoundTrip(try loadClip(url))
+        results += try await mixSource(name: name, label: "only", x: stored, voiceprint: voiceprint,
+                                       prompt: "", wantSTT: wantSTT)
+    }
+
+    // Gate summary (the lead applies it; these lines carry the numbers).
+    print("\nLayer 1 (offline isolation ON), 0 dB, gate: 3 s median >= 0.35 and leak <= 3 with WER <= 2x clean")
+    let cleanOn = results.first { $0.name == "clean" && $0.iso }
+    let cleanWER = cleanOn?.stt?.wer
+    for name in interferers.map(\.0) {
+        guard let r = results.first(where: { $0.name == name && $0.label == "0" && $0.iso }) else {
+            print("  \(name): isolation ON not run (AU unavailable)")
+            continue
+        }
+        let medOK = r.med >= 0.35
+        var sttText = "stt not run"
+        if let s = r.stt, let w = s.wer, let w0 = cleanWER {
+            sttText = "leak \(s.leak), WER \(String(format: "%.3f", w)) vs clean \(String(format: "%.3f", w0)) "
+                + (s.leak <= 3 && w <= 2 * w0 ? "PASS" : "FAIL")
+        }
+        print("  \(name): median \(fmt(r.med)) \(medOK ? "PASS" : "FAIL"), \(sttText)")
+    }
+    print("\nLayer 2 (negatives: interferer alone, 3 s), gate: min(clean clip 2) - max(interferer alone) >= 0.20")
+    for iso in [true, false] {
+        let his = results.first { $0.name == "clean" && $0.iso == iso }
+        let others = results.filter { $0.label == "only" && $0.iso == iso }
+        let hisMin = his?.min ?? .nan
+        let othersMax = others.map(\.max).max() ?? .nan
+        let gap = hisMin - othersMax
+        let threshold = ((hisMin + othersMax) / 2 * 100).rounded() / 100
+        print("  isolation \(iso ? "ON " : "OFF"): his min \(fmt(hisMin)), negatives max \(fmt(othersMax)), "
+            + "gap \(fmt(gap)) \(gap >= 0.20 ? "PASS" : "FAIL"), candidate threshold \(String(format: "%.2f", threshold))")
+    }
+    print("\nClip 2 in mix, 0 dB, isolation ON, 3 s median:")
+    for (label, names) in [("song", ["song"]), ("talker", ["talker"]), ("noise", ["brown", "pink", "mower"])] {
+        let parts = names.map { nm -> String in
+            let v = results.first { $0.name == nm && $0.label == "0" && $0.iso }
+            return "\(nm) \(v.map { fmt($0.med) } ?? "n/a")"
+        }
+        print("  \(label): \(parts.joined(separator: ", "))")
+    }
+    print("\nisolation AU: \(auFailure.map { "unavailable offline: \($0)" } ?? "ran for every ON row")")
+}
+
+if mixMode {
+    if #available(macOS 26.0, *) {
+        try await runMix(wantSTT: wantSTT)
+    } else {
+        print("--mix runs on macOS 26 (SpeechAnalyzer for --stt). Skipped.")
+    }
+    exit(0)
 }
 
 // Embedding each clip once: the cost is measured here (the budget), and the voiceprints come from this map.
