@@ -148,6 +148,14 @@ func residentMB() -> Double {
     return kr == KERN_SUCCESS ? Double(info.resident_size) / 1_048_576 : -1
 }
 
+/// Resident MB the first time each stage is reached (round 4: model load, first embedding, first AU render,
+/// first STT call, diarizer call). Later calls for the same stage are ignored.
+var rssStamps: [(name: String, mb: Double)] = []
+func stamp(_ name: String) {
+    guard !rssStamps.contains(where: { $0.name == name }) else { return }
+    rssStamps.append((name, residentMB()))
+}
+
 func directorySizeMB(_ url: URL) -> Double {
     guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
     var total = 0
@@ -495,6 +503,7 @@ func appleTranscribe(_ url: URL) async throws -> String {
 func sttFile(_ url: URL, prompt: String) async -> SttRow {
     do {
         let text = try await appleTranscribe(url)
+        stamp("first STT call")
         let hyp = tokens(text)
         var left: [String: Int] = [:]
         for w in tokens(prompt) { left[w, default: 0] += 1 }
@@ -511,7 +520,7 @@ func sttFile(_ url: URL, prompt: String) async -> SttRow {
 
 @available(macOS 26.0, *)
 func sttRow(_ c: LoadedClip) async -> SttRow {
-    await sttFile(clipURL(c.name), prompt: c.scene.prompt)
+    await sttFile(clipURL(c.name), prompt: bestPrompt[c.name] ?? c.scene.prompt)
 }
 
 // MARK: - Arguments
@@ -525,6 +534,10 @@ let replay = args.contains("--replay")
 let wantSegments = args.contains("--segments")
 let wantSTT = args.contains("--stt")
 let mixMode = args.contains("--mix")
+let wantSeq = args.contains("--seq")
+let wantDiarizer = args.contains("--diarizer")
+var bestPrompt: [String: String] = [:]  // clip name -> the prompt its STT matched best (round 4 step 1)
+var sttValid = true  // false when clip 1's best WER > 0.5: the STT path is wrong, leak and WER are not printed
 
 var recordList: [Int]? = nil
 if let v = flagValue("--record") {
@@ -595,6 +608,7 @@ let loadStart = ContinuousClock.now
 let models = try await DiarizerModels.downloadIfNeeded()
 let diarizer = DiarizerManager()
 diarizer.initialize(models: models)
+stamp("model load")
 let loadDuration = loadStart.duration(to: .now)
 let loadSeconds = Double(loadDuration.components.seconds) + Double(loadDuration.components.attoseconds) / 1e18
 let rssAfterLoad = residentMB()
@@ -603,6 +617,7 @@ var timingsMs: [Double] = []
 func embedWindow(_ tiled: [Float]) throws -> [Float] {
     let t0 = ContinuousClock.now
     let e = try diarizer.extractSpeakerEmbedding(from: tiled)
+    stamp("first embedding")
     let d = t0.duration(to: .now)
     timingsMs.append(Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15)
     return e
@@ -792,6 +807,7 @@ func isolateOffline(_ x16: [Float]) throws -> [Float] {
             throw MixError.au("renderOffline: \(error)")
         }
         guard status == .success else { throw MixError.au("render status \(status.rawValue)") }
+        stamp("first AU render")
         out.append(contentsOf: UnsafeBufferPointer(start: block.floatChannelData![0], count: Int(block.frameLength)))
     }
     player.stop()
@@ -826,7 +842,7 @@ func mixRow(name: String, label: String, iso: Bool, x: [Float], isoCPU: Double?,
     let scores = try scoreSegments(x, voiceprint: voiceprint, seconds: 3)
     let embCPU = audioSec > 0 ? (cpuSeconds() - c0) / audioSec : 0
     var stt: SttRow? = nil
-    if wantSTT, #available(macOS 26.0, *) {
+    if wantSTT, sttValid, #available(macOS 26.0, *) {
         let url = scratch.appendingPathComponent("row-\(name)-\(label)-\(iso ? "on" : "off").wav")
         try saveClip(x, to: url)
         stt = await sttFile(url, prompt: prompt)
@@ -875,6 +891,13 @@ func mixSource(name: String, label: String, x: [Float], voiceprint: [Float], pro
     return rows
 }
 
+/// The say voices of the mix and the --seq sequences, in truth order (Samantha, Daniel, Karen).
+let sayVoices: [(file: String, voice: String, text: String)] = [
+    ("say-samantha", "Samantha", "The committee approved the new budget after a long discussion about the harbour bridge."),
+    ("say-daniel", "Daniel", "Remember to water the plants on the balcony before the weekend, because the forecast says it will be hot."),
+    ("say-karen", "Karen", "Our train was delayed twice, so we walked the last few miles along the river to the old market."),
+]
+
 @available(macOS 26.0, *)
 func runMix(wantSTT: Bool) async throws {
     guard let c1 = loaded.first(where: { $0.name == "clip1" }),
@@ -886,28 +909,22 @@ func runMix(wantSTT: Bool) async throws {
         throw SpikeError.missingClip("clip 1 embedding")
     }
     let n = c2.samples.count
-    let prompt = c2.scene.prompt
+    let prompt = bestPrompt["clip2"] ?? c2.scene.prompt
     print("Mix (offline, no mic): clip 2 speech, clip 1 voiceprint, 3 s segments, hop 1 s.")
     print("row                    iso  min     median  max      leak    WER    words   iso s/s  emb s/s")
 
-    var sayLines: [(String, String, String)] = [
-        ("say-samantha", "Samantha", "The committee approved the new budget after a long discussion about the harbour bridge."),
-        ("say-daniel", "Daniel", "Remember to water the plants on the balcony before the weekend, because the forecast says it will be hot."),
-        ("say-karen", "Karen", "Our train was delayed twice, so we walked the last few miles along the river to the old market."),
-    ]
     var interferers: [(String, [Float])] = [
         ("song", fit(c3.samples, to: n)),
         ("talker", fit(c5.samples, to: n)),
     ]
-    for (name, voice, text) in sayLines {
-        let url = scratch.appendingPathComponent("\(name).aiff")
-        try sayClip(voice: voice, text: text, to: url)
-        interferers.append((name, fit(SpeakerGate.int16RoundTrip(try loadClip(url)), to: n)))
+    for v in sayVoices {
+        let url = scratch.appendingPathComponent("\(v.file).aiff")
+        try sayClip(voice: v.voice, text: v.text, to: url)
+        interferers.append((v.file, fit(SpeakerGate.int16RoundTrip(try loadClip(url)), to: n)))
     }
     interferers.append(("brown", fit(brownNoise(n, seed: 11), to: n)))
     interferers.append(("pink", fit(pinkNoise(n, seed: 23), to: n)))
     interferers.append(("mower", fit(mowerNoise(n, seed: 37), to: n)))
-    sayLines = []
 
     var results: [MixResult] = []
     results += try await mixSource(name: "clean", label: "clean", x: c2.samples, voiceprint: voiceprint,
@@ -973,12 +990,40 @@ func runMix(wantSTT: Bool) async throws {
     print("\nisolation AU: \(auFailure.map { "unavailable offline: \($0)" } ?? "ran for every ON row")")
 }
 
+// Step 1: the STT prompt check. Clips 1 and 2 are scored against all three prompts; each takes its best.
+if wantSTT, #available(macOS 26.0, *) {
+    var parts: [String] = []
+    for name in ["clip1", "clip2"] where loaded.contains(where: { $0.name == name }) {
+        // Feed 1 is the file as analyzeSequence reads it (the path every earlier round used). Feed 2 is the same
+        // file converted to the analyzer's bestAvailableAudioFormat and started through an input sequence.
+        guard let c = await sttPromptCheck(name, converted: false) else {
+            print("STT check \(name): transcription failed")
+            sttValid = false
+            continue
+        }
+        let wers = zip(sttPrompts, c.wers).map { "\($0.letter) \(fmt($1))" }.joined(separator: ", ")
+        print("STT check \(name), file feed: \(c.words) words, WER vs prompt \(wers); best \(sttPrompts[c.best].letter)")
+        if let c2 = await sttPromptCheck(name, converted: true) {
+            let wers2 = zip(sttPrompts, c2.wers).map { "\($0.letter) \(fmt($1))" }.joined(separator: ", ")
+            print("STT check \(name), converted feed (\(c2.feed)): \(c2.words) words, WER vs prompt \(wers2); best \(sttPrompts[c2.best].letter)")
+        }
+        bestPrompt[name] = sttPrompts[c.best].text
+        parts.append("\(name) \(sttPrompts[c.best].letter)")
+        if name == "clip1" && c.wers[c.best] > 0.5 { sttValid = false }
+    }
+    print("STT prompt matched: \(parts.joined(separator: ", "))")
+    if !sttValid {
+        print("STT: invalid (clip 1's best WER is above 0.5, so the STT path is wrong). Leak and WER are not printed.")
+    }
+}
+
 if mixMode {
     if #available(macOS 26.0, *) {
-        try await runMix(wantSTT: wantSTT)
+        try await runMix(wantSTT: wantSTT && sttValid)
     } else {
         print("--mix runs on macOS 26 (SpeechAnalyzer for --stt). Skipped.")
     }
+    printRSSStages()
     exit(0)
 }
 
@@ -1019,7 +1064,7 @@ let determinismHash = SHA256.hash(data: Data(scoreBytes)).map { String(format: "
 let determinismCount = scoreBytes.count / 8
 
 var sttRows: [String: SttRow] = [:]
-if wantSTT {
+if wantSTT && sttValid {
     if #available(macOS 26.0, *) {
         for c in loaded { sttRows[c.name] = await sttRow(c) }
     } else {
@@ -1040,7 +1085,7 @@ if let m = loaded.first(where: { $0.vp && $0.meta != nil })?.meta {
 print("determinism  SHA-256 of \(determinismCount) 3 s scores = \(determinismHash.prefix(16))  (live and replay must match)")
 print("")
 var header = "clip  condition                    vs      n    min  median    max   dBFS   cap%   emb%  peakMB"
-if wantSTT { header += "  words    WER  leak" }
+if wantSTT && sttValid { header += "  words    WER  leak" }
 print(header)
 for r in results {
     let s3 = r.byLength[3] ?? []
@@ -1052,7 +1097,7 @@ for r in results {
         + " \(lengthCell(s3.min() ?? .nan))  \(lengthCell(percentile(s3, 0.5)))  \(lengthCell(s3.max() ?? .nan))"
         + "  \(String(format: "%6.1f", rmsDBFS(r.clip.samples)))"
         + "  \(cap)  \(String(format: "%5.1f", r.embedFraction * 100))  \(String(format: "%6.0f", r.peakMB))"
-    if wantSTT {
+    if wantSTT && sttValid {
         if let s = sttRows[r.clip.name] {
             let werText = s.failed ? "fail" : (s.wer.map { String(format: "%.3f", $0) } ?? "  n/a")
             line += "  \(String(format: "%5d", s.words))  \(werText.padding(toLength: 5, withPad: " ", startingAt: 0))"
@@ -1092,7 +1137,7 @@ for name in ["clip7-vp", "clip8-vp", "clip10-vp"] {
     }
     let med = percentile(r.byLength[3] ?? [], 0.5)
     let medOK = med >= 0.35
-    var sttText = "stt not run"
+    var sttText = sttValid ? "stt not run" : "STT: invalid"
     var sttOK: Bool? = nil
     if let s = sttRows[name] {
         if s.failed {
@@ -1155,3 +1200,8 @@ print("RSS MB  before load \(String(format: "%.0f", rssBefore))  after load \(St
 print("model load s \(String(format: "%.1f", loadSeconds))   model cache \(String(format: "%.1f", directorySizeMB(modelDir))) MB")
 print("\nsummary: L1 fail set \(l1Fail.isEmpty ? "none" : l1Fail.joined(separator: ",")); "
     + "budget \(budgetOK ? "PASS" : "FLAG"); determinism \(determinismHash.prefix(16))")
+
+if wantSeq || wantDiarizer {
+    try runOffline(wantSeq: wantSeq, wantDiarizer: wantDiarizer)
+}
+printRSSStages()
