@@ -51,7 +51,8 @@ final class LogPrivacyTests: XCTestCase {
                 + "hold_ms=1200 finalize_ms=80 ax_ms=5 mod_wait_ms=0 paste_ms=12 release_to_paste_ms=150 "
                 + "engine_start_ms=-1 first_partial_ms=-1 stt_ms=-1 stt=none stt_s=-1.00 stt_uusd=-1 "
                 + "first_cleanup_ms=-1 llm_ttft_ms=-1 llm_ms=-1 llm_in=-1 llm_out=-1 swaps=-1 "
-                + "max_swap_ms=-1 mech=none rewrite=none cleanup=none skip=none tone=neutral dict=-1 cloud=0"
+                + "max_swap_ms=-1 mech=none rewrite=none cleanup=none skip=none tone=neutral dict=-1 cloud=0 "
+                + "key=0 vp=0"
         )
     }
 

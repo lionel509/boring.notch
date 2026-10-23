@@ -38,4 +38,16 @@ final class TakeReportTests: XCTestCase {
             XCTAssertTrue(words.contains(key), "\(key) missing from \(report.line)")
         }
     }
+
+    /// #13 r5 / U2: the key presence and voice processing are logged as numbers.
+    func testKeyAndVoiceProcessingAreLogged() {
+        var report = TakeReport()
+        report.record(meter: MicLevelMeter())
+        XCTAssertTrue(report.line.hasSuffix("cloud=0 key=0 vp=0"), report.line)
+        report.hasKey = true
+        report.voiceProcessing = true
+        let words = report.line.components(separatedBy: " ")
+        XCTAssertTrue(words.contains("key=1"), report.line)
+        XCTAssertTrue(words.contains("vp=1"), report.line)
+    }
 }
