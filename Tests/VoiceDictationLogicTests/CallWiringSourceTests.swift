@@ -49,7 +49,7 @@ final class CallWiringSourceTests: XCTestCase {
         let end = try XCTUnwrap(text.range(of: "case .hide:", range: start.upperBound..<text.endIndex),
                                 "hide effect moved; re-check this test")
         let body = String(text[start.lowerBound..<end.lowerBound])
-        XCTAssertFalse(body.contains("mode"), "the show effect still depends on the fn tap mode")
+        XCTAssertFalse(body.contains("guard"), "the show effect is still gated before it shows the prompt")
         XCTAssertFalse(body.contains("continue"), "the show effect still drops the prompt without showing it")
         XCTAssertTrue(body.contains("pending = call"), "the show effect does not set pending")
         XCTAssertTrue(body.contains("toggleSneakPeek"), "the show effect does not show the notch prompt")

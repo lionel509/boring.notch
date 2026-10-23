@@ -134,15 +134,13 @@ final class CallDetector: ObservableObject {
         for effect in effects {
             switch effect {
             case .show(let call):
-                guard FnKeyMonitor.shared.mode == .active else {
-                    // Without the fn tap the keys cannot answer, so count this as an unanswered prompt.
-                    perform(CallPromptLogic.timeout(&state, callID: call.id, muted: Set(Defaults[.callPromptMuted]), at: now))
-                    continue
-                }
+                // Always show the prompt. Without the fn tap the keys cannot answer, so the hint is left out and
+                // the prompt times out like any other unanswered prompt. It is never dropped silently.
+                let keysWork = FnKeyMonitor.shared.mode == .active
                 pending = call
                 BoringViewCoordinator.shared.toggleSneakPeek(
                     status: true, type: .callPrompt, duration: CallPromptLogic.promptTimeout,
-                    icon: "phone.fill", detail: "fn+Y transcribe · fn+N no · fn+D never",
+                    icon: "phone.fill", detail: keysWork ? "fn+Y transcribe · fn+N no · fn+D never" : "",
                     label: "Call detected: \(call.name)")
                 restartTimeout(for: call.id)
 
