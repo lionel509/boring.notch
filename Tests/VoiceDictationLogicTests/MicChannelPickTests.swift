@@ -57,10 +57,11 @@ final class MicChannelPickTests: XCTestCase {
         XCTAssertTrue(
             text.contains("MicChannelPick.monoSource("),
             "the tap never asks MicChannelPick which channel to feed, so VP's 9 channels are still averaged")
-        let tapStart = try XCTUnwrap(text.range(of: "tapNode.installTap(onBus: 0"), "the tap moved; re-check this test")
+        XCTAssertTrue(text.contains("graph.tapNode.installTap("), "the tap is no longer installed on the graph's tap node")
+        let tapStart = try XCTUnwrap(text.range(of: "let onBuffer: AVAudioNodeTapBlock = {"), "the tap moved; re-check this test")
         let tapEnd = try XCTUnwrap(text.range(of: "configObserver = NotificationCenter", range: tapStart.upperBound..<text.endIndex))
         let tap = String(text[tapStart.lowerBound..<tapEnd.lowerBound])
-        XCTAssertTrue(tap.contains("MicChannelPick.monoSource("), "the pick is not inside the installed tap")
+        XCTAssertTrue(tap.contains("takeSource(for: buffer"), "the pick is not inside the installed tap")
         XCTAssertTrue(tap.contains("takeAudio.ingest(mono)"), "the take buffer still receives the raw multi-channel buffer")
         XCTAssertTrue(tap.contains("converter.convert(to: out, error: &error) { _, outStatus in"), "converter block moved; re-check")
         XCTAssertTrue(tap.contains("return mono"), "the converter still reads the raw buffer, not the picked mono one")

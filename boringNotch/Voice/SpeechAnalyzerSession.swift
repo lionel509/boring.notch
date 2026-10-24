@@ -23,9 +23,12 @@ enum VoiceError: LocalizedError {
     }
 }
 
-/// The tap's converter, built from the first buffer's real format. Only the audio thread uses it.
+/// The tap's converter, built from the first buffer's real format, and the take's mono source (#17 U2b).
+/// Only the audio thread uses it.
 private final class ConverterBox: @unchecked Sendable {
     var converter: AVAudioConverter?
+    /// Chosen by the first buffer and kept for the take.
+    var source: MicChannelPick.Source?
 }
 
 /// The buffer the take and the converter read. `.channel(n)` copies that channel's float samples into a
@@ -46,6 +49,63 @@ private func takeMonoBuffer(_ buffer: AVAudioPCMBuffer, source: MicChannelPick.S
     return out
 }
 
+/// The take's mono source for one tap buffer (#17 U2b). The first buffer decides for the whole take: with voice
+/// processing that is channel 0, unless channel 0 sits more than 20 dB below the loudest channel. Runs on the
+/// audio thread.
+private func takeSource(for buffer: AVAudioPCMBuffer, voiceProcessing: Bool, box: ConverterBox) -> MicChannelPick.Source {
+    if let source = box.source { return source }
+    var source = MicChannelPick.monoSource(channelCount: Int(buffer.format.channelCount), voiceProcessing: voiceProcessing)
+    if source == .channel(0), let rms = channelRMS(buffer), MicChannelPick.needsLoudest(rms: rms) {
+        source = .channel(MicChannelPick.loudest(rms: rms))
+    }
+    box.source = source
+    return source
+}
+
+/// RMS of each channel of a float buffer, or nil when the buffer has no float samples.
+private func channelRMS(_ buffer: AVAudioPCMBuffer) -> [Float]? {
+    guard buffer.format.commonFormat == .pcmFormatFloat32, let data = buffer.floatChannelData, buffer.frameLength > 0 else {
+        return nil
+    }
+    let count = Int(buffer.frameLength)
+    return (0..<Int(buffer.format.channelCount)).map { channel in
+        var sum: Float = 0
+        for index in 0..<count { sum += data[channel][index] * data[channel][index] }
+        return (sum / Float(count)).squareRoot()
+    }
+}
+
+/// A transcriber result's span in take seconds. A non-finite or inverted range is the whole take so far.
+private func spanSeconds(_ range: CMTimeRange, total: Double) -> (start: Double, end: Double) {
+    let start = range.start.seconds
+    let end = range.end.seconds
+    guard start.isFinite, end.isFinite, end >= start else { return (0, total) }
+    return (start, end)
+}
+
+/// Process CPU seconds and resident megabytes for the take report (#17 U2b). Read through the kernel, never `ps`.
+private enum ProcessMeter {
+    static func cpuSeconds() -> Double {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
+        let user = Double(usage.ru_utime.tv_sec) + Double(usage.ru_utime.tv_usec) / 1e6
+        let system = Double(usage.ru_stime.tv_sec) + Double(usage.ru_stime.tv_usec) / 1e6
+        return user + system
+    }
+
+    static func residentMB() -> Int {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPointer in
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), reboundPointer, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return Int(info.resident_size / 1_048_576)
+    }
+}
+
 @available(macOS 26.0, *)
 @MainActor
 final class SpeechAnalyzerSession: VoiceSession {
@@ -54,7 +114,17 @@ final class SpeechAnalyzerSession: VoiceSession {
     private var analyzer: SpeechAnalyzer?
     private var continuation: AsyncStream<AnalyzerInput>.Continuation?
     private var resultsTask: Task<Void, Never>?
-    private var finals: [String] = []
+    /// Each final segment with its span and, when scored, its speaker embedding (#17 U2b).
+    private var finals: [LabelledSegment] = []
+    /// The voiceprint, read once at start. Empty until enrolment.
+    private var voiceprint: [Float] = []
+    /// The take's speaker mode, read at key release, and the labelling it produced for the paste and the WAV.
+    private var mode: SpeakerMode = .onlyMe
+    private var labelled: [LabelledSegment] = []
+    /// The volatile tail embedded once at key release, kept for `finish`.
+    private var tail: LabelledSegment?
+    /// The node the tap sits on: the Voice Isolation effect when it was built, else the input.
+    private var tapNode: AVAudioNode?
     /// Measures what the mic delivers. Read by the manager's verdict and by the take report.
     let levelTap = MicLevelTap()
     private(set) var tapChannels = -1
@@ -62,8 +132,9 @@ final class SpeechAnalyzerSession: VoiceSession {
     private var partialCount = 0
     private var finalizeMs = -1
     private var finalized = false
-    /// The transcriber's latest unconfirmed text. Used only if finalize does not finish in time.
+    /// The transcriber's latest unconfirmed text and its span. Used only if finalize does not finish in time.
     private var lastVolatile = ""
+    private var lastVolatileRange: (start: Double, end: Double)?
     private var configObserver: NSObjectProtocol?
     /// The take's audio as 16 kHz PCM, for the cloud transcript.
     private let audio = TakeAudioBuffer()
@@ -72,8 +143,17 @@ final class SpeechAnalyzerSession: VoiceSession {
     private var firstPartialAt: TimeInterval?
     /// True when the take runs with Apple voice processing (echo cancellation, noise suppression, AGC).
     private(set) var voiceProcessing = false
+    /// True when the take runs through the Voice Isolation effect (#17 U2b).
+    private(set) var isolation = false
     /// True when this take paused the Mac's music, so teardown resumes only what it paused.
     private var pausedMedia = false
+    /// Process CPU and resident memory when the engine started, and the take's CPU share and memory change at key release.
+    private var cpuAtStart = 0.0
+    private var rssAtStart = 0
+    private var cpuPct = -1.0
+    private var rssDeltaMB = -1
+    /// Resident memory 5 s after key release, as a change from the start of the take (#17 U2b).
+    private var idleTask: Task<Int, Never>?
 
     /// Makes sure the on-device en_US model is installed. The OS fetches it once.
     /// `onDownloadStart` runs only when a download is actually needed, so the UI can say so.
@@ -84,6 +164,29 @@ final class SpeechAnalyzerSession: VoiceSession {
             onDownloadStart()
             try await request.downloadAndInstall()
         }
+    }
+
+    /// The take's input graph (#17 U2b): with voice processing on, the Voice Isolation effect sits between the
+    /// input and the mixer, and the tap reads the effect's output so every consumer sees the isolated audio.
+    /// If the effect cannot be built the tap stays on the input and `isolation` is false. Connects only; the
+    /// caller installs the tap.
+    static func makeInputGraph(engine: AVAudioEngine) -> (tapNode: AVAudioNode, isolation: Bool) {
+        let input = engine.inputNode
+        guard input.isVoiceProcessingEnabled else { return (input, false) }
+        let description = AudioComponentDescription(
+            componentType: kAudioUnitType_Effect,
+            componentSubType: kAudioUnitSubType_AUSoundIsolation,
+            componentManufacturer: kAudioUnitManufacturer_Apple,
+            componentFlags: 0,
+            componentFlagsMask: 0
+        )
+        let effect = AVAudioUnitEffect(audioComponentDescription: description)
+        engine.attach(effect)
+        engine.connect(input, to: effect, format: input.outputFormat(forBus: 0))
+        engine.connect(effect, to: engine.mainMixerNode, format: nil)
+        // The engine runs for the tap alone; nothing is played back through it.
+        engine.mainMixerNode.outputVolume = 0
+        return (effect, true)
     }
 
     func start(contextualStrings: [String], onPartial: @escaping @Sendable (String) -> Void) async throws {
@@ -102,13 +205,15 @@ final class SpeechAnalyzerSession: VoiceSession {
             try await analyzer.setContext(context)
         }
 
+        voiceprint = Defaults[.dictationVoiceprint].map { Float($0) }
         let input = engine.inputNode
         // Before the format is read: voice processing changes the input format the tap sees.
         if Defaults[.dictationVoiceProcessing] {
             do {
                 try input.setVoiceProcessingEnabled(true)
+                // Ducking stays at `.mid`, never pausing: the music keeps playing, quieter, during the take.
                 input.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
-                    enableAdvancedDucking: false, duckingLevel: .min)
+                    enableAdvancedDucking: false, duckingLevel: .mid)
                 voiceProcessing = true
             } catch {
                 voiceProcessing = false
@@ -127,6 +232,10 @@ final class SpeechAnalyzerSession: VoiceSession {
         tapChannels = Int(inFormat.channelCount)
         tapSampleRate = Int(inFormat.sampleRate)
 
+        let graph = Self.makeInputGraph(engine: engine)
+        tapNode = graph.tapNode
+        isolation = graph.isolation
+
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         let tap = levelTap
         let converterBox = ConverterBox()
@@ -134,14 +243,14 @@ final class SpeechAnalyzerSession: VoiceSession {
         let usesVoiceProcessing = voiceProcessing
         // The format comes from the first buffer, not from the input node at start. CoreAudio can
         // still be switching devices then, and a tap installed with the stale format delivers nothing.
-        input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, _ in
+        // The isolation effect has a fixed format, so its tap takes the explicit one.
+        let onBuffer: AVAudioNodeTapBlock = { buffer, _ in
             tap.ingest(buffer)
             // With voice processing the input has several channels and channel 0 is the processed voice.
             // Without it this is the buffer itself (passthrough or downmix, as before).
             let mono = takeMonoBuffer(
                 buffer,
-                source: MicChannelPick.monoSource(
-                    channelCount: Int(buffer.format.channelCount), voiceProcessing: usesVoiceProcessing))
+                source: takeSource(for: buffer, voiceProcessing: usesVoiceProcessing, box: converterBox))
             takeAudio.ingest(mono)
             let format = mono.format
             // The device can change after start, so a buffer may carry a rate the start check never saw.
@@ -177,6 +286,9 @@ final class SpeechAnalyzerSession: VoiceSession {
             guard out.frameLength > 0 else { return }
             continuation.yield(AnalyzerInput(buffer: out))
         }
+        graph.tapNode.installTap(
+            onBus: 0, bufferSize: 4096, format: graph.isolation ? graph.tapNode.outputFormat(forBus: 0) : nil,
+            block: onBuffer)
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
         ) { [tap] _ in tap.noteConfigChange() }
@@ -188,11 +300,17 @@ final class SpeechAnalyzerSession: VoiceSession {
             do {
                 for try await result in transcriber.results {
                     let text = String(result.text.characters)
+                    let span = spanSeconds(result.range, total: takeAudio.seconds)
                     if result.isFinal {
-                        self?.finals.append(text)
-                        self?.lastVolatile = ""
+                        guard let self else { continue }
+                        self.lastVolatile = ""
+                        self.lastVolatileRange = nil
+                        let embedding = await self.embedding(for: span)
+                        self.finals.append(LabelledSegment(
+                            text: text, start: span.start, end: span.end, embedding: embedding, label: .unknown))
                     } else {
                         self?.lastVolatile = text
+                        self?.lastVolatileRange = span
                         self?.partialCount += 1
                         if self?.firstPartialAt == nil { self?.firstPartialAt = ProcessInfo.processInfo.systemUptime }
                         onPartial(text)
@@ -210,16 +328,24 @@ final class SpeechAnalyzerSession: VoiceSession {
             }
             engine.prepare()
             engineStartedAt = ProcessInfo.processInfo.systemUptime
+            cpuAtStart = ProcessMeter.cpuSeconds()
+            rssAtStart = ProcessMeter.residentMB()
             do {
                 try engine.start()
             } catch where voiceProcessing {
                 // Voice processing failed to start: retry on the raw mic so the take never fails for it.
+                // The isolation effect goes with it: the raw input has a different format.
+                tapNode?.removeTap(onBus: 0)
+                if isolation, let effect = tapNode as? AVAudioUnitEffect { engine.detach(effect) }
+                isolation = false
+                tapNode = input
                 try? input.setVoiceProcessingEnabled(false)
                 voiceProcessing = false
                 engine.prepare()
                 let rawFormat = input.outputFormat(forBus: 0)
                 tapChannels = Int(rawFormat.channelCount)
                 tapSampleRate = Int(rawFormat.sampleRate)
+                input.installTap(onBus: 0, bufferSize: 4096, format: nil, block: onBuffer)
                 try engine.start()
             }
             try await analyzer.start(inputSequence: stream)
@@ -228,6 +354,21 @@ final class SpeechAnalyzerSession: VoiceSession {
             await analyzer.cancelAndFinishNow()
             throw error
         }
+    }
+
+    /// The speaker embedding of one span, or nil when nothing needs scoring: no voiceprint and no labelled mode
+    /// (then the helper is never asked, so an idle or unenrolled app wakes nothing), or the helper cannot answer.
+    /// A nil segment keeps its place in the labelling and is kept in every mode.
+    private func embedding(for span: (start: Double, end: Double)) async -> [Float]? {
+        guard !voiceprint.isEmpty || Defaults[.dictationSpeakerMode] == .everyoneLabelled else { return nil }
+        return try? await FluidSpeakerEmbedder.shared.segmentEmbedding(audio.samples(from: span.start, to: span.end))
+    }
+
+    /// Labels the take's segments for the mode. Without a voiceprint, only the labelled mode labels; the other two
+    /// keep everything, as they always have.
+    private func labelTake(_ segments: [LabelledSegment]) -> [LabelledSegment] {
+        guard !voiceprint.isEmpty || mode == .everyoneLabelled else { return segments }
+        return SpeakerLabeller.label(segments, voiceprint: voiceprint, params: .default)
     }
 
     func finish() async throws -> [String] {
@@ -250,19 +391,37 @@ final class SpeechAnalyzerSession: VoiceSession {
             let drained = await TimeoutRace.run(seconds: 0.5) { await resultsTask.value }
             if drained == nil { finalized = false }
         }
-        return TranscriptAssembler.parts(finals: finals, volatileTail: lastVolatile, finalized: finalized)
+        let segments = finals + (finalized ? [] : tail.map { [$0] } ?? [])
+        labelled = labelTake(segments)
+        await FluidSpeakerEmbedder.shared.release()
+        return [SpeakerLabeller.pasteText(labelled, mode: mode)]
     }
 
-    /// Stops the microphone at key release without waiting for the analyzer. Returns the transcript so far.
-    /// `finish()` still runs afterwards for the final results.
-    func stopNow() -> [String] {
+    /// Stops the microphone at key release without waiting for the analyzer. Returns the labelled transcript so far
+    /// as one paste (#17 U2b). `finish()` still runs afterwards for the final results.
+    func stopNow() async -> [String] {
         teardownAudio()
-        return TranscriptAssembler.parts(finals: finals, volatileTail: lastVolatile, finalized: false)
+        mode = Defaults[.dictationSpeakerMode]
+        cpuPct = takeCPUPercent()
+        rssDeltaMB = ProcessMeter.residentMB() - rssAtStart
+        let baseline = rssAtStart
+        idleTask = Task {
+            try? await Task.sleep(for: .seconds(5))
+            return ProcessMeter.residentMB() - baseline
+        }
+        tail = nil
+        if !lastVolatile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let span = lastVolatileRange ?? (0, audio.seconds)
+            let embedding = await embedding(for: span)
+            tail = LabelledSegment(text: lastVolatile, start: span.start, end: span.end, embedding: embedding, label: .unknown)
+        }
+        labelled = labelTake(finals + (tail.map { [$0] } ?? []))
+        return [SpeakerLabeller.pasteText(labelled, mode: mode)]
     }
 
-    /// The take's audio as a WAV file, or nil when no audio arrived.
+    /// The take's audio as a WAV file, with the segments the mode drops silenced (#17 U2b), or nil when no audio arrived.
     func takeWAV() -> Data? {
-        audio.wav()
+        audio.wav(silencing: SpeakerLabeller.droppedRanges(labelled, mode: mode))
     }
 
     func cancel() async {
@@ -274,6 +433,8 @@ final class SpeechAnalyzerSession: VoiceSession {
             _ = await TimeoutRace.run(seconds: 0.5) { await resultsTask.value }
         }
         finals.removeAll()
+        labelled = []
+        await FluidSpeakerEmbedder.shared.release()
     }
 
     /// Adds this take's audio and transcript numbers to the report.
@@ -289,6 +450,35 @@ final class SpeechAnalyzerSession: VoiceSession {
             report.firstPartialMs = Int((firstPartialAt - engineStartedAt) * 1000)
         }
         levelTap.fill(&report)
+        report.speakerGate = !voiceprint.isEmpty
+        report.speakerMode = mode
+        var distinct: [SpeakerLabel] = []
+        for segment in labelled where segment.label != .unknown && !distinct.contains(segment.label) {
+            distinct.append(segment.label)
+        }
+        report.speakers = distinct.count
+        report.speakerDropped = labelled.count - SpeakerLabeller.kept(labelled, mode: mode).count
+        report.cpuPct = cpuPct
+        report.rssDeltaMB = rssDeltaMB
+        report.voiceIsolation = isolation
+        report.ducking = voiceProcessing ? .mid : .off
+        report.level = SpeakerGate.levelDBFS(audio.samples(from: 0, to: 8))
+    }
+
+    /// The take's length so far, for the rewrite gate.
+    var takeSeconds: Double { audio.seconds }
+
+    /// The 5-second idle sample started at key release, if any. The manager awaits it before the take line is logged.
+    func idleSample() -> Task<Int, Never>? {
+        idleTask
+    }
+
+    /// The take's share of one core since the engine started, in percent. -1 when the engine never started.
+    private func takeCPUPercent() -> Double {
+        guard let engineStartedAt else { return -1 }
+        let wall = ProcessInfo.processInfo.systemUptime - engineStartedAt
+        guard wall > 0 else { return -1 }
+        return (ProcessMeter.cpuSeconds() - cpuAtStart) / wall * 100
     }
 
     private func teardownAudio() {
@@ -296,8 +486,10 @@ final class SpeechAnalyzerSession: VoiceSession {
             NotificationCenter.default.removeObserver(configObserver)
             self.configObserver = nil
         }
-        engine.inputNode.removeTap(onBus: 0)
+        tapNode?.removeTap(onBus: 0)
         engine.stop()
+        // Voice processing is switched off on every exit, so the music returns to full volume (#17 U2b).
+        if voiceProcessing { try? engine.inputNode.setVoiceProcessingEnabled(false) }
         if pausedMedia {
             pausedMedia = false
             MusicManager.shared.play()

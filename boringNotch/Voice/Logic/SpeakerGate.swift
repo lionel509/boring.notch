@@ -139,6 +139,17 @@ public struct SpeakerGate: Sendable {
         return embeddings.isEmpty ? nil : centroid(embeddings)
     }
 
+    /// The async twin of `segmentEmbedding`, for an embedder that lives in another process (#17 U2b). The same
+    /// arithmetic in the same order: normalise, window, tile, embed each window, centroid.
+    public static func segmentEmbedding(_ samples: [Float], embed: ([Float]) async throws -> [Float]) async throws -> [Float]? {
+        var embeddings: [[Float]] = []
+        for window in windows(normalise(samples)) {
+            let embedding = try await embed(tile(window, to: tiledSamples))
+            if !embedding.isEmpty { embeddings.append(embedding) }
+        }
+        return embeddings.isEmpty ? nil : centroid(embeddings)
+    }
+
     /// Cosine of the span's segment embedding with the voiceprint. nil when the span is empty.
     public static func score(segment: [Float], voiceprint: [Float], embed: ([Float]) throws -> [Float]) throws -> Double? {
         guard let embedding = try segmentEmbedding(segment, embed: embed) else { return nil }
