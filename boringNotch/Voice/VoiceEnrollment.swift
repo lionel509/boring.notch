@@ -83,7 +83,7 @@ final class VoiceEnrollment: ObservableObject {
         take = nil
         let samples = buffer.samples(from: 0, to: Self.recordSeconds)
         let clipsBefore = state.clips
-        EnrollmentLogic.reduce(&state, .stop(levelDBFS: SpeakerGate.levelDBFS(samples)))
+        EnrollmentLogic.reduce(&state, .stop(accepted: EnrollmentLogic.clipAccepted(samples)))
         if state.clips > clipsBefore { clips.append(samples) }
         if case .computing = step { Task { await compute() } }
     }
@@ -107,7 +107,7 @@ final class VoiceEnrollment: ObservableObject {
             for clip in clips {
                 guard let embedding = try await FluidSpeakerEmbedder.shared.segmentEmbedding(clip, take: id) else {
                     await FluidSpeakerEmbedder.shared.release(id)
-                    EnrollmentLogic.reduce(&state, .scored(false))
+                    EnrollmentLogic.reduce(&state, .fail(EnrollmentLogic.tryAgainMessage))
                     return
                 }
                 embeddings.append(embedding)
@@ -120,13 +120,13 @@ final class VoiceEnrollment: ObservableObject {
         await FluidSpeakerEmbedder.shared.release(id)
 
         guard let voiceprint = EnrollmentLogic.assemble(embeddings) else {
-            EnrollmentLogic.reduce(&state, .scored(false))
+            EnrollmentLogic.reduce(&state, .fail(EnrollmentLogic.tryAgainMessage))
             return
         }
         Defaults[.dictationVoiceprint] = voiceprint
         Defaults[.dictationVoiceEnrolledAt] = .now
         clips = []
-        EnrollmentLogic.reduce(&state, .scored(true))
+        EnrollmentLogic.reduce(&state, .scored(outlier: nil))
     }
 
     /// The same graph a take builds: voice processing first (its ducking stays at `.mid`, music is never paused),

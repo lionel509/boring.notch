@@ -3,22 +3,47 @@ import XCTest
 @testable import VoiceDictationLogic
 
 final class EnrollmentLogicTests: XCTestCase {
-    private let loud: Float = -20
-    private let quiet: Float = -50
-
     private func run(_ events: [EnrollmentLogic.Event]) -> EnrollmentLogic.State {
         var state = EnrollmentLogic.State()
         for event in events { EnrollmentLogic.reduce(&state, event) }
         return state
     }
 
-    // MARK: level gate
+    /// A clip of `seconds` at a constant level: alternating samples whose RMS is `dBFS`, at 16 kHz.
+    private func tone(dBFS: Double, seconds: Double) -> [Float] {
+        let amplitude = Float(pow(10, dBFS / 20))
+        return (0..<Int(seconds * 16_000)).map { $0 % 2 == 0 ? amplitude : -amplitude }
+    }
 
-    func testLevelGateKeepsLoudEnoughPrompts() {
-        XCTAssertTrue(EnrollmentLogic.levelAccepted(-20))
-        XCTAssertTrue(EnrollmentLogic.levelAccepted(-35), "the boundary is accepted")
-        XCTAssertFalse(EnrollmentLogic.levelAccepted(-35.1))
-        XCTAssertFalse(EnrollmentLogic.levelAccepted(-.infinity), "an empty or silent take is too quiet")
+    /// Three prompts read and accepted: the state is ready to score.
+    private var threeAccepted: [EnrollmentLogic.Event] {
+        [.start, .stop(accepted: true), .start, .stop(accepted: true), .start, .stop(accepted: true)]
+    }
+
+    // MARK: clip gate
+
+    func testSpeechAtMinus30IsAccepted() {
+        XCTAssertTrue(EnrollmentLogic.clipAccepted(tone(dBFS: -30, seconds: 1)))
+    }
+
+    func testHalfASecondOfSpeechIsEnough() {
+        XCTAssertTrue(EnrollmentLogic.clipAccepted(tone(dBFS: -30, seconds: 0.5)))
+    }
+
+    func testFourTenthsOfASecondIsNotEnough() {
+        XCTAssertFalse(EnrollmentLogic.clipAccepted(tone(dBFS: -30, seconds: 0.4)))
+    }
+
+    func testOneLoudClickDoesNotPassAQuietPrompt() {
+        var samples = tone(dBFS: -50, seconds: 8)
+        let clickStart = 40_000 // on a 320-sample frame boundary
+        for i in clickStart..<(clickStart + 320) { samples[i] = i % 2 == 0 ? 0.3 : -0.3 }
+        XCTAssertFalse(EnrollmentLogic.clipAccepted(samples), "a 20 ms click must not lift a -50 dBFS prompt")
+    }
+
+    func testSilenceAndEmptyAreRejected() {
+        XCTAssertFalse(EnrollmentLogic.clipAccepted([]))
+        XCTAssertFalse(EnrollmentLogic.clipAccepted(tone(dBFS: -60, seconds: 8)))
     }
 
     // MARK: step transitions
@@ -30,28 +55,26 @@ final class EnrollmentLogicTests: XCTestCase {
     }
 
     func testStartOutsideAPromptChangesNothing() {
-        let computing = run([.start, .stop(levelDBFS: loud), .start, .stop(levelDBFS: loud), .start, .stop(levelDBFS: loud)])
-        XCTAssertEqual(computing.step, .computing)
-        XCTAssertEqual(run([.start, .stop(levelDBFS: loud), .start, .stop(levelDBFS: loud), .start, .stop(levelDBFS: loud), .start]).step, .computing)
-        XCTAssertEqual(run([.stop(levelDBFS: loud)]).step, .prompt(0), "a stop without a start changes nothing")
+        XCTAssertEqual(run(threeAccepted + [.start]).step, .computing)
+        XCTAssertEqual(run([.stop(accepted: true)]).step, .prompt(0), "a stop without a start changes nothing")
     }
 
-    func testLoudPromptAdvancesAndCountsTheClip() {
-        let state = run([.start, .stop(levelDBFS: loud)])
+    func testAcceptedPromptAdvancesAndCountsTheClip() {
+        let state = run([.start, .stop(accepted: true)])
         XCTAssertEqual(state.step, .prompt(1))
         XCTAssertEqual(state.clips, 1)
         XCTAssertEqual(state.quietAttempts, 0)
         XCTAssertNil(state.message)
     }
 
-    func testThirdLoudPromptStartsComputing() {
-        let state = run([.start, .stop(levelDBFS: loud), .start, .stop(levelDBFS: loud), .start, .stop(levelDBFS: loud)])
+    func testThirdAcceptedPromptStartsComputing() {
+        let state = run(threeAccepted)
         XCTAssertEqual(state.step, .computing)
         XCTAssertEqual(state.clips, EnrollmentLogic.promptCount)
     }
 
     func testQuietPromptRepeatsWithTheMessage() {
-        let state = run([.start, .stop(levelDBFS: quiet)])
+        let state = run([.start, .stop(accepted: false)])
         XCTAssertEqual(state.step, .prompt(0), "the same prompt is asked again")
         XCTAssertEqual(state.message, EnrollmentLogic.closerMessage)
         XCTAssertEqual(state.clips, 0)
@@ -60,28 +83,25 @@ final class EnrollmentLogicTests: XCTestCase {
 
     func testRetryLimitFailsAfterRepeatedQuietTakes() {
         var events: [EnrollmentLogic.Event] = []
-        for _ in 0..<EnrollmentLogic.maxQuietAttempts { events += [.start, .stop(levelDBFS: quiet)] }
-        let state = run(events)
-        XCTAssertEqual(state.step, .failed(EnrollmentLogic.tryAgainMessage))
+        for _ in 0..<EnrollmentLogic.maxQuietAttempts { events += [.start, .stop(accepted: false)] }
+        XCTAssertEqual(run(events).step, .failed(EnrollmentLogic.tryAgainMessage))
     }
 
-    func testLoudPromptResetsTheQuietCount() {
+    func testAcceptedPromptResetsTheQuietCount() {
         var events: [EnrollmentLogic.Event] = []
-        for _ in 0..<(EnrollmentLogic.maxQuietAttempts - 1) { events += [.start, .stop(levelDBFS: quiet)] }
-        events += [.start, .stop(levelDBFS: loud)]
+        for _ in 0..<(EnrollmentLogic.maxQuietAttempts - 1) { events += [.start, .stop(accepted: false)] }
+        events += [.start, .stop(accepted: true)]
         let state = run(events)
         XCTAssertEqual(state.step, .prompt(1))
         XCTAssertEqual(state.quietAttempts, 0)
     }
 
-    func testScoredTrueFinishesAndFalseFails() {
-        let base: [EnrollmentLogic.Event] = [.start, .stop(levelDBFS: loud), .start, .stop(levelDBFS: loud), .start, .stop(levelDBFS: loud)]
-        XCTAssertEqual(run(base + [.scored(true)]).step, .done)
-        XCTAssertEqual(run(base + [.scored(false)]).step, .failed(EnrollmentLogic.tryAgainMessage))
+    func testScoredWithoutOutlierFinishes() {
+        XCTAssertEqual(run(threeAccepted + [.scored(outlier: nil)]).step, .done)
     }
 
     func testScoredOutsideComputingChangesNothing() {
-        XCTAssertEqual(run([.scored(true)]).step, .prompt(0))
+        XCTAssertEqual(run([.scored(outlier: nil)]).step, .prompt(0))
     }
 
     func testFailFromAnyStepShowsTheReason() {
@@ -89,22 +109,55 @@ final class EnrollmentLogicTests: XCTestCase {
     }
 
     func testCloseReturnsToTheFirstPrompt() {
-        let state = run([.start, .stop(levelDBFS: loud), .start, .close])
+        let state = run([.start, .stop(accepted: true), .start, .close])
         XCTAssertEqual(state, EnrollmentLogic.State())
     }
 
     func testHappyPathEndsDone() {
-        let state = run([
-            .start, .stop(levelDBFS: -18),
-            .start, .stop(levelDBFS: -25),
-            .start, .stop(levelDBFS: -30),
-            .scored(true),
-        ])
+        let state = run(threeAccepted + [.scored(outlier: nil)])
         XCTAssertEqual(state.step, .done)
         XCTAssertEqual(state.clips, 3)
     }
 
+    // MARK: clip that does not match the others
+
+    func testOutlierClipIsReadAgain() {
+        let state = run(threeAccepted + [.scored(outlier: 2)])
+        XCTAssertEqual(state.step, .prompt(2))
+        XCTAssertEqual(state.clips, 2)
+        XCTAssertEqual(state.message, EnrollmentLogic.inconsistentMessage)
+        XCTAssertTrue(state.redo)
+    }
+
+    func testReReadClipReturnsToScoring() {
+        let state = run(threeAccepted + [.scored(outlier: 2), .start, .stop(accepted: true)])
+        XCTAssertEqual(state.step, .computing)
+        XCTAssertEqual(state.clips, 3)
+        XCTAssertFalse(state.redo)
+    }
+
+    func testOutliersCountAgainstTheRetryLimit() {
+        var events = threeAccepted
+        for _ in 0..<EnrollmentLogic.maxQuietAttempts {
+            events += [.scored(outlier: 2), .start, .stop(accepted: true)]
+        }
+        XCTAssertEqual(run(events).step, .failed(EnrollmentLogic.tryAgainMessage))
+    }
+
     // MARK: voiceprint
+
+    func testConsistentClipsHaveNoOutlier() {
+        XCTAssertNil(EnrollmentLogic.inconsistentClip([[1, 0, 0], [1, 0.05, 0], [0.98, 0.1, 0]]))
+    }
+
+    func testOtherVoiceAtTheMeasuredCosineIsTheOutlier() {
+        let other: [Float] = [0.26, Float((1 - 0.26 * 0.26).squareRoot()), 0]
+        XCTAssertEqual(EnrollmentLogic.inconsistentClip([[1, 0, 0], [1, 0, 0], other]), 2)
+    }
+
+    func testAgreementBarIsPointFourFive() {
+        XCTAssertEqual(EnrollmentLogic.minAgreement, 0.45)
+    }
 
     func testAgreeingEmbeddingsPass() {
         XCTAssertTrue(EnrollmentLogic.agrees([[1, 0, 0], [1, 0.05, 0], [0.98, 0.1, 0]]))
@@ -129,5 +182,10 @@ final class EnrollmentLogicTests: XCTestCase {
 
     func testVoiceprintIsNilWhenTheClipsDisagree() {
         XCTAssertNil(EnrollmentLogic.assemble([[1, 0, 0], [1, 0, 0], [0, 0, 1]]))
+    }
+
+    func testVoiceprintIsNilForAnotherVoiceAtTheMeasuredCosine() {
+        let other: [Float] = [0.26, Float((1 - 0.26 * 0.26).squareRoot()), 0]
+        XCTAssertNil(EnrollmentLogic.assemble([[1, 0, 0], [1, 0, 0], other]))
     }
 }
