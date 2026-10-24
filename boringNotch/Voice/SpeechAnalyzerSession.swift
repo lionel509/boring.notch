@@ -116,6 +116,8 @@ final class SpeechAnalyzerSession: VoiceSession {
     private var resultsTask: Task<Void, Never>?
     /// The finals with their spans and speaker embeddings, and the volatile tail, as the results loop builds them (#17 U2b).
     private var transcript = TakeTranscript()
+    /// Identifies this take to the speaker embedder's lease (#17 U2b, round 2).
+    private let takeID = UUID()
     /// The voiceprint, read once at start. Empty until enrolment.
     private var voiceprint: [Float] = []
     /// The take's speaker mode, read at key release, and the labelling it produced for the paste and the WAV.
@@ -291,7 +293,7 @@ final class SpeechAnalyzerSession: VoiceSession {
         self.analyzer = analyzer
         self.continuation = continuation
 
-        await FluidSpeakerEmbedder.shared.beginTake()
+        await FluidSpeakerEmbedder.shared.beginTake(takeID)
         resultsTask = Task { [weak self] in
             do {
                 for try await result in transcriber.results {
@@ -356,7 +358,7 @@ final class SpeechAnalyzerSession: VoiceSession {
     /// neighbour is kept. It is kept in every mode only when the take has no labelled neighbour at all.
     private func embedding(for span: (start: Double, end: Double)) async -> [Float]? {
         guard scoresSpeakers else { return nil }
-        return try? await FluidSpeakerEmbedder.shared.segmentEmbedding(audio.samples(from: span.start, to: span.end))
+        return try? await FluidSpeakerEmbedder.shared.segmentEmbedding(audio.samples(from: span.start, to: span.end), take: takeID)
     }
 
     /// Whether this take asks the helper for embeddings: a voiceprint, or the labelled mode.
@@ -394,7 +396,7 @@ final class SpeechAnalyzerSession: VoiceSession {
             resultsTask.cancel()
         }
         labelled = labelTake(transcript.segments(finalized: finalized))
-        await FluidSpeakerEmbedder.shared.release()
+        await FluidSpeakerEmbedder.shared.release(takeID)
         return [SpeakerLabeller.pasteText(labelled, mode: mode)]
     }
 
@@ -414,8 +416,9 @@ final class SpeechAnalyzerSession: VoiceSession {
         // during the wait is neither lost nor pasted twice, and the tail is the volatile of this moment (#17 U2b).
         if let tail = transcript.release(), scoresSpeakers {
             let samples = audio.samples(from: tail.start, to: tail.end)
+            let take = takeID
             let embedding = await TakeTranscript.boundedEmbedding(seconds: 0.3) {
-                try? await FluidSpeakerEmbedder.shared.segmentEmbedding(samples)
+                try? await FluidSpeakerEmbedder.shared.segmentEmbedding(samples, take: take)
             }
             transcript.setTailEmbedding(embedding)
         }
@@ -440,7 +443,7 @@ final class SpeechAnalyzerSession: VoiceSession {
         }
         transcript = TakeTranscript()
         labelled = []
-        await FluidSpeakerEmbedder.shared.release()
+        await FluidSpeakerEmbedder.shared.release(takeID)
     }
 
     /// Adds this take's audio and transcript numbers to the report.

@@ -21,7 +21,7 @@ public struct GatedSegment: Equatable {
 /// Scores a span of 16 kHz mono samples to a speaker embedding. The app's implementation is FluidAudio's
 /// WeSpeaker; tests and the spike pass fakes. nil means the span has no scorable window.
 protocol SpeakerEmbedder: AnyObject, Sendable {
-    func segmentEmbedding(_ samples16k: [Float]) async throws -> [Float]?
+    func segmentEmbedding(_ samples16k: [Float], take: UUID) async throws -> [Float]?
 }
 
 /// Segment-level speaker verification (#17). Pure arithmetic: no model, no audio device, no Defaults.

@@ -6,20 +6,44 @@ import XCTest
 final class SpeakerTakeTests: XCTestCase {
     func testLeaseIsClosedUntilTheTakeBegins() {
         var lease = SpeakerModelLease()
-        XCTAssertFalse(lease.isOpen)
-        lease.begin()
-        XCTAssertTrue(lease.isOpen)
+        let take = UUID()
+        XCTAssertFalse(lease.isOpen(take))
+        lease.begin(take)
+        XCTAssertTrue(lease.isOpen(take))
     }
 
     func testLeaseClosesWhenTheTakeEndsAndReopensOnTheNextBegin() {
         var lease = SpeakerModelLease()
-        lease.begin()
-        lease.noteEmbedding()
-        XCTAssertTrue(lease.endTake(), "a take that embedded must release")
-        XCTAssertFalse(lease.isOpen, "a window after the take's end must find the lease closed")
-        lease.begin()
-        XCTAssertTrue(lease.isOpen)
-        XCTAssertFalse(lease.endTake(), "a take that never embedded releases nothing")
+        let first = UUID(), second = UUID()
+        lease.begin(first)
+        lease.noteEmbedding(first)
+        XCTAssertTrue(lease.endTake(first), "a take that embedded must release")
+        XCTAssertFalse(lease.isOpen(first), "a window after the take's end must find the lease closed")
+        lease.begin(second)
+        XCTAssertTrue(lease.isOpen(second))
+        XCTAssertFalse(lease.endTake(second), "a take that never embedded releases nothing")
+    }
+
+    func testSupersededTakeReleasesOnceAfterTheLiveTakeEnds() {
+        var lease = SpeakerModelLease()
+        let first = UUID(), second = UUID()
+        lease.begin(first)
+        lease.noteEmbedding(first)
+        lease.begin(second)
+        XCTAssertFalse(lease.endTake(first), "the live take still holds the model")
+        XCTAssertTrue(lease.isOpen(second), "a stale end must not close the live take")
+        XCTAssertTrue(lease.endTake(second), "the owed release goes out once no take holds the model")
+        XCTAssertFalse(lease.endTake(second), "and not again")
+    }
+
+    func testOwedReleaseIsSentOnceWhenTheLastTakeEnds() {
+        var lease = SpeakerModelLease()
+        let first = UUID(), second = UUID()
+        lease.begin(first)
+        lease.noteEmbedding(first)
+        lease.begin(second)
+        XCTAssertTrue(lease.endTake(second), "no take holds the model after second ends, so the owed release is sent")
+        XCTAssertFalse(lease.endTake(first), "a stale end afterwards sends nothing")
     }
 
     func testFinalWhoseEmbeddingHasNotReturnedIsInTheRelease() {
@@ -109,25 +133,25 @@ final class SpeakerU2bWiringTests: XCTestCase {
 
     func testFinishAndCancelEachReleaseTheHelperModel() throws {
         let session = try repoFile("boringNotch/Voice/SpeechAnalyzerSession.swift")
-        let releases = session.components(separatedBy: "await FluidSpeakerEmbedder.shared.release()").count - 1
+        let releases = session.components(separatedBy: "await FluidSpeakerEmbedder.shared.release(takeID)").count - 1
         XCTAssertEqual(releases, 2, "finish and cancel must each release the helper's model exactly once")
     }
 
     func testEveryWindowIsNotedAgainstTheLease() throws {
         let embedder = try repoFile("boringNotch/Voice/FluidSpeakerEmbedder.swift")
-        XCTAssertTrue(embedder.contains("self.lease.noteEmbedding()"),
+        XCTAssertTrue(embedder.contains("self.lease.noteEmbedding(take)"),
             "a window that reaches the helper must mark the take as needing a release")
     }
 
     func testEmbedderIsClosedToWindowsAfterTheTakeEnds() throws {
         let embedder = try repoFile("boringNotch/Voice/FluidSpeakerEmbedder.swift")
-        XCTAssertTrue(embedder.contains("guard self.lease.isOpen"),
+        XCTAssertTrue(embedder.contains("guard self.lease.isOpen(take)"),
             "a window after the take's end must not reach the helper")
     }
 
     func testEveryTakeOpensTheEmbedder() throws {
         let session = try repoFile("boringNotch/Voice/SpeechAnalyzerSession.swift")
-        XCTAssertTrue(session.contains("await FluidSpeakerEmbedder.shared.beginTake()"),
+        XCTAssertTrue(session.contains("await FluidSpeakerEmbedder.shared.beginTake(takeID)"),
             "a take must reopen the embedder at start, or it never scores")
     }
 

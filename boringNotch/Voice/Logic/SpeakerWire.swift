@@ -36,28 +36,35 @@ enum SpeakerWire {
     }
 }
 
-/// Whether this take asked the helper for an embedding. Finish and cancel both end a take through `endTake`;
-/// only a take that embedded releases the helper's model, so an idle app never wakes the helper to release.
+/// Which take holds the helper's speaker model, and whether a release is owed (#17 U2b, round 2). Takes are keyed
+/// by ID, so a superseded take's end cannot close the live take. A release is owed from the first window that reaches
+/// the helper until one is sent, and it is sent exactly once, at the first end after no take holds the lease. So a
+/// superseded take's release waits for the live take to end instead of being forgotten.
 struct SpeakerModelLease {
-    private var used = false
-    /// True from `begin` until `endTake`. A window that arrives after the take ended finds the lease closed and never
-    /// reaches the helper, so it cannot reload the model with nothing left to release it (#17 U2b).
-    private(set) var isOpen = false
+    /// The take that is running. nil once it has ended, or before any has begun.
+    private(set) var holder: UUID?
+    /// True when a window reached the helper and no release has been sent since.
+    private(set) var owed = false
 
-    mutating func begin() {
-        isOpen = true
-        used = false
+    mutating func begin(_ take: UUID) {
+        holder = take
     }
 
-    mutating func noteEmbedding() {
-        used = true
+    func isOpen(_ take: UUID) -> Bool {
+        holder == take
     }
 
-    /// True when the helper must be told to release. Closes the take and resets, so a second end of the same take
-    /// returns false.
-    mutating func endTake() -> Bool {
-        isOpen = false
-        defer { used = false }
-        return used
+    /// Records a window for the take. Ignored unless the take holds the lease.
+    mutating func noteEmbedding(_ take: UUID) {
+        if holder == take { owed = true }
+    }
+
+    /// The take ended. Returns true exactly once: when no take holds the lease and a release is owed. An end from a
+    /// take that no longer holds the lease only clears nothing; the owed release is still sent by the next end.
+    mutating func endTake(_ take: UUID) -> Bool {
+        if holder == take { holder = nil }
+        guard holder == nil, owed else { return false }
+        owed = false
+        return true
     }
 }

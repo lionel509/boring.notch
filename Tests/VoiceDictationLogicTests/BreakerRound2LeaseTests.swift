@@ -7,18 +7,21 @@ final class BreakerRound2LeaseTests: XCTestCase {
     /// Invariant: the model that take A loaded is still released once A ends.
     func testBreakSupersededTakeStillGetsReleased() {
         var lease = SpeakerModelLease()
-        lease.begin(); lease.noteEmbedding()   // take A loads the model
-        lease.begin()                           // take B starts before A's end arrives
-        XCTAssertTrue(lease.endTake(), "A's helper model was forgotten when B began; nothing releases it")
+        let a = UUID(), b = UUID()
+        lease.begin(a); lease.noteEmbedding(a)   // take A loads the model
+        lease.begin(b)                           // take B starts before A's end arrives
+        XCTAssertFalse(lease.endTake(a), "A's end is stale while B holds the lease")
+        XCTAssertTrue(lease.endTake(b), "A's helper model was forgotten when B began; nothing releases it")
     }
 
     /// A stale end must not close a take that is still running.
     /// Invariant: A's late release leaves the live take B open.
     func testBreakStaleEndDoesNotCloseLiveTake() {
         var lease = SpeakerModelLease()
-        lease.begin(); lease.noteEmbedding()
-        lease.begin(); lease.noteEmbedding()
-        _ = lease.endTake()                     // A's late release
-        XCTAssertTrue(lease.isOpen, "A's late release closed take B while B was still running")
+        let a = UUID(), b = UUID()
+        lease.begin(a); lease.noteEmbedding(a)
+        lease.begin(b); lease.noteEmbedding(b)
+        _ = lease.endTake(a)                    // A's late release
+        XCTAssertTrue(lease.isOpen(b), "A's late release closed take B while B was still running")
     }
 }

@@ -30,28 +30,37 @@ final class SpeakerWireTests: XCTestCase {
 
     func testIdleTakeReleasesNothing() {
         var lease = SpeakerModelLease()
-        XCTAssertFalse(lease.endTake(), "a take that never embedded must not wake the helper")
+        let take = UUID()
+        lease.begin(take)
+        XCTAssertFalse(lease.endTake(take), "a take that never embedded must not wake the helper")
     }
 
     func testEmbeddingTakeReleasesOnceAtItsEnd() {
         var lease = SpeakerModelLease()
-        lease.noteEmbedding()
-        lease.noteEmbedding()
-        XCTAssertTrue(lease.endTake())
-        XCTAssertFalse(lease.endTake(), "finish then cancel must not release twice")
+        let take = UUID()
+        lease.begin(take)
+        lease.noteEmbedding(take)
+        lease.noteEmbedding(take)
+        XCTAssertTrue(lease.endTake(take))
+        XCTAssertFalse(lease.endTake(take), "finish then cancel must not release twice")
     }
 
     func testCancelAfterEmbeddingReleases() {
         var lease = SpeakerModelLease()
-        lease.noteEmbedding()
-        XCTAssertTrue(lease.endTake())
+        let take = UUID()
+        lease.begin(take)
+        lease.noteEmbedding(take)
+        XCTAssertTrue(lease.endTake(take))
     }
 
     func testNextTakeReacquiresAfterRelease() {
         var lease = SpeakerModelLease()
-        lease.noteEmbedding()
-        XCTAssertTrue(lease.endTake())
-        lease.noteEmbedding()
-        XCTAssertTrue(lease.endTake())
+        let first = UUID(), second = UUID()
+        lease.begin(first)
+        lease.noteEmbedding(first)
+        XCTAssertTrue(lease.endTake(first))
+        lease.begin(second)
+        lease.noteEmbedding(second)
+        XCTAssertTrue(lease.endTake(second))
     }
 }

@@ -18,12 +18,12 @@ actor FluidSpeakerEmbedder: SpeakerEmbedder {
     /// The one scoring path: `SpeakerGate` normalises, windows and tiles the span, and each window is embedded
     /// by the helper. nil for an empty span. Throws when the helper cannot answer; the caller treats that as
     /// an unscorable segment and keeps it.
-    func segmentEmbedding(_ samples16k: [Float]) async throws -> [Float]? {
-        guard lease.isOpen else { return nil }
+    func segmentEmbedding(_ samples16k: [Float], take: UUID) async throws -> [Float]? {
+        guard lease.isOpen(take) else { return nil }
         return try await SpeakerGate.segmentEmbedding(samples16k) { window in
             // A window after the take's end never reaches the helper, so it cannot reload the model (#17 U2b).
-            guard self.lease.isOpen else { throw SpeakerEmbedderError.takeClosed }
-            self.lease.noteEmbedding()
+            guard self.lease.isOpen(take) else { throw SpeakerEmbedderError.takeClosed }
+            self.lease.noteEmbedding(take)
             guard let embedding = await XPCHelperClient.shared.speakerEmbedding(window) else {
                 throw SpeakerEmbedderError.helperUnavailable
             }
@@ -32,13 +32,13 @@ actor FluidSpeakerEmbedder: SpeakerEmbedder {
     }
 
     /// Called at the start of every take. Opens the embedder for its windows.
-    func beginTake() {
-        lease.begin()
+    func beginTake(_ take: UUID) {
+        lease.begin(take)
     }
 
-    /// Called at the end of every take. Closes the take, then releases the helper's model only when this take asked for one.
-    func release() async {
-        guard lease.endTake() else { return }
+    /// Called at the end of every take. Closes the take, then releases the helper's model once no take holds it and a release is owed.
+    func release(_ take: UUID) async {
+        guard lease.endTake(take) else { return }
         await XPCHelperClient.shared.releaseSpeakerModel()
     }
 }
