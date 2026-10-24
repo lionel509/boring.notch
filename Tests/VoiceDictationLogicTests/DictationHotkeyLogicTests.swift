@@ -165,6 +165,101 @@ final class DictationHotkeyLogicTests: XCTestCase {
         XCTAssertGreaterThan(totalDiscards, 0, "no take was ever discarded, so the checks pass vacuously")
     }
 
+    // MARK: start cue (a quick fn tap stays silent, a held fn cues once the hold is confirmed)
+
+    func testStartCueIsNotDueOnThePressItself() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertFalse(Logic.startCueDue(s, at: 0))
+        XCTAssertFalse(Logic.startCueDue(s, at: Logic.tapThreshold - 0.01))
+    }
+
+    func testStartCueIsDueOnceAHeldFnPassesTheTapThreshold() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertTrue(Logic.startCueDue(s, at: Logic.tapThreshold))
+        XCTAssertTrue(Logic.startCueDue(s, at: 1.5))
+    }
+
+    /// A shortcut tap under the threshold latches hands-free; the take is audible, so it still cues.
+    func testTapLatchedHandsFreeTakeCues() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .keyUp, at: 0.1), .none)
+        XCTAssertTrue(s.handsFree)
+        XCTAssertTrue(Logic.startCueDue(s, at: Logic.tapThreshold))
+    }
+
+    /// A quick fn tap is classified as a cancel, so no take exists to cue.
+    func testQuickFnTapNeverCues() {
+        var fn = FnKeyLogic.State()
+        var s = Logic.State()
+        let down = FnKeyLogic.classify(&fn, .flags(keyCode: FnKeyLogic.fnKeyCode, fn: true, otherModifiers: false), at: 0)
+        if let event = down.event { XCTAssertEqual(Logic.reduce(&s, event, at: 0), .start) } else { XCTFail("fn down emits keyDown") }
+        let up = FnKeyLogic.classify(&fn, .flags(keyCode: FnKeyLogic.fnKeyCode, fn: false, otherModifiers: false), at: 0.1)
+        if let event = up.event { XCTAssertEqual(Logic.reduce(&s, event, at: 0.1), .discard) } else { XCTFail("fn up emits cancel") }
+        XCTAssertFalse(Logic.startCueDue(s, at: 1.0))
+    }
+
+    /// Break 1 (review): fn+Space latch inside the lead-in. The take is hands-free before the cue is
+    /// due, so the Tink must still come due; the stop Pop must then follow a Tink.
+    func testFnSpaceLatchInLeadInStillCues() {
+        var fn = FnKeyLogic.State()
+        var s = Logic.State()
+        var actions: [Logic.Action] = []
+        var cueDue: [TimeInterval] = []
+        func feed(_ input: FnKeyLogic.Input, at t: TimeInterval) {
+            guard let event = FnKeyLogic.classify(&fn, input, at: t).event else { return }
+            actions.append(Logic.reduce(&s, event, at: t))
+        }
+        feed(.flags(keyCode: FnKeyLogic.fnKeyCode, fn: true, otherModifiers: false), at: 0)
+        feed(.keyDown(keyCode: FnKeyLogic.spaceKeyCode, isRepeat: false), at: 0.1)
+        if Logic.startCueDue(s, at: 0.3) { cueDue.append(0.3) }
+        feed(.flags(keyCode: FnKeyLogic.fnKeyCode, fn: false, otherModifiers: false), at: 0.5)
+        feed(.flags(keyCode: FnKeyLogic.fnKeyCode, fn: true, otherModifiers: false), at: 2.0)
+        feed(.flags(keyCode: FnKeyLogic.fnKeyCode, fn: false, otherModifiers: false), at: 2.1)
+        XCTAssertEqual(actions.filter { $0 != .none }, [.start, .stop])
+        XCTAssertFalse(cueDue.isEmpty, "stop cue (Pop) played for a take whose start cue (Tink) never came due")
+    }
+
+    func testCancelledOrAbortedTakeNeverCues() {
+        var s = Logic.State()
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 0), .start)
+        XCTAssertEqual(Logic.reduce(&s, .cancel, at: 0.05), .discard)
+        XCTAssertFalse(Logic.startCueDue(s, at: 1.0))
+
+        XCTAssertEqual(Logic.reduce(&s, .keyDown, at: 2), .start)
+        XCTAssertEqual(Logic.reduce(&s, .abort, at: 2.5), .discard)
+        XCTAssertFalse(Logic.startCueDue(s, at: 3.0))
+    }
+
+    func testIdleStateNeverCues() {
+        let s = Logic.State()
+        XCTAssertFalse(Logic.startCueDue(s, at: 10))
+    }
+
+    // MARK: stop cue pairs with the start cue (a Pop never plays for a take that never got its Tink)
+
+    func testStopCueIsDueOnlyAfterTheStartCueSounded() {
+        XCTAssertFalse(Logic.stopCueDue(afterStartCue: false))
+        XCTAssertTrue(Logic.stopCueDue(afterStartCue: true))
+    }
+
+    /// A quick fn tap is cancelled before the cue is due, so no Tink and no Pop.
+    func testQuickFnTapLeavesNoStopCue() {
+        var fn = FnKeyLogic.State()
+        var s = Logic.State()
+        var sounded = false
+        let down = FnKeyLogic.classify(&fn, .flags(keyCode: FnKeyLogic.fnKeyCode, fn: true, otherModifiers: false), at: 0)
+        if let event = down.event { _ = Logic.reduce(&s, event, at: 0) }
+        let up = FnKeyLogic.classify(&fn, .flags(keyCode: FnKeyLogic.fnKeyCode, fn: false, otherModifiers: false), at: 0.1)
+        if let event = up.event { _ = Logic.reduce(&s, event, at: 0.1) }
+        // The cue timer fires at tapThreshold, after the release has been reduced.
+        if Logic.startCueDue(s, at: Logic.tapThreshold) { sounded = true }
+        XCTAssertFalse(sounded)
+        XCTAssertFalse(Logic.stopCueDue(afterStartCue: sounded))
+    }
+
     // MARK: minimum hold (a release before minHold never pastes)
 
     func testMinHoldIsHalfASecondAndAboveTheTapLatch() {

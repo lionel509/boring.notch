@@ -45,6 +45,21 @@ enum DictationHotkeyLogic {
     static let repeatGap: TimeInterval = 2.0
     static let maxTake: TimeInterval = 180
 
+    /// The start cue is due once a running take has been recording for `tapThreshold`, held or hands-free.
+    /// The press itself stays silent, so a quick fn tap (the Globe key's own job) never clicks, and a
+    /// latched take still gets its cue, so the mic is never open without one.
+    /// Accepted limit: fn+arrow, fn+Command or fn+F1 pressed after the lead-in still hears the cue; the take is then discarded.
+    static func startCueDue(_ state: State, at time: TimeInterval) -> Bool {
+        guard state.recording, let started = state.startedAt else { return false }
+        return time - started >= tapThreshold
+    }
+
+    /// The stop cue (Pop) is due only when the take's start cue (Tink) actually sounded, so a
+    /// take that never got its Tink, because the cue was cancelled first, stays silent at release.
+    static func stopCueDue(afterStartCue sounded: Bool) -> Bool {
+        sounded
+    }
+
     /// Records key bookkeeping without deciding anything.
     static func track(_ state: inout State, _ event: Event, at time: TimeInterval) {
         switch event {
