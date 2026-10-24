@@ -46,7 +46,10 @@ final class VoiceEnrollment: ObservableObject {
     var step: EnrollmentLogic.Step { state.step }
     var message: String? { state.message }
 
-    private var clips: [[Float]] = []
+    /// Accepted clips by prompt index, so a clip that does not match can be replaced in place.
+    private var clips: [Int: [Float]] = [:]
+    /// Bumped by `close()`. A scoring pass that started before a Cancel checks it and saves nothing.
+    private var session = 0
     private var engine: AVAudioEngine?
     /// Whether the open engine turned voice processing on, so teardown switches it off again.
     private var usesVoiceProcessing = false
@@ -76,7 +79,7 @@ final class VoiceEnrollment: ObservableObject {
     /// Ends the recording of the current prompt and checks its level. A quiet prompt repeats; an accepted one
     /// moves on; the third accepted prompt starts the scoring.
     func stopPrompt() {
-        guard case .recording = step, let buffer = take else { return }
+        guard case .recording(let index) = step, let buffer = take else { return }
         autoStop?.cancel()
         autoStop = nil
         teardownEngine()
@@ -84,48 +87,65 @@ final class VoiceEnrollment: ObservableObject {
         let samples = buffer.samples(from: 0, to: Self.recordSeconds)
         let clipsBefore = state.clips
         EnrollmentLogic.reduce(&state, .stop(accepted: EnrollmentLogic.clipAccepted(samples)))
-        if state.clips > clipsBefore { clips.append(samples) }
-        if case .computing = step { Task { await compute() } }
+        if state.clips > clipsBefore { clips[index] = samples }
+        if case .computing = step {
+            let token = session
+            Task { await compute(session: token) }
+        }
     }
 
-    /// Stops any recording and drops the enrolment in progress. Called when the sheet closes.
+    /// Stops any recording and drops the enrolment in progress. Called when the sheet closes, Cancel included.
     func close() {
         autoStop?.cancel()
         autoStop = nil
         teardownEngine()
         take = nil
-        clips = []
+        clips = [:]
+        session += 1
         EnrollmentLogic.reduce(&state, .close)
     }
 
-    /// Scores the three clips through the one path, checks they agree, and saves the centroid as the voiceprint.
-    private func compute() async {
+    /// Scores the clips through the one path, reads a clip again if it does not match the others, and saves the
+    /// centroid as the voiceprint. A pass that outlives its sheet (Cancel) saves nothing.
+    private func compute(session token: Int) async {
         let id = UUID()
         await FluidSpeakerEmbedder.shared.beginTake(id)
         var embeddings: [[Float]] = []
+        var failure: String?
         do {
-            for clip in clips {
+            for index in 0..<EnrollmentLogic.promptCount {
+                guard let clip = clips[index] else {
+                    failure = EnrollmentLogic.tryAgainMessage
+                    break
+                }
                 guard let embedding = try await FluidSpeakerEmbedder.shared.segmentEmbedding(clip, take: id) else {
-                    await FluidSpeakerEmbedder.shared.release(id)
-                    EnrollmentLogic.reduce(&state, .fail(EnrollmentLogic.tryAgainMessage))
-                    return
+                    failure = EnrollmentLogic.tryAgainMessage
+                    break
                 }
                 embeddings.append(embedding)
             }
         } catch {
-            await FluidSpeakerEmbedder.shared.release(id)
-            EnrollmentLogic.reduce(&state, .fail(EnrollmentLogic.modelUnavailableMessage))
-            return
+            failure = EnrollmentLogic.modelUnavailableMessage
         }
         await FluidSpeakerEmbedder.shared.release(id)
 
+        guard token == session else { return }
+        guard case .computing = state.step else { return }
+        if let failure {
+            EnrollmentLogic.reduce(&state, .fail(failure))
+            return
+        }
+        if let outlier = EnrollmentLogic.inconsistentClip(embeddings) {
+            EnrollmentLogic.reduce(&state, .scored(outlier: outlier))
+            return
+        }
         guard let voiceprint = EnrollmentLogic.assemble(embeddings) else {
             EnrollmentLogic.reduce(&state, .fail(EnrollmentLogic.tryAgainMessage))
             return
         }
         Defaults[.dictationVoiceprint] = voiceprint
         Defaults[.dictationVoiceEnrolledAt] = .now
-        clips = []
+        clips = [:]
         EnrollmentLogic.reduce(&state, .scored(outlier: nil))
     }
 
