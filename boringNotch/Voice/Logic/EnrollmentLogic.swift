@@ -85,10 +85,10 @@ enum EnrollmentLogic {
                 state.step = .done
                 return
             }
-            // The clip that does not match is dropped and read again. Each re-read counts against the same limit.
+            // The clip that does not match is dropped and read again. The cap is three re-reads: the fourth is refused.
             state.clips -= 1
             state.redos += 1
-            if state.redos >= maxQuietAttempts {
+            if state.redos > maxQuietAttempts {
                 state.step = .failed(tryAgainMessage)
                 state.message = nil
             } else {
