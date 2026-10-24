@@ -6,13 +6,45 @@ import XCTest
 final class DictationStripTests: XCTestCase {
     /// The compact footprint is the music live activity's: two 12 pt cells plus 20 pt.
     func testCompactFootprintIsTheMusicFootprint() {
-        XCTAssertEqual(DictationStrip.extraWidth(side: 12, showsMessage: false), 44)
+        XCTAssertEqual(DictationStrip.extraWidth(side: 12, showsMessage: false, showsMode: false), 44)
     }
 
     /// Only a failure or a model download adds one message cell.
     func testMessageCellAddsOneMessageWidth() {
         XCTAssertEqual(DictationStrip.extraWidth(side: 12, showsMessage: true), 194)
         XCTAssertEqual(DictationStrip.messageWidth, 150)
+    }
+
+    /// #17 U4: the mode pill is one more cell beside the bars, and it adds only its own width.
+    func testModePillAddsOneModePillWidth() {
+        XCTAssertEqual(
+            DictationStrip.extraWidth(side: 12, showsMessage: false, showsMode: true),
+            44 + DictationStrip.modePillWidth)
+        XCTAssertEqual(
+            DictationStrip.extraWidth(side: 12, showsMessage: false, showsMode: false), 44)
+        XCTAssertGreaterThan(DictationStrip.modePillWidth, 0)
+    }
+
+    /// #17 U4: a tap on the pill cycles Me → Them → All → Me, the order the plan gives.
+    func testModePillCyclesMeThemAll() {
+        XCTAssertEqual(DictationStrip.nextMode(after: .onlyMe), .everyoneButMe)
+        XCTAssertEqual(DictationStrip.nextMode(after: .everyoneButMe), .everyoneLabelled)
+        XCTAssertEqual(DictationStrip.nextMode(after: .everyoneLabelled), .onlyMe)
+    }
+
+    /// #17 U4: the pill reads Me / Them / All for the three modes.
+    func testModePillLabels() {
+        XCTAssertEqual(DictationStrip.modeLabel(.onlyMe), "Me")
+        XCTAssertEqual(DictationStrip.modeLabel(.everyoneButMe), "Them")
+        XCTAssertEqual(DictationStrip.modeLabel(.everyoneLabelled), "All")
+    }
+
+    /// #17 U4: the activity draws the pill from the shared mode key and writes the cycled value back.
+    func testModePillIsWiredToTheModeKey() throws {
+        let text = try source("boringNotch/Voice/VoiceDictationLiveActivity.swift")
+        XCTAssertTrue(text.contains("@Default(.dictationSpeakerMode)"), "the pill does not read the mode key")
+        XCTAssertTrue(text.contains("DictationStrip.nextMode(after:"), "the tap does not cycle through DictationStrip")
+        XCTAssertTrue(text.contains(".onTapGesture"), "the pill has no tap")
     }
 
     func testHeadlineStopsAtTheFirstPeriodOrColon() {
