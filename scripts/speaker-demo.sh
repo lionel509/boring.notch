@@ -12,11 +12,12 @@
 # Env: TAKE_SECONDS=15 (Pop to Tink), BUNDLE_ID=theboringteam.boringnotch
 # Per take or enrolment: helper pgrep before and 30 s after; helper footprint before, peak during, +5 s, +30 s;
 # app RSS before and +30 s; app and helper CPU seconds (ps cputime deltas, never %cpu) over Pop to Tink+2 s.
-# A take reads its TakeReport line from /usr/bin/log (category Dictation). Enrolment logs nothing, so it has no log gate.
+# A take reads its TakeReport line from /usr/bin/log (category Dictation). Enrolment reads its per-prompt
+# "take outcome=enrol-*" lines from the same category, read after the +30 s sample.
+# src= (the mic channel the take or prompt read): -1 unset, -2 downmix, N the channel index.
 # Gates, each fails loudly (stderr, exit 1): helper alive 30 s after; idle growth over 10 MB (helper footprint or
-# app RSS, +30 s vs before); CPU over 8% of one core; music paused at any poll (music scene only).
-# Mic channel: the take line carries tap= (channels) and vp= (voice processing) but not the picked source,
-# and enrolment logs nothing. Both are shown as they are; the gap is reported, not guessed.
+# app RSS, +30 s vs before); CPU over 8% of one core; music paused at any poll (music scene only);
+# NEEDS A: src=0 on the music take and on every enrolment prompt.
 # No stdin and no TTY: cues are afplay of system sounds, so this runs under `! scripts/speaker-demo.sh`.
 exec </dev/null
 set -euo pipefail
@@ -115,17 +116,20 @@ cpu_secs() {
     END { if (!found) print 0 }' || true
 }
 
-# One value from the take line: logfield "<line>" <key> prints the value after key=.
+# One value from a log line: logfield "<line>" <key> prints the value after key=.
 logfield() {
   echo "$1" | awk -v k="$2" '{ for (i = 1; i <= NF; i++) { n = index($i, "="); if (n && substr($i, 1, n - 1) == k) { print substr($i, n + 1); exit } } }'
 }
 
-# The TakeReport line logged since $1 (local time, "YYYY-MM-DD HH:MM:SS").
-take_line() {
+# Dictation log lines since $1 (local time, "YYYY-MM-DD HH:MM:SS") that carry a TakeReport outcome.
+dictation_lines() {
   /usr/bin/log show --start "$1" --style compact \
     --predicate 'subsystem == "theboringteam.boringnotch" AND category == "Dictation"' 2>/dev/null \
-    | grep 'take outcome' | tail -1 || true
+    | grep 'take outcome' || true
 }
+
+# The last take line since $1 that is a take, not an enrolment prompt.
+take_line() { dictation_lines "$1" | grep -v 'outcome=enrol-' | tail -1 || true; }
 
 # Samples the helper's footprint once a second into $1 as "<pid> <MB>" until killed.
 sample_during() {
@@ -183,13 +187,13 @@ echo "app pid $app_pid; helper before the first scene: ${helper_start:-none}"
 rows="$work/rows"; : >"$rows"
 fails_file="$work/fails"; : >"$fails_file"
 
-# One measured take or enrolment: cue, measure, read the take line (takes only), gate. Writes one row and any failures.
+# One measured take or enrolment: cue, measure, read the log (take line or prompt lines), gate. Writes one row and any failures.
 run_measured() {
   local n="$1" scene="$2"
   local helper0 helper1 alive_pid hpre hpeak="-" h5 h30 alive30 rss_pre rss30 cur_app
   local cpu_app0 cpu_app1 cpu_h0 cpu_h1 t0 t1 t2 target cpu_pct dapp dh
-  local line="" stamp player="" music_note="-" reasons="" result="" c
-  local applog="-" mic="-" level="-" spk="-" app_cpu="-"
+  local line="" enrol_all="" stamp player="" music_note="-" reasons="" result="" c
+  local applog="-" mic="-" src="-" level="-" spk="-" app_cpu="-"
 
   scene_config "$scene"
   if [[ "$PLAYER" == 1 ]]; then
@@ -197,7 +201,7 @@ run_measured() {
     if [[ -z "$player" ]]; then
       echo "=== take $n: $scene skipped, neither Spotify nor Music is running" >&2
       printf '%s\n' "take $n ($scene): neither Spotify nor Music is running" >>"$fails_file"
-      emit_row "$n" "$scene" - - - - - - no - - - - - - - "FAIL no player running" -
+      emit_row "$n" "$scene" - - - - - - - no - - - - - - - "FAIL no player running" -
       return 0
     fi
   fi
@@ -257,6 +261,8 @@ run_measured() {
       [[ -n "$line" ]] && break
       sleep 2
     done
+  else
+    enrol_all="$(dictation_lines "$stamp" | grep 'outcome=enrol-' || true)"
   fi
 
   dapp="$(awk -v a="$cpu_app1" -v b="$cpu_app0" 'BEGIN { printf "%.2f\n", a - b }')"
@@ -284,17 +290,36 @@ run_measured() {
     if [[ "$samples" -eq 0 ]]; then reasons="$reasons; no player poll landed"; fi
   fi
 
+  # NEEDS A: the mic channel. Music take: src=0. Enrolment: src=0 on every prompt line.
   if [[ -n "$line" ]]; then
     applog="$(logfield "$line" mode)"; applog="${applog:--}"
     level="$(logfield "$line" level)"; level="${level:--}"
     spk="$(logfield "$line" speakers)"; spk="${spk:--}"
     app_cpu="$(logfield "$line" cpu)"; app_cpu="${app_cpu:--}"
     mic="tap=$(logfield "$line" tap) vp=$(logfield "$line" vp)"
+    src="$(logfield "$line" src)"; src="${src:--}"
   fi
+  if [[ "$PLAYER" == 1 && "$src" != "0" ]]; then
+    reasons="$reasons; NEEDS A: music take src=$src, expected 0"
+  fi
+  if [[ "$KIND" == enrol ]]; then
+    src=""
+    while IFS= read -r l; do
+      [[ -n "$l" ]] || continue
+      src="${src:+$src,}$(logfield "$l" src)"
+    done <<<"$enrol_all"
+    if [[ -z "$src" ]]; then
+      src="none"
+      if [[ "$scene" == enrol ]]; then reasons="$reasons; NEEDS A: no enrolment prompt logged"; fi
+    elif [[ -n "$(printf '%s\n' "$src" | tr ',' '\n' | grep -v '^0$' || true)" ]]; then
+      reasons="$reasons; NEEDS A: enrolment prompt src=$src, expected 0 on every prompt"
+    fi
+  fi
+
   result="PASS"
   if [[ -n "$reasons" ]]; then result="FAIL${reasons}"; printf '%s\n' "$KIND $n ($scene):${reasons}" >>"$fails_file"; fi
 
-  emit_row "$n" "$scene" "$applog" "$mic" "$hpre" "$hpeak" "$h5" "$h30" "$alive30" "$rss_pre" "$rss30" \
+  emit_row "$n" "$scene" "$applog" "$mic" "$src" "$hpre" "$hpeak" "$h5" "$h30" "$alive30" "$rss_pre" "$rss30" \
     "$cpu_pct" "$app_cpu" "$level" "$spk" "$music_note" "$result" "$dapp"
   echo "  done: $scene $result"
 }
@@ -306,16 +331,15 @@ for scene in "${scenes[@]}"; do
 done
 
 echo ""
-echo "=== summary (#17 U5): mem in MB, cpu in % of one core over Pop to Tink+2 s"
-printf '%-3s %-12s %-15s %-17s %7s %7s %7s %7s %-9s %8s %8s %7s %7s %7s %4s %-10s %s\n' \
-  no scene mode mic h_pre h_peak h_+5s h_+30s alive+30 app_pre app_+30 cpu_ps cpu_app level spk music result
-while IFS=$'\t' read -r n scene applog mic hpre hpeak h5 h30 alive30 rss_pre rss30 cpu_pct app_cpu level spk music result dapp; do
-  printf '%-3s %-12s %-15s %-17s %7s %7s %7s %7s %-9s %8s %8s %7s %7s %7s %4s %-10s %s\n' \
-    "$n" "$scene" "$applog" "$mic" "$hpre" "$hpeak" "$h5" "$h30" "$alive30" "$rss_pre" "$rss30" \
+echo "=== summary (#17 U5): mem in MB, cpu in % of one core over Pop to Tink+2 s; src = mic channel (-1 unset, -2 downmix, N channel)"
+printf '%-3s %-12s %-15s %-17s %-7s %7s %7s %7s %7s %-9s %8s %8s %7s %7s %7s %4s %-10s %s\n' \
+  no scene mode mic src h_pre h_peak h_+5s h_+30s alive+30 app_pre app_+30 cpu_ps cpu_app level spk music result
+while IFS=$'\t' read -r n scene applog mic src hpre hpeak h5 h30 alive30 rss_pre rss30 cpu_pct app_cpu level spk music result dapp; do
+  printf '%-3s %-12s %-15s %-17s %-7s %7s %7s %7s %7s %-9s %8s %8s %7s %7s %7s %4s %-10s %s\n' \
+    "$n" "$scene" "$applog" "$mic" "$src" "$hpre" "$hpeak" "$h5" "$h30" "$alive30" "$rss_pre" "$rss30" \
     "$cpu_pct" "$app_cpu" "$level" "$spk" "$music" "$result"
 done <"$rows"
-echo "gates: helper alive at +30 s; idle growth > ${IDLE_LIMIT_MB} MB (helper footprint, app RSS); CPU > ${CPU_LIMIT_PCT}%; music never paused"
-echo "mic channel pick: not logged. The take line has tap= and vp= only; enrolment logs nothing. Gap, see the PR comment."
+echo "gates: helper alive at +30 s; idle growth > ${IDLE_LIMIT_MB} MB (helper footprint, app RSS); CPU > ${CPU_LIMIT_PCT}%; music never paused; NEEDS A: src=0 on the music take and every enrolment prompt"
 
 if [[ -s "$fails_file" ]]; then
   echo "" >&2
