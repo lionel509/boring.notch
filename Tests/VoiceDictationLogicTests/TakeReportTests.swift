@@ -73,11 +73,21 @@ final class TakeReportTests: XCTestCase {
         report.rssDeltaMB = 12
         report.voiceIsolation = true
         report.ducking = .mid
+        report.rssIdleMB = 4
         XCTAssertTrue(
-            report.line.hasSuffix("mode=everyoneLabelled speakers=2 cpu=4.5% rss=+12MB iso=on duck=mid"),
+            report.line.hasSuffix("mode=everyoneLabelled speakers=2 cpu=4.5% rss=+12MB iso=on duck=mid idle=+4"),
             report.line
         )
         report.rssDeltaMB = -3
         XCTAssertTrue(report.line.contains("rss=-3MB"), report.line)
+    }
+
+    /// #17 U2b: the voiced level of the take's first 8 s is on every line, unset as none.
+    func testLevelIsOnEveryLine() {
+        var report = TakeReport()
+        report.record(meter: MicLevelMeter())
+        XCTAssertTrue(report.line.split(separator: " ").contains("level=none"), report.line)
+        report.level = -26.04
+        XCTAssertTrue(report.line.split(separator: " ").contains("level=-26.0"), report.line)
     }
 }
