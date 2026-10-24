@@ -51,6 +51,27 @@ final class TakeReportTests: XCTestCase {
         XCTAssertTrue(words.contains("vp=1"), report.line)
     }
 
+    /// #17 U3 round 3: the mono channel the take reads is logged as a number, -1 unset.
+    func testMicChannelIsLogged() {
+        var report = TakeReport()
+        report.record(meter: MicLevelMeter())
+        XCTAssertTrue(report.line.split(separator: " ").contains("src=-1"), report.line)
+        report.micChannel = 1
+        XCTAssertTrue(report.line.split(separator: " ").contains("src=1"), report.line)
+    }
+
+    /// #17 U3 round 3: an enrolment prompt logs as a take line with its outcome, level and channel.
+    func testEnrolmentPromptIsLoggedAsATakeLine() {
+        var report = TakeReport()
+        report.outcome = .enrolQuiet
+        report.level = -41.2
+        report.micChannel = 0
+        let words = report.line.split(separator: " ").map(String.init)
+        XCTAssertTrue(words.contains("outcome=enrol-quiet"), report.line)
+        XCTAssertTrue(words.contains("level=-41.2"), report.line)
+        XCTAssertTrue(words.contains("src=0"), report.line)
+    }
+
     /// Speaker gate (#17 U1): the gate, the dropped count and the Voice Isolation mode are logged as numbers.
     func testSpeakerGateFieldsAreLogged() {
         var report = TakeReport()

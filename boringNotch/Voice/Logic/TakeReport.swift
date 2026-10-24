@@ -13,6 +13,9 @@ enum TakeOutcome: String {
     case noAudio
     case accessDenied
     case failed
+    /// #17 U3: one enrolment prompt, accepted or too quiet (`enrol-ok`, `enrol-quiet`).
+    case enrolAccepted = "enrol-ok"
+    case enrolQuiet = "enrol-quiet"
 }
 
 /// The numbers for one take, logged as one line. Every field is a number, a Bool or an
@@ -24,6 +27,8 @@ struct TakeReport {
     var granted = false
     var tapChannels = -1
     var tapSampleRate = -1
+    /// #17 U3 review: the mono channel the take reads (`src=`): a channel index, 0 for a single channel, -2 when averaged, -1 unset.
+    var micChannel = -1
     var bufferChannels = -1
     var bufferSampleRate = -1
     var buffers = -1

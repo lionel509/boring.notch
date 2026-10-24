@@ -45,7 +45,7 @@ final class LogPrivacyTests: XCTestCase {
     func testLineHasTheExactFormat() {
         XCTAssertEqual(
             Self.sampleReport().line,
-            "take outcome=pasted verdict=signal auth=3 granted=1 tap=1ch/48000Hz buf=1ch/48000Hz "
+            "take outcome=pasted verdict=signal auth=3 granted=1 tap=1ch/48000Hz buf=1ch/48000Hz src=-1 "
                 + "buffers=100 chunks=25 peak=0.1000 max_db=-23.0 floor_db=-50.0 voiced=20 "
                 + "config_changes=0 convert_failures=0 finals=2 partials=6 volatile_tail=0 "
                 + "hold_ms=1200 finalize_ms=80 ax_ms=5 mod_wait_ms=0 paste_ms=12 release_to_paste_ms=150 "

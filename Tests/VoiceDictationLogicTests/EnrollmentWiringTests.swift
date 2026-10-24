@@ -35,6 +35,19 @@ final class EnrollmentWiringTests: XCTestCase {
         XCTAssertFalse(enrollment.contains("channelZero"), "enrolment still records channel 0 unconditionally")
     }
 
+    // Round 3: the demo can see the channel and the level of every enrolment prompt.
+
+    func testEnrolmentLogsEachPromptThroughDictationLog() throws {
+        let enrollment = try source("boringNotch/Voice/VoiceEnrollment.swift")
+        XCTAssertTrue(enrollment.contains("DictationLog.take("), "enrolment does not log through DictationLog")
+        XCTAssertTrue(enrollment.contains("micChannel"), "enrolment does not report the picked channel")
+    }
+
+    func testTheTakeReportsItsPickedChannel() throws {
+        let session = try source("boringNotch/Voice/SpeechAnalyzerSession.swift")
+        XCTAssertTrue(session.contains("report.micChannel ="), "the take does not report the picked channel")
+    }
+
     // Finding 3: the tap is removed from the node it was installed on.
 
     func testEnrolmentRemovesItsTapFromTheTapNode() throws {
