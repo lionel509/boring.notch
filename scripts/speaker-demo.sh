@@ -15,8 +15,9 @@
 # A take reads its TakeReport line from /usr/bin/log (category Dictation). Enrolment reads its per-prompt
 # "take outcome=enrol-*" lines from the same category, read after the +30 s sample.
 # src= (the mic channel the take or prompt read): -1 unset, -2 downmix, N the channel index.
-# Gates, each fails loudly (stderr, exit 1): helper alive 30 s after; idle growth over 10 MB (helper footprint or
-# app RSS, +30 s vs before); CPU over 8% of one core; music paused at any poll (music scene only);
+# Gates, each fails loudly (stderr, exit 1): helper footprint at +30 s within 10 MB of its pre-take value (a helper
+# not running before the take must be gone 30 s after; the helper ships with the app, so it is normally running);
+# app RSS idle growth over 10 MB (+30 s vs before); CPU over 8% of one core; music paused at any poll (music scene only);
 # NEEDS A: src=0 on the music take and on every enrolment prompt.
 # No stdin and no TTY: cues are afplay of system sounds, so this runs under `! scripts/speaker-demo.sh`.
 exec </dev/null
@@ -270,10 +271,19 @@ run_measured() {
   else dh="$cpu_h1"; fi
   cpu_pct="$(awk -v a="$dapp" -v b="$dh" -v s="$(awk -v x="$t2" -v y="$t0" 'BEGIN { printf "%.3f\n", x - y }')" 'BEGIN { printf "%.1f\n", (a + b) / s * 100 }')"
 
+  # The helper ships with the app and is already running before a take, so its pid is printed before and after.
+  alive30="${helper0:-none}->${alive_pid:-none}"
+  echo "  helper pid before: ${helper0:-none}; at +30 s: ${alive_pid:-none}"
+
   # Gates.
-  if [[ "$alive30" != "no" ]]; then reasons="$reasons; helper alive 30 s after $KIND (pid ${alive_pid})"; fi
-  if [[ "$hpre" != "-" && "$h30" != "-" ]] && greater "$(awk -v a="$h30" -v b="$hpre" 'BEGIN { printf "%.1f\n", a - b }')" "$IDLE_LIMIT_MB"; then
-    reasons="$reasons; helper idle growth over ${IDLE_LIMIT_MB} MB"
+  if [[ -z "$helper0" ]]; then
+    # Not running before the take: it must be gone 30 s after.
+    if [[ -n "$alive_pid" ]]; then reasons="$reasons; helper started by $KIND and still alive 30 s after (pid ${alive_pid})"; fi
+  elif [[ "$hpre" != "-" && "$h30" != "-" ]]; then
+    # Running before the take: its footprint at +30 s must be within IDLE_LIMIT_MB of the pre-take value.
+    if greater "$(awk -v a="$h30" -v b="$hpre" 'BEGIN { d = a - b; if (d < 0) d = -d; printf "%.1f\n", d }')" "$IDLE_LIMIT_MB"; then
+      reasons="$reasons; helper footprint moved more than ${IDLE_LIMIT_MB} MB from its pre-take value (${hpre} -> ${h30} MB)"
+    fi
   fi
   if [[ "$rss_pre" != "-" && "$rss30" != "-" ]] && greater "$(awk -v a="$rss30" -v b="$rss_pre" 'BEGIN { printf "%.1f\n", a - b }')" "$IDLE_LIMIT_MB"; then
     reasons="$reasons; app RSS idle growth over ${IDLE_LIMIT_MB} MB"
@@ -339,7 +349,7 @@ while IFS=$'\t' read -r n scene applog mic src hpre hpeak h5 h30 alive30 rss_pre
     "$n" "$scene" "$applog" "$mic" "$src" "$hpre" "$hpeak" "$h5" "$h30" "$alive30" "$rss_pre" "$rss30" \
     "$cpu_pct" "$app_cpu" "$level" "$spk" "$music" "$result"
 done <"$rows"
-echo "gates: helper alive at +30 s; idle growth > ${IDLE_LIMIT_MB} MB (helper footprint, app RSS); CPU > ${CPU_LIMIT_PCT}%; music never paused; NEEDS A: src=0 on the music take and every enrolment prompt"
+echo "gates: helper footprint at +30 s within ${IDLE_LIMIT_MB} MB of pre-take (or gone if not running before); app RSS idle growth > ${IDLE_LIMIT_MB} MB; CPU > ${CPU_LIMIT_PCT}%; music never paused; NEEDS A: src=0 on the music take and every enrolment prompt"
 
 if [[ -s "$fails_file" ]]; then
   echo "" >&2
