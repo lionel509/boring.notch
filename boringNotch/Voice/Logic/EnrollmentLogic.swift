@@ -49,20 +49,56 @@ enum EnrollmentLogic {
 
     /// Advances `state` by one event. Events that do not apply to the current step change nothing.
     static func reduce(_ state: inout State, _ event: Event) {
+        switch (state.step, event) {
+        case (.prompt(let index), .start):
+            state.step = .recording(index)
+            state.message = nil
+        case (.recording(let index), .stop(let level)):
+            if levelAccepted(level) {
+                state.clips += 1
+                state.quietAttempts = 0
+                state.message = nil
+                state.step = index + 1 < promptCount ? .prompt(index + 1) : .computing
+            } else {
+                state.quietAttempts += 1
+                if state.quietAttempts >= maxQuietAttempts {
+                    state.step = .failed(tryAgainMessage)
+                    state.message = nil
+                } else {
+                    state.step = .prompt(index)
+                    state.message = closerMessage
+                }
+            }
+        case (.computing, .scored(let same)):
+            state.step = same ? .done : .failed(tryAgainMessage)
+        case (.prompt, .fail(let reason)), (.recording, .fail(let reason)), (.computing, .fail(let reason)):
+            state.step = .failed(reason)
+            state.message = nil
+        case (_, .close):
+            state = State()
+        default:
+            break
+        }
     }
 
     /// True when a prompt's voiced level is loud enough to keep.
     static func levelAccepted(_ levelDBFS: Float) -> Bool {
-        false
+        levelDBFS >= minLevelDBFS
     }
 
     /// True when every embedding is at least `minAgreement` close to the centroid of the others.
     static func agrees(_ embeddings: [[Float]]) -> Bool {
-        false
+        guard embeddings.count >= 2 else { return false }
+        for index in embeddings.indices {
+            let others = embeddings.indices.filter { $0 != index }.map { embeddings[$0] }
+            if SpeakerGate.cosine(embeddings[index], SpeakerGate.centroid(others)) < minAgreement { return false }
+        }
+        return true
     }
 
-    /// The voiceprint: the centroid of the embeddings as Doubles, or nil when they do not agree.
-    static func voiceprint(_ embeddings: [[Float]]) -> [Double]? {
-        nil
+    /// The voiceprint, assembled: the centroid of the embeddings as Doubles, or nil when they do not agree.
+    static func assemble(_ embeddings: [[Float]]) -> [Double]? {
+        guard agrees(embeddings) else { return nil }
+        return SpeakerGate.centroid(embeddings).map { Double($0) }
     }
 }

@@ -120,7 +120,7 @@ final class EnrollmentLogicTests: XCTestCase {
     }
 
     func testVoiceprintIsTheCentroidOfAgreeingEmbeddings() throws {
-        let print = try XCTUnwrap(EnrollmentLogic.voiceprint([[1, 0, 0], [1, 0, 0], [1, 0, 0]]))
+        let print = try XCTUnwrap(EnrollmentLogic.assemble([[1, 0, 0], [1, 0, 0], [1, 0, 0]]))
         XCTAssertEqual(print.count, 3)
         XCTAssertEqual(print[0], 1, accuracy: 1e-6)
         XCTAssertEqual(print[1], 0, accuracy: 1e-6)
@@ -128,6 +128,6 @@ final class EnrollmentLogicTests: XCTestCase {
     }
 
     func testVoiceprintIsNilWhenTheClipsDisagree() {
-        XCTAssertNil(EnrollmentLogic.voiceprint([[1, 0, 0], [1, 0, 0], [0, 0, 1]]))
+        XCTAssertNil(EnrollmentLogic.assemble([[1, 0, 0], [1, 0, 0], [0, 0, 1]]))
     }
 }

@@ -29,14 +29,6 @@ enum VoiceprintStore {
 @available(macOS 26.0, *)
 @MainActor
 final class VoiceEnrollment: ObservableObject {
-    enum Step: Equatable {
-        case prompt(Int)
-        case recording(Int)
-        case computing
-        case done
-        case failed(String)
-    }
-
     /// The three prompts, as in the spike round (#18), so the enrolment reads what the spike measured.
     static let prompts = [
         "The quick brown fox jumps over the lazy dog while the notch listens to every word I say.",
@@ -45,16 +37,14 @@ final class VoiceEnrollment: ObservableObject {
     ]
     /// Each prompt records at most this long; the take's span for an enrolment prompt.
     static let recordSeconds: Double = 8
-    /// A prompt quieter than this (voiced dBFS, `SpeakerGate.levelDBFS`) is asked again.
-    static let minLevelDBFS: Float = -35
-    /// Each prompt must agree with the centroid of the other two at least this much, or the enrolment fails.
-    static let minAgreement = 0.25
 
-    @Published private(set) var step: Step = .prompt(0)
-    /// Set while a prompt is too quiet: "Closer to the mic, please". Cleared on the next accepted prompt.
-    @Published private(set) var message: String?
+    /// The flow itself (steps, level gate, retry limit) lives in `EnrollmentLogic`; this class only drives the mic.
+    @Published private(set) var state = EnrollmentLogic.State()
     /// The live mic level (0...1) for the bars while a prompt records.
     @Published private(set) var level: Float = 0
+
+    var step: EnrollmentLogic.Step { state.step }
+    var message: String? { state.message }
 
     private var clips: [[Float]] = []
     private var engine: AVAudioEngine?
@@ -66,17 +56,16 @@ final class VoiceEnrollment: ObservableObject {
 
     /// Starts recording the current prompt. It stops by itself after `recordSeconds`, or early through `stopPrompt()`.
     func startPrompt() {
-        guard case .prompt(let index) = step else { return }
-        message = nil
+        guard case .prompt = step else { return }
         let buffer = TakeAudioBuffer()
         do {
             try startEngine(into: buffer)
         } catch {
-            step = .failed("No microphone is available. Check the input in System Settings.")
+            EnrollmentLogic.reduce(&state, .fail("No microphone is available. Check the input in System Settings."))
             return
         }
         take = buffer
-        step = .recording(index)
+        EnrollmentLogic.reduce(&state, .start)
         autoStop = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(Self.recordSeconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
@@ -87,24 +76,16 @@ final class VoiceEnrollment: ObservableObject {
     /// Ends the recording of the current prompt and checks its level. A quiet prompt repeats; an accepted one
     /// moves on; the third accepted prompt starts the scoring.
     func stopPrompt() {
-        guard case .recording(let index) = step, let buffer = take else { return }
+        guard case .recording = step, let buffer = take else { return }
         autoStop?.cancel()
         autoStop = nil
         teardownEngine()
         take = nil
         let samples = buffer.samples(from: 0, to: Self.recordSeconds)
-        guard SpeakerGate.levelDBFS(samples) >= Self.minLevelDBFS else {
-            message = "Closer to the mic, please"
-            step = .prompt(index)
-            return
-        }
-        clips.append(samples)
-        if index + 1 < Self.prompts.count {
-            step = .prompt(index + 1)
-        } else {
-            step = .computing
-            Task { await compute() }
-        }
+        let clipsBefore = state.clips
+        EnrollmentLogic.reduce(&state, .stop(levelDBFS: SpeakerGate.levelDBFS(samples)))
+        if state.clips > clipsBefore { clips.append(samples) }
+        if case .computing = step { Task { await compute() } }
     }
 
     /// Stops any recording and drops the enrolment in progress. Called when the sheet closes.
@@ -114,8 +95,7 @@ final class VoiceEnrollment: ObservableObject {
         teardownEngine()
         take = nil
         clips = []
-        step = .prompt(0)
-        message = nil
+        EnrollmentLogic.reduce(&state, .close)
     }
 
     /// Scores the three clips through the one path, checks they agree, and saves the centroid as the voiceprint.
@@ -126,39 +106,27 @@ final class VoiceEnrollment: ObservableObject {
         do {
             for clip in clips {
                 guard let embedding = try await FluidSpeakerEmbedder.shared.segmentEmbedding(clip, take: id) else {
-                    step = .failed("Try again somewhere quieter")
                     await FluidSpeakerEmbedder.shared.release(id)
+                    EnrollmentLogic.reduce(&state, .scored(false))
                     return
                 }
                 embeddings.append(embedding)
             }
         } catch {
-            step = .failed("The speaker model is not available. Try again in a moment.")
             await FluidSpeakerEmbedder.shared.release(id)
+            EnrollmentLogic.reduce(&state, .fail(EnrollmentLogic.modelUnavailableMessage))
             return
         }
         await FluidSpeakerEmbedder.shared.release(id)
 
-        guard Self.agrees(embeddings) else {
-            step = .failed("Try again somewhere quieter")
+        guard let voiceprint = EnrollmentLogic.assemble(embeddings) else {
+            EnrollmentLogic.reduce(&state, .scored(false))
             return
         }
-        let voiceprint = SpeakerGate.centroid(embeddings).map { Double($0) }
         Defaults[.dictationVoiceprint] = voiceprint
         Defaults[.dictationVoiceEnrolledAt] = .now
         clips = []
-        step = .done
-    }
-
-    /// Every embedding is at least `minAgreement` close to the centroid of the others.
-    static func agrees(_ embeddings: [[Float]]) -> Bool {
-        guard embeddings.count >= 2 else { return false }
-        for index in embeddings.indices {
-            let others = embeddings.indices.filter { $0 != index }.map { embeddings[$0] }
-            let centre = SpeakerGate.centroid(others)
-            if SpeakerGate.cosine(embeddings[index], centre) < minAgreement { return false }
-        }
-        return true
+        EnrollmentLogic.reduce(&state, .scored(true))
     }
 
     /// The same graph a take builds: voice processing first (its ducking stays at `.mid`, music is never paused),
