@@ -51,6 +51,8 @@ final class VoiceEnrollment: ObservableObject {
     /// Bumped by `close()`. A scoring pass that started before a Cancel checks it and saves nothing.
     private var session = 0
     private var engine: AVAudioEngine?
+    /// The enrolment tap's mono source, kept for the prompt log (`src=`, #17 U3 round 3).
+    private var micSource: ConverterBox?
     /// The node the tap was installed on: the Voice Isolation effect when isolation is on, else the input.
     private var tapNode: AVAudioNode?
     /// Whether the open engine turned voice processing on, so teardown switches it off again.
@@ -84,16 +86,30 @@ final class VoiceEnrollment: ObservableObject {
         guard case .recording(let index) = step, let buffer = take else { return }
         autoStop?.cancel()
         autoStop = nil
+        // Read before teardown, which clears it.
+        let voiceProcessing = usesVoiceProcessing
         teardownEngine()
         take = nil
         let samples = buffer.samples(from: 0, to: Self.recordSeconds)
         let clipsBefore = state.clips
-        EnrollmentLogic.reduce(&state, .stop(accepted: EnrollmentLogic.clipAccepted(samples)))
+        let accepted = EnrollmentLogic.clipAccepted(samples)
+        EnrollmentLogic.reduce(&state, .stop(accepted: accepted))
+        logPrompt(accepted: accepted, level: SpeakerGate.levelDBFS(samples), voiceProcessing: voiceProcessing)
         if state.clips > clipsBefore { clips[index] = samples }
         if case .computing = step {
             let token = session
             Task { await compute(session: token) }
         }
+    }
+
+    /// One line per prompt through the one allowed log path: outcome, level and the channel the prompt read.
+    private func logPrompt(accepted: Bool, level: Float, voiceProcessing: Bool) {
+        var report = TakeReport()
+        report.outcome = accepted ? .enrolAccepted : .enrolQuiet
+        report.level = level
+        report.micChannel = micChannelCode(micSource?.source)
+        report.voiceProcessing = voiceProcessing
+        DictationLog.take(report)
     }
 
     /// Stops any recording and drops the enrolment in progress. Called when the sheet closes, Cancel included.
@@ -179,6 +195,7 @@ final class VoiceEnrollment: ObservableObject {
         let usesVP = voiceProcessing
         // The take's own mono choice (takeSource, takeMonoBuffer), so enrolment records the same channel a take does.
         let box = ConverterBox()
+        micSource = box
         graph.tapNode.installTap(onBus: 0, bufferSize: 4096, format: format) { pcm, _ in
             meter.ingest(pcm)
             buffer.ingest(takeMonoBuffer(pcm, source: takeSource(for: pcm, voiceProcessing: usesVP, box: box)))

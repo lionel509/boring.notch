@@ -116,6 +116,7 @@ struct TakeReport {
             "granted=\(granted ? 1 : 0)",
             "tap=\(tapChannels)ch/\(tapSampleRate)Hz",
             "buf=\(bufferChannels)ch/\(bufferSampleRate)Hz",
+            "src=\(micChannel)",
             "buffers=\(buffers)",
             "chunks=\(chunks)",
             "peak=\(String(format: "%.4f", peak))",

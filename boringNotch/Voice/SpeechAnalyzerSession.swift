@@ -62,6 +62,17 @@ func takeSource(for buffer: AVAudioPCMBuffer, voiceProcessing: Bool, box: Conver
     return source
 }
 
+/// The report's `src=` code for a mono source: the channel index, 0 for a single channel, -2 for an average
+/// (downmix), -1 when no buffer has set one.
+func micChannelCode(_ source: MicChannelPick.Source?) -> Int {
+    switch source {
+    case .channel(let index)?: return index
+    case .passthrough?: return 0
+    case .downmix?: return -2
+    case nil: return -1
+    }
+}
+
 /// RMS of each channel of a float buffer, or nil when the buffer has no float samples.
 private func channelRMS(_ buffer: AVAudioPCMBuffer) -> [Float]? {
     guard buffer.format.commonFormat == .pcmFormatFloat32, let data = buffer.floatChannelData, buffer.frameLength > 0 else {
@@ -137,6 +148,8 @@ final class SpeechAnalyzerSession: VoiceSession {
     private let audio = TakeAudioBuffer()
     /// Uptime when the engine started and when the first partial arrived, for the take report.
     private var engineStartedAt: TimeInterval?
+    /// The take's mono source, kept for the report (`src=`, #17 U3 round 3).
+    private var micSource: ConverterBox?
     private var firstPartialAt: TimeInterval?
     /// True when the take runs with Apple voice processing (echo cancellation, noise suppression, AGC).
     private(set) var voiceProcessing = false
@@ -236,6 +249,7 @@ final class SpeechAnalyzerSession: VoiceSession {
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         let tap = levelTap
         let converterBox = ConverterBox()
+        micSource = converterBox
         let takeAudio = audio
         let usesVoiceProcessing = voiceProcessing
         // The format comes from the first buffer, not from the input node at start. CoreAudio can
@@ -454,6 +468,7 @@ final class SpeechAnalyzerSession: VoiceSession {
         report.partials = partialCount
         report.finalizeMs = finalizeMs
         report.voiceProcessing = voiceProcessing
+        report.micChannel = micChannelCode(micSource?.source)
         report.volatileTail = !finalized && transcript.hasVolatile
         if let engineStartedAt, let firstPartialAt {
             report.firstPartialMs = Int((firstPartialAt - engineStartedAt) * 1000)
