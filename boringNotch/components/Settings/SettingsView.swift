@@ -1782,6 +1782,15 @@ struct Shortcuts: View {
     @Default(.dictationMicSilent) var dictationMicSilent
     @Default(.dictationDictionary) var dictationDictionary
     @Default(.dictationLearnedWords) var learnedWords
+    @Default(.dictationSpeakerMode) var speakerMode
+    @Default(.dictationVoiceEnrolledAt) var voiceEnrolledAt
+    @State private var learningVoice = false
+
+    /// The voice row's status. Until enrolment every voice is transcribed (#17 U3).
+    private var voiceStatus: String {
+        guard let voiceEnrolledAt else { return "Not enrolled: every voice is transcribed" }
+        return "Learned \(voiceEnrolledAt.formatted(date: .abbreviated, time: .omitted))"
+    }
 
     var body: some View {
         Form {
@@ -1858,9 +1867,27 @@ struct Shortcuts: View {
                 Defaults.Toggle(key: .dictationVoiceProcessing) {
                     Text("Voice isolation")
                 }
-                .help("Filters out music from your speakers and background noise while you dictate.")
-                Defaults.Toggle(key: .dictationPausesMedia) {
-                    Text("Pause music while dictating")
+                .help("Apple voice processing plus sound isolation. Your music keeps playing, turned down while you dictate.")
+                Picker("Keep", selection: $speakerMode) {
+                    Text("Only me").tag(SpeakerMode.onlyMe)
+                    Text("Everyone but me").tag(SpeakerMode.everyoneButMe)
+                    Text("Everyone, labelled").tag(SpeakerMode.everyoneLabelled)
+                }
+                HStack {
+                    Text("Your voice")
+                    Spacer()
+                    Text(voiceStatus)
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                    if #available(macOS 26.0, *) {
+                        Button("Learn my voice") { learningVoice = true }
+                            .sheet(isPresented: $learningVoice) {
+                                VoiceEnrollmentView()
+                            }
+                    }
+                    if voiceEnrolledAt != nil {
+                        Button("Forget") { VoiceprintStore.forget() }
+                    }
                 }
                 Text("Models: \(CloudConfig.sttModels[0]) · \(CloudConfig.cleanupModels[0])")
                     .foregroundStyle(.secondary)

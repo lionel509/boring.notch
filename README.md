@@ -185,6 +185,7 @@ We would like to express our gratitude to the authors and maintainers of the ope
 ## Notable Projects
 - **[MediaRemoteAdapter](https://github.com/ungive/mediaremote-adapter)** –  An open-source project that allowed us to use the Now Playing source in macOS 15.4+
 - **[NotchDrop](https://github.com/Lakr233/NotchDrop)** – An open-source project that has been instrumental in developing the first version of the "Shelf" feature in Boring Notch.
+- **[FluidAudio](https://github.com/FluidInference/FluidAudio)** – Runs the speaker embedding model `pyannote/wespeaker-voxceleb-resnet34-LM` (CC-BY-4.0) that tells your voice apart when dictating.
 
 For a full list of licenses and attributions, please see the [Third-Party Licenses](./THIRD_PARTY_LICENSES.md) file.
 
