@@ -51,6 +51,8 @@ final class VoiceEnrollment: ObservableObject {
     /// Bumped by `close()`. A scoring pass that started before a Cancel checks it and saves nothing.
     private var session = 0
     private var engine: AVAudioEngine?
+    /// The node the tap was installed on: the Voice Isolation effect when isolation is on, else the input.
+    private var tapNode: AVAudioNode?
     /// Whether the open engine turned voice processing on, so teardown switches it off again.
     private var usesVoiceProcessing = false
     private var take: TakeAudioBuffer?
@@ -175,9 +177,11 @@ final class VoiceEnrollment: ObservableObject {
         let meter = MicLevelTap()
         let format: AVAudioFormat? = graph.isolation ? graph.tapNode.outputFormat(forBus: 0) : nil
         let usesVP = voiceProcessing
+        // The take's own mono choice (takeSource, takeMonoBuffer), so enrolment records the same channel a take does.
+        let box = ConverterBox()
         graph.tapNode.installTap(onBus: 0, bufferSize: 4096, format: format) { pcm, _ in
             meter.ingest(pcm)
-            buffer.ingest(Self.channelZero(pcm, voiceProcessing: usesVP))
+            buffer.ingest(takeMonoBuffer(pcm, source: takeSource(for: pcm, voiceProcessing: usesVP, box: box)))
         }
         engine.prepare()
         do {
@@ -188,6 +192,8 @@ final class VoiceEnrollment: ObservableObject {
             throw error
         }
         self.engine = engine
+        // The tap sits on the effect node when isolation is on, so teardown removes it from there (#17 U3 review).
+        self.tapNode = graph.tapNode
         usesVoiceProcessing = voiceProcessing
         meterTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -203,25 +209,13 @@ final class VoiceEnrollment: ObservableObject {
         meterTask = nil
         level = 0
         guard let engine else { return }
-        engine.inputNode.removeTap(onBus: 0)
+        tapNode?.removeTap(onBus: 0)
+        tapNode = nil
         engine.stop()
         // Voice processing is switched off on every exit, as in a take (#17 U2b).
         if usesVoiceProcessing { try? engine.inputNode.setVoiceProcessingEnabled(false) }
         usesVoiceProcessing = false
         self.engine = nil
-    }
-
-    /// With voice processing the input has several channels and channel 0 is the processed voice (`MicChannelPick`).
-    /// Anything else passes through unchanged for `TakeAudioBuffer` to convert.
-    private static func channelZero(_ buffer: AVAudioPCMBuffer, voiceProcessing: Bool) -> AVAudioPCMBuffer {
-        guard MicChannelPick.monoSource(channelCount: Int(buffer.format.channelCount), voiceProcessing: voiceProcessing) == .channel(0),
-              let source = buffer.floatChannelData,
-              let format = AVAudioFormat(standardFormatWithSampleRate: buffer.format.sampleRate, channels: 1),
-              let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameLength),
-              let target = out.floatChannelData else { return buffer }
-        out.frameLength = buffer.frameLength
-        target[0].update(from: source[0], count: Int(buffer.frameLength))
-        return out
     }
 }
 

@@ -11,6 +11,6 @@ import Foundation
 enum PausesMediaMigration {
     /// True when launch should clear `dictationPausesMedia`: only the first launch that has not done it yet.
     static func shouldReset(alreadyDone: Bool) -> Bool {
-        false
+        !alreadyDone
     }
 }

@@ -390,6 +390,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DictationManager.shared.start()
         }
 
+        // Dictation no longer pauses music, and the Settings toggle is gone. A `true` stored before that would
+        // still pause on every take, with no way to switch it off, so launch clears it once (#17 U3 review).
+        if PausesMediaMigration.shouldReset(alreadyDone: Defaults[.dictationPausesMediaReset]) {
+            Defaults.reset(.dictationPausesMedia)
+            Defaults[.dictationPausesMediaReset] = true
+        }
+
         // Outside that check on purpose. Both of these were briefly nested inside it, which
         // silently made two features depend on the dictation indicator being switched on --
         // and it is off by default, so neither ever ran.

@@ -152,6 +152,8 @@ extension Defaults.Keys {
     static let dictationVoiceProcessing = Key<Bool>("dictationVoiceProcessing", default: true)
     /// Pause music from this Mac while a take is recording, and resume it when the mic is released.
     static let dictationPausesMedia = Key<Bool>("dictationPausesMedia", default: false)
+    /// Set once launch has cleared a stored `dictationPausesMedia`, so the reset runs once (#17 U3 review).
+    static let dictationPausesMediaReset = Key<Bool>("dictationPausesMediaReset", default: false)
     /// Which voices a take keeps: only Lionel, everyone but Lionel, or everyone labelled (#17). Read at key release.
     static let dictationSpeakerMode = Key<SpeakerMode>("dictationSpeakerMode", default: .onlyMe)
     /// Lionel's voiceprint: the mean embedding of his enrolment prompts. Stays on this Mac; read only by the take and

@@ -25,7 +25,7 @@ enum VoiceError: LocalizedError {
 
 /// The tap's converter, built from the first buffer's real format, and the take's mono source (#17 U2b).
 /// Only the audio thread uses it.
-private final class ConverterBox: @unchecked Sendable {
+final class ConverterBox: @unchecked Sendable {
     var converter: AVAudioConverter?
     /// Chosen by the first buffer and kept for the take.
     var source: MicChannelPick.Source?
@@ -34,7 +34,7 @@ private final class ConverterBox: @unchecked Sendable {
 /// The buffer the take and the converter read. `.channel(n)` copies that channel's float samples into a
 /// mono buffer; anything else (or a layout this copy does not handle) returns the buffer unchanged.
 /// Runs on the audio thread.
-private func takeMonoBuffer(_ buffer: AVAudioPCMBuffer, source: MicChannelPick.Source) -> AVAudioPCMBuffer {
+func takeMonoBuffer(_ buffer: AVAudioPCMBuffer, source: MicChannelPick.Source) -> AVAudioPCMBuffer {
     guard case .channel(let index) = source,
           index < Int(buffer.format.channelCount),
           buffer.format.commonFormat == .pcmFormatFloat32,
@@ -52,7 +52,7 @@ private func takeMonoBuffer(_ buffer: AVAudioPCMBuffer, source: MicChannelPick.S
 /// The take's mono source for one tap buffer (#17 U2b). The first buffer decides for the whole take: with voice
 /// processing that is channel 0, unless channel 0 sits more than 20 dB below the loudest channel. Runs on the
 /// audio thread.
-private func takeSource(for buffer: AVAudioPCMBuffer, voiceProcessing: Bool, box: ConverterBox) -> MicChannelPick.Source {
+func takeSource(for buffer: AVAudioPCMBuffer, voiceProcessing: Bool, box: ConverterBox) -> MicChannelPick.Source {
     if let source = box.source { return source }
     var source = MicChannelPick.monoSource(channelCount: Int(buffer.format.channelCount), voiceProcessing: voiceProcessing)
     if source == .channel(0), let rms = channelRMS(buffer), MicChannelPick.needsLoudest(rms: rms) {
