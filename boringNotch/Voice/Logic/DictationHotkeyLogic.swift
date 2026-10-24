@@ -54,6 +54,12 @@ enum DictationHotkeyLogic {
         return time - started >= tapThreshold
     }
 
+    /// The stop cue (Pop) is due only when the take's start cue (Tink) actually sounded, so a
+    /// take that never got its Tink, because the cue was cancelled first, stays silent at release.
+    static func stopCueDue(afterStartCue sounded: Bool) -> Bool {
+        sounded
+    }
+
     /// Records key bookkeeping without deciding anything.
     static func track(_ state: inout State, _ event: Event, at time: TimeInterval) {
         switch event {

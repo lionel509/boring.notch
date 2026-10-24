@@ -252,9 +252,10 @@ final class DictationHotkeyLogicTests: XCTestCase {
         var sounded = false
         let down = FnKeyLogic.classify(&fn, .flags(keyCode: FnKeyLogic.fnKeyCode, fn: true, otherModifiers: false), at: 0)
         if let event = down.event { _ = Logic.reduce(&s, event, at: 0) }
-        if Logic.startCueDue(s, at: Logic.tapThreshold) { sounded = true }
         let up = FnKeyLogic.classify(&fn, .flags(keyCode: FnKeyLogic.fnKeyCode, fn: false, otherModifiers: false), at: 0.1)
         if let event = up.event { _ = Logic.reduce(&s, event, at: 0.1) }
+        // The cue timer fires at tapThreshold, after the release has been reduced.
+        if Logic.startCueDue(s, at: Logic.tapThreshold) { sounded = true }
         XCTAssertFalse(sounded)
         XCTAssertFalse(Logic.stopCueDue(afterStartCue: sounded))
     }

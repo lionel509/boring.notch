@@ -65,6 +65,8 @@ final class VoiceDictationManager: ObservableObject {
     private static let startGrace: Double = 10
     /// Plays the start cue once the fn hold is confirmed (`DictationHotkeyLogic.startCueDue`).
     private var startCueTask: Task<Void, Never>?
+    /// Whether this take's start cue sounded. The stop cue (Pop) plays only after one did.
+    private var startCueSounded = false
     /// Owns the pending clipboard restore across overlapping takes.
     private var clipboard = ClipboardKeeper()
     private var clipboardRestoreTask: Task<Void, Never>?
@@ -136,10 +138,12 @@ final class VoiceDictationManager: ObservableObject {
             }
             // The cue waits for the hold to be confirmed, so a quick fn tap (the Globe key's own job) stays silent.
             startCueTask?.cancel()
+            startCueSounded = false
             startCueTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(DictationHotkeyLogic.tapThreshold))
                 guard !Task.isCancelled, let self, DictationHotkeyLogic.startCueDue(self.hotkey, at: self.now) else { return }
                 DictationSounds.playStart()
+                self.startCueSounded = true
             }
             // A take still open here was superseded before it ended. Log it so every take has one line.
             endTake(.discarded)
@@ -195,7 +199,7 @@ final class VoiceDictationManager: ObservableObject {
             Task { await begin(take) }
         case .stop:
             startCueTask?.cancel()
-            DictationSounds.playStop()
+            if DictationHotkeyLogic.stopCueDue(afterStartCue: startCueSounded) { DictationSounds.playStop() }
             releaseAt = now
             if let started = takeStartedAt {
                 report.holdMs = Int((now - started) * 1000)
