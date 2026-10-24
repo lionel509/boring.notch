@@ -1,17 +1,22 @@
 #!/bin/bash
 # Speaker-ID demo and cost gate for dictation (#17 U5). Lionel speaks; this script cues, measures and gates.
 # Usage: scripts/speaker-demo.sh [scene ...]        (default: music talker labelled)
-#   music       Apple Music at full volume; mode onlyMe
-#   talker      talker video at a clearly lower level than his voice (+10 dB case); mode onlyMe
-#   talker-0db  same talker at his level; known limit, run once; mode onlyMe
-#   lecture     talker as the lecturer, he whispers a side remark; mode everyoneButMe
-#   labelled    talker as the lecturer, he whispers; mode everyoneLabelled
+#   music         Spotify (Music.app if Spotify is not running) at full volume; mode onlyMe. The player is
+#                 polled every 0.5 s from Pop to Tink+2 s; the scene fails if it ever reads paused.
+#   talker        talker video at a clearly lower level than his voice (+10 dB case); mode onlyMe
+#   talker-0db    same talker at his level; known limit, run once; mode onlyMe
+#   lecture       talker as the lecturer, he whispers a side remark; mode everyoneButMe
+#   labelled      talker as the lecturer, he whispers; mode everyoneLabelled
+#   enrol         Settings -> Learn voice, run to completion
+#   enrol-cancel  Settings -> Learn voice, cancelled during "Learning your voice..."
 # Env: TAKE_SECONDS=15 (Pop to Tink), BUNDLE_ID=theboringteam.boringnotch
-# Per take: helper (BoringNotchXPCHelper) pgrep before and 30 s after; helper footprint before, peak during,
-# +5 s and +30 s; app RSS before and +30 s; app and helper CPU seconds (ps cputime deltas, never %cpu)
-# over Pop to Tink+2 s, as % of one core. The take line comes from /usr/bin/log (category Dictation).
-# Gates, each fails loudly (stderr, exit 1): helper alive 30 s after a take; idle growth over 10 MB
-# (helper footprint or app RSS, +30 s vs before); CPU over 8% of one core.
+# Per take or enrolment: helper pgrep before and 30 s after; helper footprint before, peak during, +5 s, +30 s;
+# app RSS before and +30 s; app and helper CPU seconds (ps cputime deltas, never %cpu) over Pop to Tink+2 s.
+# A take reads its TakeReport line from /usr/bin/log (category Dictation). Enrolment logs nothing, so it has no log gate.
+# Gates, each fails loudly (stderr, exit 1): helper alive 30 s after; idle growth over 10 MB (helper footprint or
+# app RSS, +30 s vs before); CPU over 8% of one core; music paused at any poll (music scene only).
+# Mic channel: the take line carries tap= (channels) and vp= (voice processing) but not the picked source,
+# and enrolment logs nothing. Both are shown as they are; the gap is reported, not guessed.
 # No stdin and no TTY: cues are afplay of system sounds, so this runs under `! scripts/speaker-demo.sh`.
 exec </dev/null
 set -euo pipefail
@@ -24,16 +29,17 @@ IDLE_LIMIT_MB=10
 CPU_LIMIT_PCT=8
 
 usage() {
-  echo "usage: $0 [music|talker|talker-0db|lecture|labelled ...]   (default: music talker labelled)" >&2
+  echo "usage: $0 [music|talker|talker-0db|lecture|labelled|enrol|enrol-cancel ...]   (default: music talker labelled)" >&2
   exit 2
 }
 
-# Per-scene settings: sets MODE and TEXT, or fails for an unknown scene.
+# Per-scene settings: sets KIND (take|enrol), PLAYER (1 = poll the music player), MODE and TEXT.
 scene_config() {
+  KIND=take; PLAYER=0; MODE=""
   case "$1" in
     music)
-      MODE=onlyMe
-      TEXT="Apple Music plays at full volume on this Mac. Hold fn and dictate: 'Remind me to send the invoice to Sam before Friday.'" ;;
+      PLAYER=1; MODE=onlyMe
+      TEXT="Spotify (or Music) plays at full volume on this Mac. Hold fn and dictate: 'Remind me to send the invoice to Sam before Friday.'" ;;
     talker)
       MODE=onlyMe
       TEXT="A talker's video plays beside the Mac at a clearly lower level than your voice (about +10 dB). Hold fn and dictate: 'Move the stringing rig to the second shelf.'" ;;
@@ -46,6 +52,12 @@ scene_config() {
     labelled)
       MODE=everyoneLabelled
       TEXT="A lecturer's video plays. Hold fn, whisper 'Did you finish the problem set?', release. Expect 'Me:' and 'Speaker 2:' lines." ;;
+    enrol)
+      KIND=enrol
+      TEXT="Settings -> Learn voice. Let it run to completion. Tink when it says done." ;;
+    enrol-cancel)
+      KIND=enrol
+      TEXT="Settings -> Learn voice. Cancel during 'Learning your voice...', then Tink." ;;
     *) return 1 ;;
   esac
 }
@@ -63,7 +75,14 @@ cue() { /usr/bin/afplay "/System/Library/Sounds/$1.aiff" || true; }
 
 helper_pid() { pgrep -x "$HELPER_NAME" | head -1 || true; }
 
-# Footprint in MB of pid $1 (dirty + compressed, as footprint reports it); empty if the pid is gone.
+# The running music player, Spotify first. Only a running app is named, so osascript never launches one.
+music_player() {
+  if pgrep -x Spotify >/dev/null 2>&1; then echo Spotify
+  elif pgrep -x Music >/dev/null 2>&1; then echo Music
+  fi
+}
+
+# Footprint in MB of pid $1 (as footprint reports it); empty if the pid is gone.
 footprint_mb() {
   [[ -n "$1" ]] || return 0
   /usr/bin/footprint -p "$1" 2>/dev/null | awk '
@@ -118,15 +137,33 @@ sample_during() {
   done
 }
 
+# Polls the player state of app $2 every 0.5 s into $1 until killed.
+sample_player() {
+  local st
+  while :; do
+    st="$(/usr/bin/osascript -e "tell application \"$2\" to player state" 2>/dev/null || echo error)"
+    echo "$st" >>"$1"
+    sleep 0.5
+  done
+}
+
 # True if $1 > $2 (both numeric).
 greater() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'; }
 
+# One row, tab-separated, for the summary table.
+emit_row() { local IFS=$'\t'; printf '%s\n' "$*" >>"$rows"; }
+
 work="$(mktemp -d)"
 sampler=""
-cleanup() {
-  if [[ -n "$sampler" ]]; then kill "$sampler" 2>/dev/null || true; wait "$sampler" 2>/dev/null || true; fi
-  rm -rf "$work"
+poller=""
+stop_bg() {
+  local p
+  for p in "$sampler" "$poller"; do
+    if [[ -n "$p" ]]; then kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; fi
+  done
+  sampler=""; poller=""
 }
+cleanup() { stop_bg; rm -rf "$work"; }
 trap cleanup EXIT
 
 scenes=("$@")
@@ -141,25 +178,33 @@ if [[ $talker0 -gt 1 ]]; then echo "talker-0db is the known-limit take: run it o
 app_pid="$(pgrep -x "$APP_NAME" | head -1 || true)"
 if [[ -z "$app_pid" ]]; then echo "$APP_NAME is not running: start the app, then re-run" >&2; exit 2; fi
 helper_start="$(helper_pid)"
-echo "app pid $app_pid; helper before the first take: ${helper_start:-none}"
-echo "rows: $work/rows (scratch, removed on exit)"
+echo "app pid $app_pid; helper before the first scene: ${helper_start:-none}"
 
-rows="$work/rows"
-: >"$rows"
-fails_file="$work/fails"
-: >"$fails_file"
+rows="$work/rows"; : >"$rows"
+fails_file="$work/fails"; : >"$fails_file"
 
-# One take: cue, measure, read the take line, gate. Appends one row to $rows and failures to $fails_file.
-run_take() {
+# One measured take or enrolment: cue, measure, read the take line (takes only), gate. Writes one row and any failures.
+run_measured() {
   local n="$1" scene="$2"
-  local helper0 helper1 hpre hpeak="-" h5 h30 alive30 rss_pre rss30 line stamp
-  local cpu_app0 cpu_app1 cpu_h0 cpu_h1 t0 t1 t2 target cpu_pct dapp dh cur_app
-  local level spk applog reasons=""
+  local helper0 helper1 alive_pid hpre hpeak="-" h5 h30 alive30 rss_pre rss30 cur_app
+  local cpu_app0 cpu_app1 cpu_h0 cpu_h1 t0 t1 t2 target cpu_pct dapp dh
+  local line="" stamp player="" music_note="-" reasons="" result="" c
+  local applog="-" mic="-" level="-" spk="-" app_cpu="-"
 
   scene_config "$scene"
-  defaults write "$BUNDLE_ID" dictationSpeakerMode -string "$MODE"
+  if [[ "$PLAYER" == 1 ]]; then
+    player="$(music_player)"
+    if [[ -z "$player" ]]; then
+      echo "=== take $n: $scene skipped, neither Spotify nor Music is running" >&2
+      printf '%s\n' "take $n ($scene): neither Spotify nor Music is running" >>"$fails_file"
+      emit_row "$n" "$scene" - - - - - - no - - - - - - - "FAIL no player running" -
+      return 0
+    fi
+  fi
+  if [[ "$KIND" == take ]]; then defaults write "$BUNDLE_ID" dictationSpeakerMode -string "$MODE"; fi
+
   echo ""
-  echo "=== take $n: $scene (mode $MODE)"
+  echo "=== $KIND $n: $scene${MODE:+ (mode $MODE)}${player:+ (player $player)}"
   echo "$TEXT"
   echo "countdown:"
   for c in 3 2 1; do echo "  $c"; sleep 1; done
@@ -171,15 +216,16 @@ run_take() {
   cpu_h0="$(cpu_secs "$helper0")"
   stamp="$(date -v-3S '+%Y-%m-%d %H:%M:%S')"
 
-  : >"$work/during"
+  : >"$work/during"; : >"$work/player"
   cue Pop
-  echo "  GO: hold fn and speak"
+  if [[ "$KIND" == take ]]; then echo "  GO: hold fn and speak"; else echo "  GO: click Learn voice"; fi
   t0="$(now)"
   sample_during "$work/during" &
   sampler=$!
+  if [[ -n "$player" ]]; then sample_player "$work/player" "$player" & poller=$!; fi
   sleep "$TAKE_SECONDS"
   cue Tink
-  echo "  STOP: release fn"
+  if [[ "$KIND" == take ]]; then echo "  STOP: release fn"; else echo "  STOP: done or cancelled"; fi
   t1="$(now)"
 
   target="$(awk -v a="$t1" 'BEGIN { printf "%.3f\n", a + 2 }')"
@@ -188,7 +234,7 @@ run_take() {
   cpu_app1="$(cpu_secs "$app_pid")"
   cpu_h1="$(cpu_secs "$helper1")"
   t2="$(now)"
-  kill "$sampler" 2>/dev/null || true; wait "$sampler" 2>/dev/null || true; sampler=""
+  stop_bg
   if [[ -s "$work/during" ]]; then
     hpeak="$(awk '{ if ($2 + 0 > m) m = $2 + 0 } END { printf "%.1f\n", m }' "$work/during")"
   fi
@@ -199,19 +245,19 @@ run_take() {
 
   target="$(awk -v a="$t1" 'BEGIN { printf "%.3f\n", a + 30 }')"
   sleep_until "$target"
-  local alive_pid
   alive_pid="$(helper_pid)"
   if [[ -n "$alive_pid" ]]; then alive30="yes($alive_pid)"; h30="$(footprint_mb "$alive_pid")"; h30="${h30:--}"
   else alive30="no"; h30="-"; fi
   rss30="$(rss_mb "$app_pid")"; rss30="${rss30:--}"
   cur_app="$(pgrep -x "$APP_NAME" | head -1 || true)"
 
-  line=""
-  for _ in 1 2 3; do
-    line="$(take_line "$stamp")"
-    [[ -n "$line" ]] && break
-    sleep 2
-  done
+  if [[ "$KIND" == take ]]; then
+    for _ in 1 2 3; do
+      line="$(take_line "$stamp")"
+      [[ -n "$line" ]] && break
+      sleep 2
+    done
+  fi
 
   dapp="$(awk -v a="$cpu_app1" -v b="$cpu_app0" 'BEGIN { printf "%.2f\n", a - b }')"
   if [[ "$helper1" == "$helper0" ]]; then dh="$(awk -v a="$cpu_h1" -v b="$cpu_h0" 'BEGIN { printf "%.2f\n", a - b }')"
@@ -219,7 +265,7 @@ run_take() {
   cpu_pct="$(awk -v a="$dapp" -v b="$dh" -v s="$(awk -v x="$t2" -v y="$t0" 'BEGIN { printf "%.3f\n", x - y }')" 'BEGIN { printf "%.1f\n", (a + b) / s * 100 }')"
 
   # Gates.
-  if [[ "$alive30" != "no" ]]; then reasons="$reasons; helper alive 30 s after take (pid ${alive_pid})"; fi
+  if [[ "$alive30" != "no" ]]; then reasons="$reasons; helper alive 30 s after $KIND (pid ${alive_pid})"; fi
   if [[ "$hpre" != "-" && "$h30" != "-" ]] && greater "$(awk -v a="$h30" -v b="$hpre" 'BEGIN { printf "%.1f\n", a - b }')" "$IDLE_LIMIT_MB"; then
     reasons="$reasons; helper idle growth over ${IDLE_LIMIT_MB} MB"
   fi
@@ -227,42 +273,49 @@ run_take() {
     reasons="$reasons; app RSS idle growth over ${IDLE_LIMIT_MB} MB"
   fi
   if greater "$cpu_pct" "$CPU_LIMIT_PCT"; then reasons="$reasons; CPU ${cpu_pct}% of one core over ${CPU_LIMIT_PCT}%"; fi
-  if [[ -z "$line" ]]; then reasons="$reasons; no 'take outcome' line in the log"; fi
-  if [[ "$cur_app" != "$app_pid" ]]; then reasons="$reasons; $APP_NAME restarted or exited during the take"; fi
+  if [[ "$cur_app" != "$app_pid" ]]; then reasons="$reasons; $APP_NAME restarted or exited"; fi
+  if [[ "$KIND" == take && -z "$line" ]]; then reasons="$reasons; no 'take outcome' line in the log"; fi
+  if [[ -n "$player" ]]; then
+    local samples paused
+    samples="$(grep -c . "$work/player" || true)"
+    paused="$(grep -c '^paused$' "$work/player" || true)"
+    music_note="${paused}/${samples} paused"
+    if [[ "$paused" -gt 0 ]]; then reasons="$reasons; $player paused during the take"; fi
+    if [[ "$samples" -eq 0 ]]; then reasons="$reasons; no player poll landed"; fi
+  fi
 
   if [[ -n "$line" ]]; then
     applog="$(logfield "$line" mode)"; applog="${applog:--}"
     level="$(logfield "$line" level)"; level="${level:--}"
     spk="$(logfield "$line" speakers)"; spk="${spk:--}"
     app_cpu="$(logfield "$line" cpu)"; app_cpu="${app_cpu:--}"
-  else
-    applog="-"; level="-"; spk="-"; app_cpu="-"
+    mic="tap=$(logfield "$line" tap) vp=$(logfield "$line" vp)"
   fi
-  local result="PASS"
-  if [[ -n "$reasons" ]]; then result="FAIL${reasons}"; printf '%s\n' "take $n ($scene):${reasons}" >>"$fails_file"; fi
+  result="PASS"
+  if [[ -n "$reasons" ]]; then result="FAIL${reasons}"; printf '%s\n' "$KIND $n ($scene):${reasons}" >>"$fails_file"; fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$n" "$scene" "$applog" "$hpre" "$hpeak" "$h5" "$h30" "$alive30" "$rss_pre" "$rss30" \
-    "$cpu_pct" "$app_cpu" "$level" "$spk" "$result" "$dapp" >>"$rows"
-  echo "  done: take $n $result"
+  emit_row "$n" "$scene" "$applog" "$mic" "$hpre" "$hpeak" "$h5" "$h30" "$alive30" "$rss_pre" "$rss30" \
+    "$cpu_pct" "$app_cpu" "$level" "$spk" "$music_note" "$result" "$dapp"
+  echo "  done: $scene $result"
 }
 
 n=0
 for scene in "${scenes[@]}"; do
   n=$((n + 1))
-  run_take "$n" "$scene"
+  run_measured "$n" "$scene"
 done
 
 echo ""
 echo "=== summary (#17 U5): mem in MB, cpu in % of one core over Pop to Tink+2 s"
-printf '%-4s %-11s %-15s %8s %8s %8s %8s %-9s %9s %9s %8s %8s %7s %4s %s\n' \
-  take scene mode h_pre h_peak h_+5s h_+30s alive+30 app_pre app_+30 cpu_ps cpu_app level spk result
-while IFS=$'\t' read -r n scene applog hpre hpeak h5 h30 alive30 rss_pre rss30 cpu_pct app_cpu level spk result dapp; do
-  printf '%-4s %-11s %-15s %8s %8s %8s %8s %-9s %9s %9s %8s %8s %7s %4s %s\n' \
-    "$n" "$scene" "$applog" "$hpre" "$hpeak" "$h5" "$h30" "$alive30" "$rss_pre" "$rss30" \
-    "$cpu_pct" "$app_cpu" "$level" "$spk" "$result"
+printf '%-3s %-12s %-15s %-17s %7s %7s %7s %7s %-9s %8s %8s %7s %7s %7s %4s %-10s %s\n' \
+  no scene mode mic h_pre h_peak h_+5s h_+30s alive+30 app_pre app_+30 cpu_ps cpu_app level spk music result
+while IFS=$'\t' read -r n scene applog mic hpre hpeak h5 h30 alive30 rss_pre rss30 cpu_pct app_cpu level spk music result dapp; do
+  printf '%-3s %-12s %-15s %-17s %7s %7s %7s %7s %-9s %8s %8s %7s %7s %7s %4s %-10s %s\n' \
+    "$n" "$scene" "$applog" "$mic" "$hpre" "$hpeak" "$h5" "$h30" "$alive30" "$rss_pre" "$rss30" \
+    "$cpu_pct" "$app_cpu" "$level" "$spk" "$music" "$result"
 done <"$rows"
-echo "gates: helper alive at +30 s; idle growth > ${IDLE_LIMIT_MB} MB (helper footprint, app RSS); CPU > ${CPU_LIMIT_PCT}%"
+echo "gates: helper alive at +30 s; idle growth > ${IDLE_LIMIT_MB} MB (helper footprint, app RSS); CPU > ${CPU_LIMIT_PCT}%; music never paused"
+echo "mic channel pick: not logged. The take line has tap= and vp= only; enrolment logs nothing. Gap, see the PR comment."
 
 if [[ -s "$fails_file" ]]; then
   echo "" >&2
