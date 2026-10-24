@@ -43,12 +43,33 @@ final class TakeReportTests: XCTestCase {
     func testKeyAndVoiceProcessingAreLogged() {
         var report = TakeReport()
         report.record(meter: MicLevelMeter())
-        XCTAssertTrue(report.line.hasSuffix("cloud=0 key=0 vp=0 gate=off dropped=-1 vi=off"), report.line)
+        XCTAssertTrue(report.line.hasSuffix("cloud=0 key=0 vp=0 level=none gate=off dropped=-1 vi=off"), report.line)
         report.hasKey = true
         report.voiceProcessing = true
         let words = report.line.components(separatedBy: " ")
         XCTAssertTrue(words.contains("key=1"), report.line)
         XCTAssertTrue(words.contains("vp=1"), report.line)
+    }
+
+    /// #17 U3 round 3: the mono channel the take reads is logged as a number, -1 unset.
+    func testMicChannelIsLogged() {
+        var report = TakeReport()
+        report.record(meter: MicLevelMeter())
+        XCTAssertTrue(report.line.split(separator: " ").contains("src=-1"), report.line)
+        report.micChannel = 1
+        XCTAssertTrue(report.line.split(separator: " ").contains("src=1"), report.line)
+    }
+
+    /// #17 U3 round 3: an enrolment prompt logs as a take line with its outcome, level and channel.
+    func testEnrolmentPromptIsLoggedAsATakeLine() {
+        var report = TakeReport()
+        report.outcome = .enrolQuiet
+        report.level = -41.2
+        report.micChannel = 0
+        let words = report.line.split(separator: " ").map(String.init)
+        XCTAssertTrue(words.contains("outcome=enrol-quiet"), report.line)
+        XCTAssertTrue(words.contains("level=-41.2"), report.line)
+        XCTAssertTrue(words.contains("src=0"), report.line)
     }
 
     /// Speaker gate (#17 U1): the gate, the dropped count and the Voice Isolation mode are logged as numbers.
@@ -73,11 +94,21 @@ final class TakeReportTests: XCTestCase {
         report.rssDeltaMB = 12
         report.voiceIsolation = true
         report.ducking = .mid
+        report.rssIdleMB = 4
         XCTAssertTrue(
-            report.line.hasSuffix("mode=everyoneLabelled speakers=2 cpu=4.5% rss=+12MB iso=on duck=mid"),
+            report.line.hasSuffix("mode=everyoneLabelled speakers=2 cpu=4.5% rss=+12MB iso=on duck=mid idle=+4"),
             report.line
         )
         report.rssDeltaMB = -3
         XCTAssertTrue(report.line.contains("rss=-3MB"), report.line)
+    }
+
+    /// #17 U2b: the voiced level of the take's first 8 s is on every line, unset as none.
+    func testLevelIsOnEveryLine() {
+        var report = TakeReport()
+        report.record(meter: MicLevelMeter())
+        XCTAssertTrue(report.line.split(separator: " ").contains("level=none"), report.line)
+        report.level = -26.04
+        XCTAssertTrue(report.line.split(separator: " ").contains("level=-26.0"), report.line)
     }
 }

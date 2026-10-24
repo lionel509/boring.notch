@@ -298,4 +298,14 @@ final class SpeakerGateTests: XCTestCase {
             XCTAssertEqual(SpeakerGate.silence(pcm16LE: pcm, ranges: [], sampleRate: sr), pcm)
         }
     }
+
+    /// #17 U2b: the XPC embedder is async, and its path must be the same arithmetic as the sync one.
+    func testAsyncSegmentEmbeddingMatchesTheSyncPath() async throws {
+        let samples = (0..<40_000).map { Float(sin(Double($0) / 7)) * 0.2 }
+        let sync = try SpeakerGate.segmentEmbedding(samples, embed: fakeEmbed)
+        let async = try await SpeakerGate.segmentEmbedding(samples) { try self.fakeEmbed($0) }
+        XCTAssertEqual(sync, async)
+        let empty = try await SpeakerGate.segmentEmbedding([]) { _ in [1] }
+        XCTAssertNil(empty)
+    }
 }

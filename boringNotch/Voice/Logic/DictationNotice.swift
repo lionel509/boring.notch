@@ -22,6 +22,9 @@ enum DictationNotices {
         switch outcome {
         case .pasted:
             return nil
+        case .enrolAccepted, .enrolQuiet:
+            // Enrolment prompts are not takes: no notice.
+            return nil
         case .discarded:
             return DictationNotice(label: "Hold fn longer", detail: "", icon: "mic")
         case .nothingHeard:

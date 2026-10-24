@@ -28,13 +28,17 @@ enum VoiceDictationState: Equatable {
 protocol VoiceSession: AnyObject {
     var levelTap: MicLevelTap { get }
     func start(contextualStrings: [String], onPartial: @escaping @Sendable (String) -> Void) async throws
-    /// Stops the microphone now and returns the transcript so far.
-    func stopNow() -> [String]
+    /// Stops the microphone now and returns the transcript so far, labelled for the take's mode (#17 U2b).
+    func stopNow() async -> [String]
     /// The take's audio as a WAV file, or nil when no audio arrived.
     func takeWAV() -> Data?
     func finish() async throws -> [String]
     func cancel() async
     func fill(_ report: inout TakeReport)
+    /// The take's length in seconds, for the rewrite gate.
+    var takeSeconds: Double { get }
+    /// The 5 s idle sample started at key release, if this take made one (#17 U2b).
+    func idleSample() -> Task<Int, Never>?
 }
 
 @MainActor
@@ -68,6 +72,8 @@ final class VoiceDictationManager: ObservableObject {
     private var clipboardRestoreTask: Task<Void, Never>?
     /// The numbers for the take in progress. Logged once, when the take ends.
     private var report = TakeReport()
+    /// The idle sample of the take whose line is still to be logged (#17 U2b).
+    private var pendingIdle: Task<Int, Never>?
     private var takeOpen = false
     /// Uptime when the take started and when its key was released, for the timing numbers.
     private var takeStartedAt: TimeInterval?
@@ -238,7 +244,18 @@ final class VoiceDictationManager: ObservableObject {
         guard takeOpen else { return }
         takeOpen = false
         report.outcome = outcome
-        DictationLog.take(report)
+        let snapshot = report
+        if let idle = pendingIdle {
+            // The take line waits for the 5 s idle sample, so it carries `idle=` (#17 U2b).
+            pendingIdle = nil
+            Task {
+                var logged = snapshot
+                logged.rssIdleMB = await idle.value
+                DictationLog.take(logged)
+            }
+        } else {
+            DictationLog.take(snapshot)
+        }
     }
 
     /// Ends a rewrite: its numbers go into the take report and the take is logged. Only the rewrite that is
@@ -363,7 +380,8 @@ final class VoiceDictationManager: ObservableObject {
 
     /// Releases the mic, then pastes the raw transcript at once and rewrites it in place.
     private func complete(_ current: any VoiceSession) async {
-        let rawNow = TranscriptAssembler.join(current.stopNow())
+        let rawNow = TranscriptAssembler.join(await current.stopNow())
+        pendingIdle = current.idleSample()
         let wav = current.takeWAV()
         // Apple's final results: they land after the paste and only matter for the rewrite and the empty take.
         let finalTask = Task { (try? await current.finish()) ?? [] }
@@ -395,7 +413,8 @@ final class VoiceDictationManager: ObservableObject {
         // One decision for the take. Every skip has a reason; secure and untracked fields never run (#13 r5 / U2).
         let decision = RewriteGate.decide(
             field: field, cloudOn: Defaults[.dictationCloud], hasKey: cachedKey != nil,
-            cleanupOn: Defaults[.dictationCleanup], keyAbortLive: keyAbortLive)
+            cleanupOn: Defaults[.dictationCleanup], keyAbortLive: keyAbortLive,
+            mode: Defaults[.dictationSpeakerMode], takeSeconds: engine.takeSeconds)
         report.hasKey = cachedKey != nil
         let rewriteWanted: Bool = {
             if case .run = decision { return true }

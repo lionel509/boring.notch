@@ -380,6 +380,32 @@ final class XPCHelperClient: NSObject {
         }
     }
 
+    // MARK: - Speaker embedding (#17 U2b)
+
+    /// One tiled window of 16 kHz mono samples to the helper's speaker model. The 256-value embedding, or nil when
+    /// the helper is unreachable or answers with anything else. The caller fails open on nil.
+    nonisolated func speakerEmbedding(_ window: [Float]) async -> [Float]? {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let data: Data? = try await service.withContinuation { service, continuation in
+                service.speakerEmbedding(SpeakerWire.pack(window)) { data in
+                    continuation.resume(returning: data)
+                }
+            }
+            return SpeakerWire.embedding(from: data)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Tells the helper to drop its speaker model. Only sent by a take that embedded, so an idle app never wakes it.
+    nonisolated func releaseSpeakerModel() async {
+        let service = await MainActor.run { ensureRemoteService() }
+        try? await service.withService { service in
+            service.releaseSpeakerModel()
+        }
+    }
+
     // MARK: - Keyboard Brightness
     
     nonisolated func isKeyboardBrightnessAvailable() async -> Bool {

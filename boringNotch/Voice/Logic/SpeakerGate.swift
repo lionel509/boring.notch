@@ -21,7 +21,7 @@ public struct GatedSegment: Equatable {
 /// Scores a span of 16 kHz mono samples to a speaker embedding. The app's implementation is FluidAudio's
 /// WeSpeaker; tests and the spike pass fakes. nil means the span has no scorable window.
 protocol SpeakerEmbedder: AnyObject, Sendable {
-    func segmentEmbedding(_ samples16k: [Float]) async throws -> [Float]?
+    func segmentEmbedding(_ samples16k: [Float], take: UUID) async throws -> [Float]?
 }
 
 /// Segment-level speaker verification (#17). Pure arithmetic: no model, no audio device, no Defaults.
@@ -136,6 +136,19 @@ public struct SpeakerGate: Sendable {
         let embeddings = try windows(normalise(samples))
             .map { try embed(tile($0, to: tiledSamples)) }
             .filter { !$0.isEmpty }
+        return embeddings.isEmpty ? nil : centroid(embeddings)
+    }
+
+    /// The async twin of `segmentEmbedding`, for an embedder that lives in another process (#17 U2b). The same
+    /// arithmetic in the same order: normalise, window, tile, embed each window, centroid. A cancelled span stops
+    /// before its next window, so no window reaches the helper after the take has been cancelled (#17 U2b).
+    public static func segmentEmbedding(_ samples: [Float], embed: ([Float]) async throws -> [Float]) async throws -> [Float]? {
+        var embeddings: [[Float]] = []
+        for window in windows(normalise(samples)) {
+            try Task.checkCancellation()
+            let embedding = try await embed(tile(window, to: tiledSamples))
+            if !embedding.isEmpty { embeddings.append(embedding) }
+        }
         return embeddings.isEmpty ? nil : centroid(embeddings)
     }
 

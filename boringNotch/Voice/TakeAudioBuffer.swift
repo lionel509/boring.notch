@@ -18,12 +18,12 @@ final class TakeAudioBuffer: @unchecked Sendable {
     private var converter: AVAudioConverter?
     private var converterInput: AVAudioFormat?
     private var pcm = Data()
-    private var samples = 0
+    private var sampleCount = 0
 
     /// Converts one tap buffer and appends it. Stops at `CloudConfig.maxTakeSeconds`.
     func ingest(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
-        let full = samples >= Self.maxSamples
+        let full = sampleCount >= Self.maxSamples
         lock.unlock()
         guard !full, let target else { return }
 
@@ -50,24 +50,48 @@ final class TakeAudioBuffer: @unchecked Sendable {
 
         lock.lock()
         defer { lock.unlock() }
-        let room = Self.maxSamples - samples
+        let room = Self.maxSamples - sampleCount
         let count = min(Int(out.frameLength), room)
         guard count > 0 else { return }
         pcm.append(Data(bytes: channel[0], count: count * MemoryLayout<Int16>.size))
-        samples += count
+        sampleCount += count
     }
 
     /// The take as a WAV file, or nil when no audio arrived.
     func wav() -> Data? {
+        wav(silencing: [])
+    }
+
+    /// The take as a WAV file with the samples inside `ranges` (seconds) zeroed, or nil when no audio arrived.
+    func wav(silencing ranges: [ClosedRange<Double>]) -> Data? {
         lock.lock()
         defer { lock.unlock() }
         guard !pcm.isEmpty else { return nil }
-        return WAVEncoder.wav(pcm16LE: pcm, sampleRate: Self.sampleRate)
+        let kept = SpeakerGate.silence(pcm16LE: pcm, ranges: ranges, sampleRate: Self.sampleRate)
+        return WAVEncoder.wav(pcm16LE: kept, sampleRate: Self.sampleRate)
+    }
+
+    /// The span [from, to] seconds as Float samples in [-1, 1] (Int16 / 32768). [] when the span is empty,
+    /// inverted, or starts past the end of the take. Never traps on any input.
+    func samples(from: Double, to: Double) -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        let total = pcm.count / MemoryLayout<Int16>.size
+        guard from.isFinite, to.isFinite, to > from else { return [] }
+        let lower = Int(min(max(from * Double(Self.sampleRate), 0), Double(total)))
+        let upper = Int(min(max(to * Double(Self.sampleRate), 0), Double(total)))
+        guard upper > lower else { return [] }
+        return pcm.withUnsafeBytes { raw -> [Float] in
+            (lower..<upper).map { index in
+                let value = raw.loadUnaligned(fromByteOffset: index * 2, as: Int16.self)
+                return Float(Int16(littleEndian: value)) / 32_768
+            }
+        }
     }
 
     var seconds: Double {
         lock.lock()
         defer { lock.unlock() }
-        return Double(samples) / Double(Self.sampleRate)
+        return Double(sampleCount) / Double(Self.sampleRate)
     }
 }

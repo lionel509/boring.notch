@@ -152,6 +152,15 @@ extension Defaults.Keys {
     static let dictationVoiceProcessing = Key<Bool>("dictationVoiceProcessing", default: true)
     /// Pause music from this Mac while a take is recording, and resume it when the mic is released.
     static let dictationPausesMedia = Key<Bool>("dictationPausesMedia", default: false)
+    /// Set once launch has cleared a stored `dictationPausesMedia`, so the reset runs once (#17 U3 review).
+    static let dictationPausesMediaReset = Key<Bool>("dictationPausesMediaReset", default: false)
+    /// Which voices a take keeps: only Lionel, everyone but Lionel, or everyone labelled (#17). Read at key release.
+    static let dictationSpeakerMode = Key<SpeakerMode>("dictationSpeakerMode", default: .onlyMe)
+    /// Lionel's voiceprint: the mean embedding of his enrolment prompts. Stays on this Mac; read only by the take and
+    /// enrolment, never sent or logged. Empty until enrolment.
+    static let dictationVoiceprint = Key<[Double]>("dictationVoiceprint", default: [])
+    /// When the voiceprint was last learned. nil until enrolment.
+    static let dictationVoiceEnrolledAt = Key<Date?>("dictationVoiceEnrolledAt", default: nil)
     /// On-device cleanup (Apple Intelligence) when cloud is off or fails.
     static let dictationCleanup = Key<Bool>("dictationCleanup", default: true)
     /// Names and terms, comma separated. Sent as the STT prompt and the cleanup vocabulary.
@@ -358,3 +367,5 @@ func debugLog(_ message: @autoclosure () -> String) {
     NSLog("%@", message())
     #endif
 }
+
+extension SpeakerMode: Defaults.Serializable {}

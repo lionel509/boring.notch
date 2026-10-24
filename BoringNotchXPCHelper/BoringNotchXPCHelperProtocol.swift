@@ -62,6 +62,11 @@ import Foundation
     func axSelectThenType(_ location: Int, _ length: Int, _ text: String, _ caretAfter: Int, with reply: @escaping (Int) -> Void)
     func typeSwap(_ suffixGraphemes: Int, _ oldGraphemes: Int, _ text: String, with reply: @escaping (Int) -> Void)
     func endTracking()
+    // Speaker embedding (#17 U2b). The helper holds one WeSpeaker model while a take asks for embeddings.
+    /// One window of 16 kHz mono Float32 little-endian samples in, 256 Float32 little-endian values out, nil on failure.
+    func speakerEmbedding(_ samples: Data, with reply: @escaping (Data?) -> Void)
+    /// Drops the helper's speaker model. The app sends it once at the end of a take that asked for embeddings.
+    func releaseSpeakerModel()
 }
 
 /*

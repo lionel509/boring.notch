@@ -10,11 +10,15 @@
 //  second shape.
 //
 
+import Defaults
 import SwiftUI
 
 struct VoiceDictationLiveActivity: View {
     @EnvironmentObject var vm: BoringViewModel
     @ObservedObject var voice = VoiceDictationManager.shared
+    /// #17 U4: the speaker mode the pill shows. Tapping it writes the next mode; the manager reads
+    /// the key when the take stops, so a switch mid-take is honoured.
+    @Default(.dictationSpeakerMode) private var speakerMode
 
     private var side: CGFloat { max(0, vm.effectiveClosedNotchHeight - 12) }
 
@@ -70,7 +74,10 @@ struct VoiceDictationLiveActivity: View {
         case .recording where voice.downloadingModel:
             withMessage("Downloading speech model", bars: bars(.rest, dim: false))
         case .recording:
-            bars(.live, dim: voice.micStatus == .waiting || voice.micStatus == .noSignal)
+            HStack(spacing: 0) {
+                bars(.live, dim: voice.micStatus == .waiting || voice.micStatus == .noSignal)
+                modePill
+            }
         case .processing:
             bars(voice.refining ? .rest : .idle, dim: false, refining: voice.refining)
         case .done:
@@ -93,6 +100,20 @@ struct VoiceDictationLiveActivity: View {
                 .frame(width: DictationStrip.messageWidth, alignment: .leading)
                 .padding(.trailing, 6)
         }
+    }
+
+    /// Me / Them / All for the take's speaker mode. A tap cycles the mode; it is read at stop.
+    private var modePill: some View {
+        Text(DictationStrip.modeLabel(speakerMode))
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: DictationStrip.modePillWidth - 10, height: 16)
+            .background(Capsule().fill(Color.white.opacity(0.18)))
+            .frame(width: DictationStrip.modePillWidth, height: side)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                speakerMode = DictationStrip.nextMode(after: speakerMode)
+            }
     }
 
     /// The music strip's spectrum cell, fed by the mic instead of the playing track.

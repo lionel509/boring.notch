@@ -14,10 +14,32 @@ enum DictationStrip {
     /// Longest headline the message cell is sized for.
     static let headlineMax = 28
 
-    /// Width added beside the notch: two square cells (`side` each) plus 20 pt, and one
-    /// message cell when the strip says words (the download only).
-    static func extraWidth(side: CGFloat, showsMessage: Bool) -> CGFloat {
-        2 * max(0, side) + 20 + (showsMessage ? messageWidth : 0)
+    /// Width of the speaker-mode pill (Me / Them / All) beside the bars while a take records.
+    static let modePillWidth: CGFloat = 44
+
+    /// Width added beside the notch: two square cells (`side` each) plus 20 pt, one
+    /// message cell when the strip says words (the download only), and one pill cell
+    /// when the strip shows the speaker mode.
+    static func extraWidth(side: CGFloat, showsMessage: Bool, showsMode: Bool = false) -> CGFloat {
+        2 * max(0, side) + 20 + (showsMessage ? messageWidth : 0) + (showsMode ? modePillWidth : 0)
+    }
+
+    /// The pill's tap order: Me → Them → All → Me.
+    static func nextMode(after mode: SpeakerMode) -> SpeakerMode {
+        switch mode {
+        case .onlyMe: return .everyoneButMe
+        case .everyoneButMe: return .everyoneLabelled
+        case .everyoneLabelled: return .onlyMe
+        }
+    }
+
+    /// The word the pill shows for a mode.
+    static func modeLabel(_ mode: SpeakerMode) -> String {
+        switch mode {
+        case .onlyMe: return "Me"
+        case .everyoneButMe: return "Them"
+        case .everyoneLabelled: return "All"
+        }
     }
 
     /// The failure strip's right-hand cell: the bars' slot plus the 20 pt, so a failure keeps the

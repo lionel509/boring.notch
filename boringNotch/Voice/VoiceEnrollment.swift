@@ -1,0 +1,303 @@
+//
+//  VoiceEnrollment.swift
+//  boringNotch
+//
+//  Learns Lionel's voice (#17 U3). Three read prompts are recorded through the same input graph as a take
+//  (`SpeechAnalyzerSession.makeInputGraph`, Voice Isolation included), each prompt is scored by the one path
+//  (`SpeakerGate.segmentEmbedding`, which normalises first and runs in the XPC helper), and the voiceprint is
+//  the centroid of the three. The voiceprint is stored on this Mac and is read only by the take and this file.
+//
+
+import AVFoundation
+import Defaults
+import Foundation
+import SwiftUI
+
+enum VoiceEnrollmentError: Error {
+    case noMicrophone
+}
+
+/// The stored voiceprint. Forget clears it and the time it was learned, so the take transcribes every voice.
+/// Not availability-gated: Settings calls it on every macOS.
+enum VoiceprintStore {
+    static func forget() {
+        Defaults[.dictationVoiceprint] = []
+        Defaults[.dictationVoiceEnrolledAt] = nil
+    }
+}
+
+@available(macOS 26.0, *)
+@MainActor
+final class VoiceEnrollment: ObservableObject {
+    /// The three prompts, as in the spike round (#18), so the enrolment reads what the spike measured.
+    static let prompts = [
+        "The quick brown fox jumps over the lazy dog while the notch listens to every word I say.",
+        "Please schedule the meeting for Tuesday afternoon and send the notes to the whole team.",
+        "Seven green apples, two blue bicycles and one very tired cat were waiting at the station.",
+    ]
+    /// Each prompt records at most this long; the take's span for an enrolment prompt.
+    static let recordSeconds: Double = 8
+
+    /// The flow itself (steps, level gate, retry limit) lives in `EnrollmentLogic`; this class only drives the mic.
+    @Published private(set) var state = EnrollmentLogic.State()
+    /// The live mic level (0...1) for the bars while a prompt records.
+    @Published private(set) var level: Float = 0
+
+    var step: EnrollmentLogic.Step { state.step }
+    var message: String? { state.message }
+
+    /// Accepted clips by prompt index, so a clip that does not match can be replaced in place.
+    private var clips: [Int: [Float]] = [:]
+    /// Bumped by `close()`. A scoring pass that started before a Cancel checks it and saves nothing.
+    private var session = 0
+    private var engine: AVAudioEngine?
+    /// The enrolment tap's mono source, kept for the prompt log (`src=`, #17 U3 round 3).
+    private var micSource: ConverterBox?
+    /// The node the tap was installed on: the Voice Isolation effect when isolation is on, else the input.
+    private var tapNode: AVAudioNode?
+    /// Whether the open engine turned voice processing on, so teardown switches it off again.
+    private var usesVoiceProcessing = false
+    private var take: TakeAudioBuffer?
+    private var autoStop: Task<Void, Never>?
+    private var meterTask: Task<Void, Never>?
+
+    /// Starts recording the current prompt. It stops by itself after `recordSeconds`, or early through `stopPrompt()`.
+    func startPrompt() {
+        guard case .prompt = step else { return }
+        let buffer = TakeAudioBuffer()
+        do {
+            try startEngine(into: buffer)
+        } catch {
+            EnrollmentLogic.reduce(&state, .fail("No microphone is available. Check the input in System Settings."))
+            return
+        }
+        take = buffer
+        EnrollmentLogic.reduce(&state, .start)
+        autoStop = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.recordSeconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.stopPrompt()
+        }
+    }
+
+    /// Ends the recording of the current prompt and checks its level. A quiet prompt repeats; an accepted one
+    /// moves on; the third accepted prompt starts the scoring.
+    func stopPrompt() {
+        guard case .recording(let index) = step, let buffer = take else { return }
+        autoStop?.cancel()
+        autoStop = nil
+        // Read before teardown, which clears it.
+        let voiceProcessing = usesVoiceProcessing
+        teardownEngine()
+        take = nil
+        let samples = buffer.samples(from: 0, to: Self.recordSeconds)
+        let clipsBefore = state.clips
+        let accepted = EnrollmentLogic.clipAccepted(samples)
+        EnrollmentLogic.reduce(&state, .stop(accepted: accepted))
+        logPrompt(accepted: accepted, level: SpeakerGate.levelDBFS(samples), voiceProcessing: voiceProcessing)
+        if state.clips > clipsBefore { clips[index] = samples }
+        if case .computing = step {
+            let token = session
+            Task { await compute(session: token) }
+        }
+    }
+
+    /// One line per prompt through the one allowed log path: outcome, level and the channel the prompt read.
+    private func logPrompt(accepted: Bool, level: Float, voiceProcessing: Bool) {
+        var report = TakeReport()
+        report.outcome = accepted ? .enrolAccepted : .enrolQuiet
+        report.level = level
+        report.micChannel = micChannelCode(micSource?.source)
+        report.voiceProcessing = voiceProcessing
+        DictationLog.take(report)
+    }
+
+    /// Stops any recording and drops the enrolment in progress. Called when the sheet closes, Cancel included.
+    func close() {
+        autoStop?.cancel()
+        autoStop = nil
+        teardownEngine()
+        take = nil
+        clips = [:]
+        session += 1
+        EnrollmentLogic.reduce(&state, .close)
+    }
+
+    /// Scores the clips through the one path, reads a clip again if it does not match the others, and saves the
+    /// centroid as the voiceprint. A pass that outlives its sheet (Cancel) saves nothing.
+    private func compute(session token: Int) async {
+        let id = UUID()
+        await FluidSpeakerEmbedder.shared.beginTake(id)
+        var embeddings: [[Float]] = []
+        var failure: String?
+        do {
+            for index in 0..<EnrollmentLogic.promptCount {
+                guard let clip = clips[index] else {
+                    failure = EnrollmentLogic.tryAgainMessage
+                    break
+                }
+                guard let embedding = try await FluidSpeakerEmbedder.shared.segmentEmbedding(clip, take: id) else {
+                    failure = EnrollmentLogic.tryAgainMessage
+                    break
+                }
+                embeddings.append(embedding)
+            }
+        } catch {
+            failure = EnrollmentLogic.modelUnavailableMessage
+        }
+        await FluidSpeakerEmbedder.shared.release(id)
+
+        guard token == session else { return }
+        guard case .computing = state.step else { return }
+        if let failure {
+            EnrollmentLogic.reduce(&state, .fail(failure))
+            return
+        }
+        if let outlier = EnrollmentLogic.inconsistentClip(embeddings) {
+            EnrollmentLogic.reduce(&state, .scored(outlier: outlier))
+            return
+        }
+        guard let voiceprint = EnrollmentLogic.assemble(embeddings) else {
+            EnrollmentLogic.reduce(&state, .fail(EnrollmentLogic.tryAgainMessage))
+            return
+        }
+        Defaults[.dictationVoiceprint] = voiceprint
+        Defaults[.dictationVoiceEnrolledAt] = .now
+        clips = [:]
+        EnrollmentLogic.reduce(&state, .scored(outlier: nil))
+    }
+
+    /// The same graph a take builds: voice processing first (its ducking stays at `.mid`, music is never paused),
+    /// then `makeInputGraph`, then the tap feeds the meter and the prompt's buffer.
+    private func startEngine(into buffer: TakeAudioBuffer) throws {
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        var voiceProcessing = false
+        if Defaults[.dictationVoiceProcessing] {
+            do {
+                try input.setVoiceProcessingEnabled(true)
+                input.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                    enableAdvancedDucking: false, duckingLevel: .mid)
+                voiceProcessing = true
+            } catch {
+                voiceProcessing = false
+            }
+        }
+        let inFormat = input.outputFormat(forBus: 0)
+        guard inFormat.channelCount > 0, MicLevelMeter.isUsableRate(inFormat.sampleRate) else {
+            if voiceProcessing { try? input.setVoiceProcessingEnabled(false) }
+            throw VoiceEnrollmentError.noMicrophone
+        }
+
+        let graph = SpeechAnalyzerSession.makeInputGraph(engine: engine)
+        let meter = MicLevelTap()
+        let format: AVAudioFormat? = graph.isolation ? graph.tapNode.outputFormat(forBus: 0) : nil
+        let usesVP = voiceProcessing
+        // The take's own mono choice (takeSource, takeMonoBuffer), so enrolment records the same channel a take does.
+        let box = ConverterBox()
+        micSource = box
+        graph.tapNode.installTap(onBus: 0, bufferSize: 4096, format: format) { pcm, _ in
+            meter.ingest(pcm)
+            buffer.ingest(takeMonoBuffer(pcm, source: takeSource(for: pcm, voiceProcessing: usesVP, box: box)))
+        }
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            graph.tapNode.removeTap(onBus: 0)
+            if voiceProcessing { try? input.setVoiceProcessingEnabled(false) }
+            throw error
+        }
+        self.engine = engine
+        // The tap sits on the effect node when isolation is on, so teardown removes it from there (#17 U3 review).
+        self.tapNode = graph.tapNode
+        usesVoiceProcessing = voiceProcessing
+        meterTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 33_000_000)
+                guard let self else { return }
+                self.level = meter.level
+            }
+        }
+    }
+
+    private func teardownEngine() {
+        meterTask?.cancel()
+        meterTask = nil
+        level = 0
+        guard let engine else { return }
+        tapNode?.removeTap(onBus: 0)
+        tapNode = nil
+        engine.stop()
+        // Voice processing is switched off on every exit, as in a take (#17 U2b).
+        if usesVoiceProcessing { try? engine.inputNode.setVoiceProcessingEnabled(false) }
+        usesVoiceProcessing = false
+        self.engine = nil
+    }
+}
+
+/// The enrolment sheet: the prompt to read, live bars, and Start / Stop / Done.
+@available(macOS 26.0, *)
+struct VoiceEnrollmentView: View {
+    @StateObject private var enrollment = VoiceEnrollment()
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Learn my voice").font(.headline)
+            switch enrollment.step {
+            case .prompt(let index), .recording(let index):
+                Text("Read this \(index + 1) of \(VoiceEnrollment.prompts.count), at your normal speaking distance.")
+                    .foregroundStyle(.secondary)
+                Text(VoiceEnrollment.prompts[index])
+                    .fixedSize(horizontal: false, vertical: true)
+                bars
+                if let message = enrollment.message {
+                    Text(message).foregroundStyle(.orange)
+                }
+            case .computing:
+                Text("Learning your voice…").foregroundStyle(.secondary)
+            case .done:
+                Text("Done. Your voice is learned and stays on this Mac.")
+            case .failed(let reason):
+                Text(reason).foregroundStyle(.orange)
+            }
+            HStack {
+                Spacer()
+                switch enrollment.step {
+                case .prompt:
+                    Button("Start") { enrollment.startPrompt() }
+                        .keyboardShortcut(.defaultAction)
+                case .recording:
+                    Button("Stop") { enrollment.stopPrompt() }
+                        .keyboardShortcut(.defaultAction)
+                case .failed:
+                    Button("Try again") { enrollment.close() }
+                case .computing:
+                    EmptyView()
+                case .done:
+                    Button("Done") { dismiss() }
+                        .keyboardShortcut(.defaultAction)
+                }
+                Button("Cancel") {
+                    enrollment.close()
+                    dismiss()
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+        .onDisappear { enrollment.close() }
+    }
+
+    private var bars: some View {
+        HStack(alignment: .center, spacing: 4) {
+            ForEach(Array(MicBars.levels(level: enrollment.level, time: 0, count: 7, ripple: false).enumerated()), id: \.offset) { _, value in
+                Capsule()
+                    .fill(.secondary)
+                    .frame(width: 6, height: max(4, CGFloat(value) * 28))
+            }
+        }
+        .frame(height: 28)
+    }
+}

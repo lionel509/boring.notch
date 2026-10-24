@@ -11,6 +11,8 @@ import ApplicationServices
 import OSLog
 import IOKit
 import CoreGraphics
+import CoreML
+import FluidAudio
 
 class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
 
@@ -838,5 +840,98 @@ extension BoringNotchXPCHelper {
             task.waitUntilExit()
             reply(String(data: data, encoding: .utf8))
         }
+    }
+}
+
+// MARK: - Speaker embedding (#17 U2b)
+
+/// Runs the helper's speaker work one job at a time, in the order the XPC calls arrived (#17 U2b). Each job is
+/// chained behind the one before it, and the chain is extended synchronously at the XPC entry. So a release that
+/// follows an embed always runs after it: nothing can load the model in between, and two loads never overlap.
+final class SpeakerJobQueue: @unchecked Sendable {
+    static let shared = SpeakerJobQueue()
+
+    private let lock = NSLock()
+    private var last: Task<Void, Never>?
+
+    func enqueue(_ job: @escaping @Sendable () async -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        let previous = last
+        last = Task {
+            await previous?.value
+            await job()
+        }
+    }
+}
+
+/// The one speaker model this helper holds. Loaded by the first embedding of a take and dropped when the app
+/// sends `releaseSpeakerModel` at the take's end, so the helper's memory is a take's worth and nothing when idle.
+/// `SpeakerJobQueue` runs its calls one at a time.
+actor SpeakerModelHolder {
+    static let shared = SpeakerModelHolder()
+
+    private var diarizer: DiarizerManager?
+
+    /// The WeSpeaker v2 embedding of one 10 s window, on the CPU: the configuration the #17 spike measured
+    /// (round 7, the cpu row) and the one the app's memory budget was set against.
+    func embed(_ window: [Float]) async throws -> [Float] {
+        if diarizer == nil {
+            let configuration = MLModelConfiguration()
+            configuration.computeUnits = .cpuOnly
+            let models = try await DiarizerModels.downloadIfNeeded(configuration: configuration)
+            let manager = DiarizerManager()
+            manager.initialize(models: models)
+            diarizer = manager
+        }
+        guard let diarizer else { throw CocoaError(.fileNoSuchFile) }
+        return try diarizer.extractSpeakerEmbedding(from: window)
+    }
+
+    func release() {
+        diarizer?.cleanup()
+        diarizer = nil
+    }
+}
+
+extension BoringNotchXPCHelper {
+    /// Float32 little-endian in, as the app packs it. Mirrors `SpeakerWire` in the app's Voice/Logic folder, which
+    /// this target cannot see; the two are the same four lines.
+    private static func floats(from data: Data) -> [Float]? {
+        guard data.count % 4 == 0 else { return nil }
+        return stride(from: 0, to: data.count, by: 4).map { offset in
+            let bits = data.subdata(in: offset..<offset + 4).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+            return Float(bitPattern: UInt32(littleEndian: bits))
+        }
+    }
+
+    private static func bytes(of values: [Float]) -> Data {
+        var data = Data(capacity: values.count * 4)
+        for value in values {
+            var bits = value.bitPattern.littleEndian
+            withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
+        }
+        return data
+    }
+
+    @objc func speakerEmbedding(_ samples: Data, with reply: @escaping (Data?) -> Void) {
+        // The audio is held in memory for this one call and never written anywhere.
+        guard let window = Self.floats(from: samples), !window.isEmpty, window.allSatisfy({ $0.isFinite }) else {
+            reply(nil)
+            return
+        }
+        SpeakerJobQueue.shared.enqueue {
+            do {
+                let embedding = try await SpeakerModelHolder.shared.embed(window)
+                // A non-finite embedding is no answer: the app keeps the segment rather than score it.
+                reply(embedding.allSatisfy({ $0.isFinite }) ? Self.bytes(of: embedding) : nil)
+            } catch {
+                reply(nil)
+            }
+        }
+    }
+
+    @objc func releaseSpeakerModel() {
+        SpeakerJobQueue.shared.enqueue { await SpeakerModelHolder.shared.release() }
     }
 }

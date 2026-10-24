@@ -13,6 +13,9 @@ enum TakeOutcome: String {
     case noAudio
     case accessDenied
     case failed
+    /// #17 U3: one enrolment prompt, accepted or too quiet (`enrol-ok`, `enrol-quiet`).
+    case enrolAccepted = "enrol-ok"
+    case enrolQuiet = "enrol-quiet"
 }
 
 /// The numbers for one take, logged as one line. Every field is a number, a Bool or an
@@ -24,6 +27,8 @@ struct TakeReport {
     var granted = false
     var tapChannels = -1
     var tapSampleRate = -1
+    /// #17 U3 review: the mono channel the take reads (`src=`): a channel index, 0 for a single channel, -2 when averaged, -1 unset.
+    var micChannel = -1
     var bufferChannels = -1
     var bufferSampleRate = -1
     var buffers = -1
@@ -80,6 +85,11 @@ struct TakeReport {
     var cpuPct: Double = -1
     var rssDeltaMB = -1
     var ducking: DuckLevel = .off
+    /// #17 U2b: the voiced level of the take's first 8 s (dBFS, nil until a take sets it), and the resident-memory
+    /// change 5 s after the take's embedder release (MB, -1 when no release happened).
+    var level: Float? = nil
+    /// nil until the idle sample lands, so an unset value never prints as a measurement.
+    var rssIdleMB: Int? = nil
 
     /// Copies what the mic meter measured.
     mutating func record(meter: MicLevelMeter) {
@@ -106,6 +116,7 @@ struct TakeReport {
             "granted=\(granted ? 1 : 0)",
             "tap=\(tapChannels)ch/\(tapSampleRate)Hz",
             "buf=\(bufferChannels)ch/\(bufferSampleRate)Hz",
+            "src=\(micChannel)",
             "buffers=\(buffers)",
             "chunks=\(chunks)",
             "peak=\(String(format: "%.4f", peak))",
@@ -145,6 +156,7 @@ struct TakeReport {
             "cloud=\(cloud ? 1 : 0)",
             "key=\(hasKey ? 1 : 0)",
             "vp=\(voiceProcessing ? 1 : 0)",
+            "level=\(level.flatMap { $0.isFinite ? String(format: "%.1f", $0) : nil } ?? "none")",
             "gate=\(speakerGate ? "on" : "off")",
             "dropped=\(speakerDropped)",
             "vi=\(voiceIsolation ? "on" : "off")",
@@ -161,6 +173,7 @@ struct TakeReport {
             "rss=\(rssDeltaMB >= 0 ? "+" : "")\(rssDeltaMB)MB",
             "iso=\(voiceIsolation ? "on" : "off")",
             "duck=\(ducking.rawValue)",
+            "idle=\(rssIdleMB.map { ($0 >= 0 ? "+" : "") + String($0) } ?? "none")",
         ]
     }
 }

@@ -66,6 +66,11 @@ struct ContentView: View {
         )
     }
 
+    /// The speaker-mode pill sits beside the bars only while a take records, not during the model download.
+    private var dictationShowsMode: Bool {
+        voiceDictation.state == .recording && !voiceDictation.downloadingModel
+    }
+
     /// Only the model download shows a message cell. A failure shows its short headline in the
     /// failure cell at the listening width, so the strip never grows for it.
     private var dictationShowsMessage: Bool {
@@ -85,7 +90,8 @@ struct ContentView: View {
         } else if vm.notchState == .closed && voiceDictation.state != .idle && !vm.hideOnClosed {
             // Same two-cell strip as music: an icon on the left and the mic bars on the right.
             chinWidth += DictationStrip.extraWidth(
-                side: max(0, vm.effectiveClosedNotchHeight - 12), showsMessage: dictationShowsMessage)
+                side: max(0, vm.effectiveClosedNotchHeight - 12), showsMessage: dictationShowsMessage,
+                showsMode: dictationShowsMode)
         } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music)
             && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle)
             && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed
