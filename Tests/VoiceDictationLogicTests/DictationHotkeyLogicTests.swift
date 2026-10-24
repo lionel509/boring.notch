@@ -238,6 +238,27 @@ final class DictationHotkeyLogicTests: XCTestCase {
         XCTAssertFalse(Logic.startCueDue(s, at: 10))
     }
 
+    // MARK: stop cue pairs with the start cue (a Pop never plays for a take that never got its Tink)
+
+    func testStopCueIsDueOnlyAfterTheStartCueSounded() {
+        XCTAssertFalse(Logic.stopCueDue(afterStartCue: false))
+        XCTAssertTrue(Logic.stopCueDue(afterStartCue: true))
+    }
+
+    /// A quick fn tap is cancelled before the cue is due, so no Tink and no Pop.
+    func testQuickFnTapLeavesNoStopCue() {
+        var fn = FnKeyLogic.State()
+        var s = Logic.State()
+        var sounded = false
+        let down = FnKeyLogic.classify(&fn, .flags(keyCode: FnKeyLogic.fnKeyCode, fn: true, otherModifiers: false), at: 0)
+        if let event = down.event { _ = Logic.reduce(&s, event, at: 0) }
+        if Logic.startCueDue(s, at: Logic.tapThreshold) { sounded = true }
+        let up = FnKeyLogic.classify(&fn, .flags(keyCode: FnKeyLogic.fnKeyCode, fn: false, otherModifiers: false), at: 0.1)
+        if let event = up.event { _ = Logic.reduce(&s, event, at: 0.1) }
+        XCTAssertFalse(sounded)
+        XCTAssertFalse(Logic.stopCueDue(afterStartCue: sounded))
+    }
+
     // MARK: minimum hold (a release before minHold never pastes)
 
     func testMinHoldIsHalfASecondAndAboveTheTapLatch() {
