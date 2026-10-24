@@ -39,6 +39,13 @@ final class DictationStripTests: XCTestCase {
         XCTAssertEqual(DictationStrip.modeLabel(.everyoneLabelled), "All")
     }
 
+    /// #17 U4: the chin reserves the pill's width while a take records (not while the model downloads).
+    func testChinReservesThePillWhileRecording() throws {
+        let chin = try source("boringNotch/ContentView.swift")
+        XCTAssertTrue(chin.contains("showsMode: dictationShowsMode"), "the chin does not reserve the pill's width")
+        XCTAssertTrue(chin.contains("private var dictationShowsMode: Bool"), "the pill flag is missing")
+    }
+
     /// #17 U4: the activity draws the pill from the shared mode key and writes the cycled value back.
     func testModePillIsWiredToTheModeKey() throws {
         let text = try source("boringNotch/Voice/VoiceDictationLiveActivity.swift")
