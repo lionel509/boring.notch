@@ -137,11 +137,22 @@ final class EnrollmentLogicTests: XCTestCase {
     }
 
     func testOutliersCountAgainstTheRetryLimit() {
+        // The cap is three re-reads: the fourth outlier is refused.
         var events = threeAccepted
         for _ in 0..<EnrollmentLogic.maxQuietAttempts {
             events += [.scored(outlier: 2), .start, .stop(accepted: true)]
         }
-        XCTAssertEqual(run(events).step, .failed(EnrollmentLogic.tryAgainMessage))
+        XCTAssertEqual(run(events).step, .computing, "three re-reads are allowed")
+        XCTAssertEqual(run(events + [.scored(outlier: 2)]).step, .failed(EnrollmentLogic.tryAgainMessage))
+    }
+
+    func testThreeRedosAreAllowedBeforeTheCapFails() {
+        let events: [EnrollmentLogic.Event] = threeAccepted + [
+            .scored(outlier: 2), .start, .stop(accepted: true),
+            .scored(outlier: 2), .start, .stop(accepted: true),
+            .scored(outlier: 2),
+        ]
+        XCTAssertEqual(run(events).step, .prompt(2), "the third redo was refused")
     }
 
     // MARK: voiceprint
