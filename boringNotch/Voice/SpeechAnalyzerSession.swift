@@ -114,15 +114,13 @@ final class SpeechAnalyzerSession: VoiceSession {
     private var analyzer: SpeechAnalyzer?
     private var continuation: AsyncStream<AnalyzerInput>.Continuation?
     private var resultsTask: Task<Void, Never>?
-    /// Each final segment with its span and, when scored, its speaker embedding (#17 U2b).
-    private var finals: [LabelledSegment] = []
+    /// The finals with their spans and speaker embeddings, and the volatile tail, as the results loop builds them (#17 U2b).
+    private var transcript = TakeTranscript()
     /// The voiceprint, read once at start. Empty until enrolment.
     private var voiceprint: [Float] = []
     /// The take's speaker mode, read at key release, and the labelling it produced for the paste and the WAV.
     private var mode: SpeakerMode = .onlyMe
     private var labelled: [LabelledSegment] = []
-    /// The volatile tail embedded once at key release, kept for `finish`.
-    private var tail: LabelledSegment?
     /// The node the tap sits on: the Voice Isolation effect when it was built, else the input.
     private var tapNode: AVAudioNode?
     /// Measures what the mic delivers. Read by the manager's verdict and by the take report.
@@ -132,9 +130,6 @@ final class SpeechAnalyzerSession: VoiceSession {
     private var partialCount = 0
     private var finalizeMs = -1
     private var finalized = false
-    /// The transcriber's latest unconfirmed text and its span. Used only if finalize does not finish in time.
-    private var lastVolatile = ""
-    private var lastVolatileRange: (start: Double, end: Double)?
     private var configObserver: NSObjectProtocol?
     /// The take's audio as 16 kHz PCM, for the cloud transcript.
     private let audio = TakeAudioBuffer()
@@ -296,6 +291,7 @@ final class SpeechAnalyzerSession: VoiceSession {
         self.analyzer = analyzer
         self.continuation = continuation
 
+        await FluidSpeakerEmbedder.shared.beginTake()
         resultsTask = Task { [weak self] in
             do {
                 for try await result in transcriber.results {
@@ -303,14 +299,12 @@ final class SpeechAnalyzerSession: VoiceSession {
                     let span = spanSeconds(result.range, total: takeAudio.seconds)
                     if result.isFinal {
                         guard let self else { continue }
-                        self.lastVolatile = ""
-                        self.lastVolatileRange = nil
+                        // The text is kept before the embedding is awaited, so the final is never in neither place.
+                        let index = self.transcript.land(text: text, start: span.start, end: span.end)
                         let embedding = await self.embedding(for: span)
-                        self.finals.append(LabelledSegment(
-                            text: text, start: span.start, end: span.end, embedding: embedding, label: .unknown))
+                        self.transcript.setEmbedding(embedding, at: index)
                     } else {
-                        self?.lastVolatile = text
-                        self?.lastVolatileRange = span
+                        self?.transcript.setVolatile(text: text, start: span.start, end: span.end)
                         self?.partialCount += 1
                         if self?.firstPartialAt == nil { self?.firstPartialAt = ProcessInfo.processInfo.systemUptime }
                         onPartial(text)
@@ -358,10 +352,16 @@ final class SpeechAnalyzerSession: VoiceSession {
 
     /// The speaker embedding of one span, or nil when nothing needs scoring: no voiceprint and no labelled mode
     /// (then the helper is never asked, so an idle or unenrolled app wakes nothing), or the helper cannot answer.
-    /// A nil segment keeps its place in the labelling and is kept in every mode.
+    /// A nil segment inherits a neighbour's label, as a short one does (SpeakerLabeller), so it is kept where that
+    /// neighbour is kept. It is kept in every mode only when the take has no labelled neighbour at all.
     private func embedding(for span: (start: Double, end: Double)) async -> [Float]? {
-        guard !voiceprint.isEmpty || Defaults[.dictationSpeakerMode] == .everyoneLabelled else { return nil }
+        guard scoresSpeakers else { return nil }
         return try? await FluidSpeakerEmbedder.shared.segmentEmbedding(audio.samples(from: span.start, to: span.end))
+    }
+
+    /// Whether this take asks the helper for embeddings: a voiceprint, or the labelled mode.
+    private var scoresSpeakers: Bool {
+        !voiceprint.isEmpty || Defaults[.dictationSpeakerMode] == .everyoneLabelled
     }
 
     /// Labels the take's segments for the mode. Without a voiceprint, only the labelled mode labels; the other two
@@ -390,9 +390,10 @@ final class SpeechAnalyzerSession: VoiceSession {
             // finalized, so the unconfirmed volatile tail is kept instead of dropped.
             let drained = await TimeoutRace.run(seconds: 0.5) { await resultsTask.value }
             if drained == nil { finalized = false }
+            // Nothing from this take may reach the helper after the release below.
+            resultsTask.cancel()
         }
-        let segments = finals + (finalized ? [] : tail.map { [$0] } ?? [])
-        labelled = labelTake(segments)
+        labelled = labelTake(transcript.segments(finalized: finalized))
         await FluidSpeakerEmbedder.shared.release()
         return [SpeakerLabeller.pasteText(labelled, mode: mode)]
     }
@@ -409,13 +410,16 @@ final class SpeechAnalyzerSession: VoiceSession {
             try? await Task.sleep(for: .seconds(5))
             return ProcessMeter.residentMB() - baseline
         }
-        tail = nil
-        if !lastVolatile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let span = lastVolatileRange ?? (0, audio.seconds)
-            let embedding = await embedding(for: span)
-            tail = LabelledSegment(text: lastVolatile, start: span.start, end: span.end, embedding: embedding, label: .unknown)
+        // The transcript as it stands at release. It is captured before the tail's bounded wait, so a final that lands
+        // during the wait is neither lost nor pasted twice, and the tail is the volatile of this moment (#17 U2b).
+        if let tail = transcript.release(), scoresSpeakers {
+            let samples = audio.samples(from: tail.start, to: tail.end)
+            let embedding = await TakeTranscript.boundedEmbedding(seconds: 0.3) {
+                try? await FluidSpeakerEmbedder.shared.segmentEmbedding(samples)
+            }
+            transcript.setTailEmbedding(embedding)
         }
-        labelled = labelTake(finals + (tail.map { [$0] } ?? []))
+        labelled = labelTake(transcript.releasePaste)
         return [SpeakerLabeller.pasteText(labelled, mode: mode)]
     }
 
@@ -431,8 +435,10 @@ final class SpeechAnalyzerSession: VoiceSession {
         }
         if let resultsTask {
             _ = await TimeoutRace.run(seconds: 0.5) { await resultsTask.value }
+            // Nothing from this take may reach the helper after the release below.
+            resultsTask.cancel()
         }
-        finals.removeAll()
+        transcript = TakeTranscript()
         labelled = []
         await FluidSpeakerEmbedder.shared.release()
     }
@@ -441,11 +447,11 @@ final class SpeechAnalyzerSession: VoiceSession {
     func fill(_ report: inout TakeReport) {
         report.tapChannels = tapChannels
         report.tapSampleRate = tapSampleRate
-        report.finals = finals.count
+        report.finals = transcript.finals.count
         report.partials = partialCount
         report.finalizeMs = finalizeMs
         report.voiceProcessing = voiceProcessing
-        report.volatileTail = !finalized && !lastVolatile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        report.volatileTail = !finalized && transcript.hasVolatile
         if let engineStartedAt, let firstPartialAt {
             report.firstPartialMs = Int((firstPartialAt - engineStartedAt) * 1000)
         }

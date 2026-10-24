@@ -845,9 +845,29 @@ extension BoringNotchXPCHelper {
 
 // MARK: - Speaker embedding (#17 U2b)
 
+/// Runs the helper's speaker work one job at a time, in the order the XPC calls arrived (#17 U2b). Each job is
+/// chained behind the one before it, and the chain is extended synchronously at the XPC entry. So a release that
+/// follows an embed always runs after it: nothing can load the model in between, and two loads never overlap.
+final class SpeakerJobQueue: @unchecked Sendable {
+    static let shared = SpeakerJobQueue()
+
+    private let lock = NSLock()
+    private var last: Task<Void, Never>?
+
+    func enqueue(_ job: @escaping @Sendable () async -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        let previous = last
+        last = Task {
+            await previous?.value
+            await job()
+        }
+    }
+}
+
 /// The one speaker model this helper holds. Loaded by the first embedding of a take and dropped when the app
 /// sends `releaseSpeakerModel` at the take's end, so the helper's memory is a take's worth and nothing when idle.
-/// The actor serialises loads, embeddings and the release.
+/// `SpeakerJobQueue` runs its calls one at a time.
 actor SpeakerModelHolder {
     static let shared = SpeakerModelHolder()
 
@@ -896,14 +916,15 @@ extension BoringNotchXPCHelper {
 
     @objc func speakerEmbedding(_ samples: Data, with reply: @escaping (Data?) -> Void) {
         // The audio is held in memory for this one call and never written anywhere.
-        guard let window = Self.floats(from: samples), !window.isEmpty else {
+        guard let window = Self.floats(from: samples), !window.isEmpty, window.allSatisfy({ $0.isFinite }) else {
             reply(nil)
             return
         }
-        Task {
+        SpeakerJobQueue.shared.enqueue {
             do {
                 let embedding = try await SpeakerModelHolder.shared.embed(window)
-                reply(Self.bytes(of: embedding))
+                // A non-finite embedding is no answer: the app keeps the segment rather than score it.
+                reply(embedding.allSatisfy({ $0.isFinite }) ? Self.bytes(of: embedding) : nil)
             } catch {
                 reply(nil)
             }
@@ -911,6 +932,6 @@ extension BoringNotchXPCHelper {
     }
 
     @objc func releaseSpeakerModel() {
-        Task { await SpeakerModelHolder.shared.release() }
+        SpeakerJobQueue.shared.enqueue { await SpeakerModelHolder.shared.release() }
     }
 }

@@ -26,9 +26,12 @@ enum SpeakerWire {
         }
     }
 
-    /// One embedding: exactly `embeddingCount` floats, otherwise nil.
+    /// One embedding: exactly `embeddingCount` finite floats, otherwise nil. A NaN or infinite reply is no embedding,
+    /// so its segment is kept rather than scored as "not Me" (#17 U2b).
     static func embedding(from data: Data?) -> [Float]? {
-        guard let values = floats(from: data), values.count == embeddingCount else { return nil }
+        guard let values = floats(from: data), values.count == embeddingCount, values.allSatisfy(\.isFinite) else {
+            return nil
+        }
         return values
     }
 }
@@ -37,13 +40,23 @@ enum SpeakerWire {
 /// only a take that embedded releases the helper's model, so an idle app never wakes the helper to release.
 struct SpeakerModelLease {
     private var used = false
+    /// True from `begin` until `endTake`. A window that arrives after the take ended finds the lease closed and never
+    /// reaches the helper, so it cannot reload the model with nothing left to release it (#17 U2b).
+    private(set) var isOpen = false
+
+    mutating func begin() {
+        isOpen = true
+        used = false
+    }
 
     mutating func noteEmbedding() {
         used = true
     }
 
-    /// True when the helper must be told to release. Resets, so a second end of the same take returns false.
+    /// True when the helper must be told to release. Closes the take and resets, so a second end of the same take
+    /// returns false.
     mutating func endTake() -> Bool {
+        isOpen = false
         defer { used = false }
         return used
     }

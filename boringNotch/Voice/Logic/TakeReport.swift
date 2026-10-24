@@ -83,7 +83,8 @@ struct TakeReport {
     /// #17 U2b: the voiced level of the take's first 8 s (dBFS, nil until a take sets it), and the resident-memory
     /// change 5 s after the take's embedder release (MB, -1 when no release happened).
     var level: Float? = nil
-    var rssIdleMB = -1
+    /// nil until the idle sample lands, so an unset value never prints as a measurement.
+    var rssIdleMB: Int? = nil
 
     /// Copies what the mic meter measured.
     mutating func record(meter: MicLevelMeter) {
@@ -149,7 +150,7 @@ struct TakeReport {
             "cloud=\(cloud ? 1 : 0)",
             "key=\(hasKey ? 1 : 0)",
             "vp=\(voiceProcessing ? 1 : 0)",
-            "level=\(level.map { String(format: "%.1f", $0) } ?? "none")",
+            "level=\(level.flatMap { $0.isFinite ? String(format: "%.1f", $0) : nil } ?? "none")",
             "gate=\(speakerGate ? "on" : "off")",
             "dropped=\(speakerDropped)",
             "vi=\(voiceIsolation ? "on" : "off")",
@@ -166,7 +167,7 @@ struct TakeReport {
             "rss=\(rssDeltaMB >= 0 ? "+" : "")\(rssDeltaMB)MB",
             "iso=\(voiceIsolation ? "on" : "off")",
             "duck=\(ducking.rawValue)",
-            "idle=\(rssIdleMB >= 0 ? "+" : "")\(rssIdleMB)",
+            "idle=\(rssIdleMB.map { ($0 >= 0 ? "+" : "") + String($0) } ?? "none")",
         ]
     }
 }

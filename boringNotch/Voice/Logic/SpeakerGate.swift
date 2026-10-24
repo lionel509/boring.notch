@@ -140,10 +140,12 @@ public struct SpeakerGate: Sendable {
     }
 
     /// The async twin of `segmentEmbedding`, for an embedder that lives in another process (#17 U2b). The same
-    /// arithmetic in the same order: normalise, window, tile, embed each window, centroid.
+    /// arithmetic in the same order: normalise, window, tile, embed each window, centroid. A cancelled span stops
+    /// before its next window, so no window reaches the helper after the take has been cancelled (#17 U2b).
     public static func segmentEmbedding(_ samples: [Float], embed: ([Float]) async throws -> [Float]) async throws -> [Float]? {
         var embeddings: [[Float]] = []
         for window in windows(normalise(samples)) {
+            try Task.checkCancellation()
             let embedding = try await embed(tile(window, to: tiledSamples))
             if !embedding.isEmpty { embeddings.append(embedding) }
         }
