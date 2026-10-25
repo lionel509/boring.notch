@@ -2,7 +2,7 @@
 //  VoiceDictationManager.swift
 //  boringNotch
 //
-//  Push-to-talk dictation: hold the shortcut, speak, let go. The notch shows the
+//  Push-to-talk dictation: hold fn, speak, let go. The notch shows the
 //  state. Apple's on-device transcript is pasted into the focused app at once; with
 //  cloud on, the cloud transcript and a cleanup pass then rewrite that text in place.
 //  Audio and transcript text leave the Mac only through OpenRouterClient, and only
@@ -101,14 +101,6 @@ final class VoiceDictationManager: ObservableObject {
     }
 
     // MARK: - Hotkey
-
-    func hotkeyDown() {
-        handle(.keyDown)
-    }
-
-    func hotkeyUp() {
-        handle(.keyUp)
-    }
 
     /// Entry point for the fn-key tap (`FnKeyMonitor`). Named apart from the `hotkey` state property.
     /// `time` is the event's own time, so a late dispatch does not change how long the key was held.

@@ -1817,7 +1817,7 @@ struct Shortcuts: View {
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 case .denied:
-                    Text("fn needs Accessibility permission. The shortcut below still works.")
+                    Text("fn needs Accessibility permission. Dictation can't start until you allow it.")
                         .foregroundStyle(.secondary)
                         .font(.caption)
                     Button("Allow") {
@@ -1832,15 +1832,16 @@ struct Shortcuts: View {
                         }
                     }
                 case .off:
-                    EmptyView()
+                    Text("Dictation is off. Turn on \"Hold fn to dictate\" to use it; fn is the only trigger.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
                 }
                 micNote
-                KeyboardShortcuts.Recorder("Or hold this shortcut:", name: .dictate)
             } header: {
                 Text("Voice")
             } footer: {
                 Text(
-                    "Hold fn (or the shortcut) to talk, let go to type what you said into the app you are in. fn+Space, or a quick tap of the shortcut, keeps listening until you press again. Releases shorter than half a second are ignored. If fn also opens emoji or switches input language, set System Settings > Keyboard > \"Press Globe key to\" to \"Do Nothing\", and change the Dictation shortcut if it is \"Press Globe twice\". Keyboards without an Apple fn key use the shortcut. With cloud on, audio goes to OpenRouter; see Cloud and cleanup below."
+                    "Hold fn (Globe) to talk, let go to type what you said into the app you are in. Needs a keyboard with an Apple fn key. fn+Space keeps listening until you press again. Releases shorter than half a second are ignored. If fn also opens emoji or switches input language, set System Settings > Keyboard > \"Press Globe key to\" to \"Do Nothing\", and change the Dictation shortcut if it is \"Press Globe twice\". With cloud on, audio goes to OpenRouter; see Cloud and cleanup below."
                 )
                 .multilineTextAlignment(.trailing)
                 .foregroundStyle(.secondary)
