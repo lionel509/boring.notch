@@ -14,6 +14,19 @@ final class FnOnlyTriggerTests: XCTestCase {
         }
     }
 
+    func testFnOffStateSaysDictationIsOff() throws {
+        // Review 5642157391 finding 2: with "Hold fn to dictate" off, the Voice section must say so, not render nothing.
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settings = try String(contentsOf: root.appendingPathComponent("boringNotch/components/Settings/SettingsView.swift"), encoding: .utf8)
+        let parts = settings.components(separatedBy: "case .off:")
+        XCTAssertEqual(parts.count, 2, "expected exactly one `case .off:` in SettingsView.swift")
+        let body = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertFalse(body.hasPrefix("EmptyView()"), "the .off state renders nothing; it must say dictation is off and fn is the only trigger")
+    }
+
     private func appSources() throws -> [URL] {
         // #filePath: <root>/Tests/VoiceDictationLogicTests/FnOnlyTriggerTests.swift
         let root = URL(fileURLWithPath: #filePath)
