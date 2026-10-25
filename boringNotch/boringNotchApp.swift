@@ -539,17 +539,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Push-to-talk dictation. Deliberately outside the showDictationActivity gate
-        // (see the warning comment in the mic-watcher startup above).
-        Task { @MainActor in
-            for await event in KeyboardShortcuts.events(for: .dictate) {
-                switch event {
-                case .keyDown: VoiceDictationManager.shared.hotkeyDown()
-                case .keyUp: VoiceDictationManager.shared.hotkeyUp()
-                }
-            }
-        }
-
         // Hold-fn dictation. start() is idempotent, so the initial emit of updates() is harmless.
         Task { @MainActor in
             if Defaults[.dictateWithFn] { FnKeyMonitor.shared.start() }

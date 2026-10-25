@@ -102,14 +102,6 @@ final class VoiceDictationManager: ObservableObject {
 
     // MARK: - Hotkey
 
-    func hotkeyDown() {
-        handle(.keyDown)
-    }
-
-    func hotkeyUp() {
-        handle(.keyUp)
-    }
-
     /// Entry point for the fn-key tap (`FnKeyMonitor`). Named apart from the `hotkey` state property.
     /// `time` is the event's own time, so a late dispatch does not change how long the key was held.
     func fnKey(_ event: DictationHotkeyLogic.Event, at time: TimeInterval) {
