@@ -63,7 +63,7 @@ final class GhostTextPolicyTests: XCTestCase {
         let texts: [String?] = [nil, "", "hi", "Hello world", String(repeating: "abcdefghij", count: 300)]
         var allowedRuns = 0
         var forbiddenRuns = 0
-        for _ in 0..<2000 {
+        for _ in 0..<10000 {
             var s = GhostTextSnapshot()
             s.bundleID = bundles.randomElement(using: &rng)!
             s.appName = "App\(Int.random(in: 0..<9, using: &rng))"
