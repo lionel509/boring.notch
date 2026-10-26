@@ -69,6 +69,10 @@ enum FocusedTextReader {
         let caretEnd = selection.location + selection.length
         let before = ns.substring(to: min(max(caretEnd, 0), ns.length))
         dict["textBeforeCaret"] = tail(before, units: maxContextUnits)
+        // Only whether the caret sits at the end of the field is sent. The text after it never leaves this process.
+        dict["caretLocation"] = caretEnd
+        let after = ns.substring(from: min(max(caretEnd, 0), ns.length))
+        dict["caretAtEnd"] = after.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         if let rect = caretRect(focused, caretEnd: caretEnd) {
             dict["caretX"] = Double(rect.origin.x)
@@ -76,19 +80,40 @@ enum FocusedTextReader {
             dict["caretWidth"] = Double(rect.width)
             dict["caretHeight"] = Double(rect.height)
         }
+        if let frame = fieldFrame(focused) {
+            dict["fieldX"] = Double(frame.origin.x)
+            dict["fieldY"] = Double(frame.origin.y)
+            dict["fieldWidth"] = Double(frame.width)
+            dict["fieldHeight"] = Double(frame.height)
+        }
         return encode(dict)
     }
 
-    /// Bounds of the caret. Falls back to the character before it (x = its right edge, width 0)
-    /// when the zero-length range has no geometry.
+    /// Bounds of the caret. Uses the character before it first (x = its right edge, width 0), because some
+    /// apps answer a zero-length range with a line-start rect. The zero-length range is only used at location 0.
     private static func caretRect(_ element: AXUIElement, caretEnd: Int) -> CGRect? {
-        if let rect = bounds(element, location: caretEnd, length: 0), rect.height > 0 {
+        if caretEnd > 0 {
+            guard let prev = bounds(element, location: caretEnd - 1, length: 1), prev.height > 0
+            else { return nil }
+            return CGRect(x: prev.maxX, y: prev.origin.y, width: 0, height: prev.height)
+        }
+        if let rect = bounds(element, location: 0, length: 0), rect.height > 0 {
             return rect
         }
-        guard caretEnd > 0,
-              let prev = bounds(element, location: caretEnd - 1, length: 1), prev.height > 0
+        return nil
+    }
+
+    /// Position and size of the whole field in AX coordinates.
+    private static func fieldFrame(_ element: AXUIElement) -> CGRect? {
+        guard let posRef = copy(element, kAXPositionAttribute as String), CFGetTypeID(posRef) == AXValueGetTypeID(),
+              let sizeRef = copy(element, kAXSizeAttribute as String), CFGetTypeID(sizeRef) == AXValueGetTypeID()
         else { return nil }
-        return CGRect(x: prev.maxX, y: prev.origin.y, width: 0, height: prev.height)
+        var point = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(posRef as! AXValue, .cgPoint, &point),
+              AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
+        else { return nil }
+        return CGRect(origin: point, size: size)
     }
 
     private static func bounds(_ element: AXUIElement, location: Int, length: Int) -> CGRect? {

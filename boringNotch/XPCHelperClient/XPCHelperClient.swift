@@ -257,6 +257,20 @@ final class XPCHelperClient: NSObject {
         }
     }
     
+    /// Inserts ghost text at the caret. Codes are the helper's (0 inserted, 2 set failed, 3 unverified,
+    /// 4 no focus, 5 refused, 6 not trusted, 7 typed fallback). -1 when the XPC call fails.
+    nonisolated func ghostInsert(location: Int, text: String) async -> Int {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let code: Int = try await service.withContinuation { service, continuation in
+                service.ghostInsert(location, text) { code in continuation.resume(returning: code) }
+            }
+            return code
+        } catch {
+            return -1
+        }
+    }
+
     /// The focused text field as JSON, or nil when unavailable. A secure field is never read.
     nonisolated func focusedTextSnapshotJSON() async -> String? {
         do {
