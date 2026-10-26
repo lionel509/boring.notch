@@ -23,6 +23,7 @@ struct ContentView: View {
     @ObservedObject var musicManager = MusicManager.shared
     @ObservedObject var dictationManager = DictationManager.shared
     @ObservedObject var voiceDictation = VoiceDictationManager.shared
+    @ObservedObject var ghostText = GhostTextManager.shared
     @ObservedObject var batteryModel = BatteryStatusViewModel.shared
     @ObservedObject var brightnessManager = BrightnessManager.shared
     @ObservedObject var volumeManager = VolumeManager.shared
@@ -412,6 +413,10 @@ struct ContentView: View {
                       } else if vm.notchState == .closed && voiceDictation.state != .idle && !vm.hideOnClosed {
                           // Momentary states only, so ranking above music is right.
                           VoiceDictationLiveActivity()
+                              .transition(.opacity)
+                      } else if vm.notchState == .closed && ghostText.notchSuggestion != nil && !vm.hideOnClosed {
+                          // Shown only when the caret could not be found. Dictation above wins when both are up.
+                          GhostTextLiveActivity()
                               .transition(.opacity)
                       } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music) && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle) && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed {
                           MusicLiveActivity()

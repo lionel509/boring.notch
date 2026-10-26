@@ -1777,6 +1777,7 @@ struct AccentCircleButton: View {
 
 struct Shortcuts: View {
     @ObservedObject var fnMonitor = FnKeyMonitor.shared
+    @ObservedObject var ghost = GhostTextManager.shared
     @Default(.dictationMicSilent) var dictationMicSilent
 
     var body: some View {
@@ -1846,6 +1847,32 @@ struct Shortcuts: View {
                 if Defaults[.dictateWithFn] && fnMonitor.mode != .active {
                     fnMonitor.restart()
                 }
+            }
+            Section {
+                Defaults.Toggle(key: .ghostText) {
+                    Text("Suggest text while typing (on-device)")
+                }
+                switch ghost.mode {
+                case .off:
+                    EmptyView()
+                case .active:
+                    Text("Pause for 2 s and a gray suggestion appears. Shift-Tab types it, Esc hides it.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                case .denied:
+                    Text("Allow Accessibility for boringNotch in System Settings, then come back.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                case .unavailable:
+                    Text("Needs macOS 26 with Apple Intelligence turned on.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+                Text("Model calls this session: \(ghost.callsThisSession)")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            } header: {
+                Text("Ghost text")
             }
         }
         .accentColor(.effectiveAccent)
