@@ -49,4 +49,24 @@ final class GhostTextPromptTests: XCTestCase {
     func testCleanKeepsFirstLineOnly() {
         XCTAssertEqual(GhostTextPrompt.clean("first line\nsecond"), "first line")
     }
+
+    func testJoinAddsOneSpaceAfterWord() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "I am going to", suggestion: "the store"), " the store")
+    }
+
+    func testJoinKeepsExistingSpace() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "I am going to ", suggestion: "the store"), "the store")
+    }
+
+    func testJoinNoSpaceBeforePunctuation() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "Hello", suggestion: ", world"), ", world")
+    }
+
+    func testJoinNoSpaceInCJK() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "我们明天", suggestion: "去吃饭"), "去吃饭")
+    }
+
+    func testJoinEmptyContextIsSuggestion() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "", suggestion: "hi"), "hi")
+    }
 }
