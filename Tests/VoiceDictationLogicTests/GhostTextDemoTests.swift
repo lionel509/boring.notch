@@ -30,7 +30,7 @@ final class GhostTextDemoTests: XCTestCase {
 
     func testPrintDemo() {
         let cases: [(String, String, Int, String, UInt64, Bool)] = [
-            ("Option+Tab, overlay visible", "Hello |wor", 6, "ld", L.optionMask, true),
+            ("Option+Tab, overlay visible", "Hello wor ", 9, "ld", L.optionMask, true),
             ("Option+Tab, no overlay", "Hello wor", 9, "ld", L.optionMask, false),
             ("Tab, overlay visible", "Hello wor", 9, "ld", 0, true),
             ("Shift+Tab, overlay visible", "Hello wor", 9, "ld", L.shiftMask, true),
