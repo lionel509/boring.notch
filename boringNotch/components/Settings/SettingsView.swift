@@ -1861,7 +1861,7 @@ struct Shortcuts: View {
                 case .off:
                     EmptyView()
                 case .active:
-                    Text("Pause for 2 s and a gray suggestion appears. Shift-Tab types it, Esc hides it.")
+                    Text("Pause for 2 s and a gray suggestion appears. Option-Tab types it, Esc hides it.")
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 case .denied:

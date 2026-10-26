@@ -8,9 +8,9 @@ import ApplicationServices
 import Defaults
 import SwiftUI
 
-/// Owns the key and mouse tap for ghost text. Decisions live in `GhostTextLogic`; this class
-/// creates the tap, runs the pause timer and the helper and model calls, and carries out effects.
-/// Nothing here logs. Counters go to Defaults.
+/// Owns the key and mouse tap for ghost text. Decisions live in `GhostTextLogic` and `GhostTextGeometry`;
+/// this class creates the tap, runs the pause timer and the helper and model calls, and carries out effects.
+/// Counting and logging go through `GhostTextLog`.
 @MainActor
 final class GhostTextManager: ObservableObject {
     static let shared = GhostTextManager()
@@ -23,9 +23,6 @@ final class GhostTextManager: ObservableObject {
     }
 
     @Published private(set) var mode: Mode = .off
-    /// Non-nil only while the notch fallback is showing a suggestion.
-    @Published private(set) var notchSuggestion: String? = nil
-    @Published private(set) var callsThisSession = 0
 
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
@@ -33,9 +30,10 @@ final class GhostTextManager: ObservableObject {
     private var machine = GhostTextLogic.Machine()
     private var timerTask: Task<Void, Never>?
     private var fetchTask: Task<Void, Never>?
-    private var lastContext: String?
+    /// Where the current suggestion goes. Set just before the suggestion is handed to the machine.
+    private var anchor: GhostTextLogic.Anchor?
     private var pendingCaret: CGRect?
-    private var clipboard = ClipboardKeeper()
+    private var pendingField: CGRect?
 
     private init() {}
 
@@ -50,8 +48,8 @@ final class GhostTextManager: ObservableObject {
             | (1 << CGEventType.rightMouseDown.rawValue)
         let userInfo = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
 
-        // Default tap only: a listen-only tap cannot swallow Shift+Tab, so focus would move and
-        // the paste would land in the wrong field. No fallback on purpose.
+        // Default tap only: a passive tap cannot swallow the accept key, so focus would move and
+        // the insert would land in the wrong field. No fallback on purpose.
         guard let created = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -110,31 +108,34 @@ final class GhostTextManager: ObservableObject {
     fileprivate func handleTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
+            // Keys typed while the tap was off were never seen, so the state must reset too.
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            handle(.tapReset)
             return Unmanaged.passUnretained(event)
         case .leftMouseDown, .rightMouseDown:
             handle(.focusChanged)
             return Unmanaged.passUnretained(event)
         case .keyDown:
-            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-            let effects = handle(.key(Self.classify(keyCode: keyCode, flags: event.flags)))
+            let effects = handle(.key(Self.keyEvent(from: event)))
             return effects.contains(.swallow) ? nil : Unmanaged.passUnretained(event)
         default:
             return Unmanaged.passUnretained(event)
         }
     }
 
-    private static func classify(keyCode: Int64, flags: CGEventFlags) -> GhostTextLogic.Key {
-        if keyCode == 48,
-           flags.contains(.maskShift),
-           !flags.contains(.maskCommand),
-           !flags.contains(.maskControl),
-           !flags.contains(.maskAlternate) {
-            return .shiftTab
-        }
-        if keyCode == 53 { return .escape }
-        if flags.contains(.maskCommand) { return .command }
-        return .other
+    /// Reads the raw event into the plain value `GhostTextLogic.decide` classifies. No modifier test happens here.
+    private static func keyEvent(from event: CGEvent) -> GhostTextLogic.KeyEvent {
+        var buffer = [UniChar](repeating: 0, count: 4)
+        var length = 0
+        event.keyboardGetUnicodeString(maxStringLength: buffer.count, actualStringLength: &length, unicodeString: &buffer)
+        return GhostTextLogic.KeyEvent(
+            keyCode: Int(event.getIntegerValueField(.keyboardEventKeycode)),
+            flags: event.flags.rawValue,
+            isKeyDown: event.type == .keyDown,
+            isAutorepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0,
+            isSynthetic: DictationEvents.isSynthesized(event.getIntegerValueField(.eventSourceUserData)),
+            characters: String(utf16CodeUnits: buffer, count: min(length, buffer.count))
+        )
     }
 
     // MARK: - State machine
@@ -158,22 +159,18 @@ final class GhostTextManager: ObservableObject {
         case .cancelTimer:
             timerTask?.cancel()
             fetchTask?.cancel()
+        case .cancelFetch:
+            fetchTask?.cancel()
         case .fetch(let gen):
             fetchTask?.cancel()
             fetchTask = Task { @MainActor [weak self] in
                 await self?.fetch(gen: gen)
             }
         case .show(let text):
-            if let caret = pendingCaret {
-                GhostTextOverlay.shared.show(text, axCaret: caret)
-                notchSuggestion = nil
-            } else {
-                GhostTextOverlay.shared.hide()
-                notchSuggestion = text
-            }
-        case .hide:
+            showOverlay(text)
+        case .hide(let reason):
             GhostTextOverlay.shared.hide()
-            notchSuggestion = nil
+            if reason == .dismissed { GhostTextLog.record(.dismissed) }
         case .accept(let text):
             Task { @MainActor [weak self] in
                 await self?.insert(text)
@@ -186,16 +183,19 @@ final class GhostTextManager: ObservableObject {
     private func fetch(gen: Int) async {
         let json = await XPCHelperClient.shared.focusedTextSnapshotJSON()
         guard let snapshot = json.flatMap(GhostTextSnapshot.decode),
+              GhostTextPolicy.shouldRequest(snapshot),
+              let caret = snapshot.caretRect,
+              let field = snapshot.fieldRect,
+              GhostTextGeometry.hasRoom(caret: caret, field: field),
               let prompt = GhostTextPrompt.build(snapshot),
-              snapshot.textBeforeCaret != lastContext else {
-            lastContext = nil
+              let location = snapshot.caretLocation else {
+            GhostTextLog.record(.dropped)
             handle(.snapshotFailed(gen: gen))
             return
         }
-        lastContext = snapshot.textBeforeCaret
-        pendingCaret = caretRect(snapshot)
-        callsThisSession += 1
+        let before = snapshot.textBeforeCaret ?? ""
         Defaults[.ghostTextCalls] += 1
+        GhostTextLog.record(.call)
 
         var raw: String? = nil
         if #available(macOS 26.0, *) {
@@ -203,44 +203,62 @@ final class GhostTextManager: ObservableObject {
         }
         guard !Task.isCancelled else { return }
         let suggestion = GhostTextPrompt.clean(raw).map {
-            GhostTextPrompt.join(context: snapshot.textBeforeCaret ?? "", suggestion: $0)
+            GhostTextPrompt.join(context: before, suggestion: $0)
         }
+        anchor = GhostTextLogic.Anchor(
+            bundleID: snapshot.bundleID,
+            caretLocation: location,
+            contextTail: String(before.suffix(64))
+        )
+        pendingCaret = caret
+        pendingField = field
         handle(.suggestion(suggestion, gen: gen))
     }
 
-    private func caretRect(_ s: GhostTextSnapshot) -> CGRect? {
-        guard s.hasCaret, let x = s.caretX, let y = s.caretY,
-              let w = s.caretWidth, let h = s.caretHeight else { return nil }
-        return CGRect(x: x, y: y, width: w, height: h)
+    /// Shows the suggestion only where it can sit beside the caret. No room means no overlay, and the
+    /// machine is told so it never stays in the showing state with nothing on screen.
+    private func showOverlay(_ text: String) {
+        guard let caret = pendingCaret, let field = pendingField else {
+            handle(.focusChanged)
+            return
+        }
+        let fontSize = GhostTextGeometry.fontSize(caretHeight: caret.height)
+        let measure = NSTextField(labelWithString: text)
+        measure.font = .systemFont(ofSize: fontSize)
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        guard let frame = GhostTextGeometry.overlayFrame(
+            caret: caret,
+            field: field,
+            textSize: measure.intrinsicContentSize,
+            primaryHeight: primaryHeight
+        ) else {
+            handle(.focusChanged)
+            return
+        }
+        GhostTextOverlay.shared.show(text, frame: frame, fontSize: fontSize)
+        GhostTextLog.record(.shown)
     }
 
     // MARK: - Accept
 
-    /// Same primitives as dictation: a changeCount-guarded clipboard write, then Cmd-V.
+    /// Re-reads the field, checks it still matches the anchor, then asks the helper for an insert at the caret.
+    /// Results 0, 3 and 7 add text, so they count as accepted; anything else is dropped.
     private func insert(_ text: String) async {
-        let pasteboard = NSPasteboard.general
-        guard await XPCHelperClient.shared.ensureAccessibilityAuthorization(promptIfNeeded: false) else { return }
-        let change = clipboard.write(text, to: pasteboard)
-        await waitForModifiersReleased(timeout: 1.0)
-        guard pasteboard.changeCount == change else {
-            clipboard.release(change)
+        guard let anchor else {
+            GhostTextLog.record(.dropped)
             return
         }
-        let posted = await XPCHelperClient.shared.postPasteKeystroke(keyCode: PasteKeycode.currentV())
-        guard posted else {
-            clipboard.release(change)
+        let now = (await XPCHelperClient.shared.focusedTextSnapshotJSON()).flatMap(GhostTextSnapshot.decode)
+        guard let now, GhostTextLogic.insertAllowed(anchor: anchor, now: now) else {
+            GhostTextLog.record(.dropped)
             return
         }
-        try? await Task.sleep(for: .milliseconds(1000))
-        clipboard.restore(to: pasteboard, ifChangeCountIs: change)
-    }
-
-    /// Shift is still down from the Shift+Tab itself, so wait for the modifiers to clear before Cmd-V.
-    private func waitForModifiersReleased(timeout: TimeInterval) async {
-        let watched: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
-        let deadline = Date().addingTimeInterval(timeout)
-        while !NSEvent.modifierFlags.intersection(watched).isEmpty, Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(10))
+        let result = await XPCHelperClient.shared.ghostInsert(location: anchor.caretLocation, text: text)
+        // 0 inserted, 3 unverified (may have landed, so never retried), 7 typed fallback.
+        if [0, 3, 7].contains(result) {
+            GhostTextLog.record(.accepted)
+        } else {
+            GhostTextLog.record(.dropped)
         }
     }
 }
