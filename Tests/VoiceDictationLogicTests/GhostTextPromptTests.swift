@@ -94,4 +94,17 @@ final class GhostTextPromptTests: XCTestCase {
     func testJoinSentenceStartKeepsSpace() {
         XCTAssertEqual(GhostTextPrompt.join(context: "Hello.", suggestion: "How"), " How")
     }
+
+    func testJoinSpaceAfterEmojiPercentEllipsis() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "Thanks 😊", suggestion: "See you"), " See you")
+        XCTAssertEqual(GhostTextPrompt.join(context: "I'm 100%", suggestion: "sure"), " sure")
+        XCTAssertEqual(GhostTextPrompt.join(context: "Wait…", suggestion: "Then"), " Then")
+    }
+
+    func testJoinOpeningQuoteNoSpace() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "He said \"", suggestion: "hello"), "hello")
+        XCTAssertEqual(GhostTextPrompt.join(context: "costs $", suggestion: "100"), "100")
+        XCTAssertEqual(GhostTextPrompt.join(context: "She said \"Hi\"", suggestion: "and left"), " and left")
+        XCTAssertEqual(GhostTextPrompt.join(context: "it's", suggestion: "fine"), " fine")
+    }
 }

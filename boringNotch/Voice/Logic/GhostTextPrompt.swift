@@ -30,24 +30,23 @@ enum GhostTextPrompt {
         return words.joined(separator: " ")
     }
 
-    /// Joins an accepted suggestion to the text before the caret. Adds one space when the context
-    /// ends in a letter, digit or closing/sentence punctuation and the suggestion starts with a letter
-    /// or digit, unless both sides are from a script with no spaces between words (Han, Kana, CJK and
-    /// fullwidth punctuation, Thai). Hangul is a spaced script, so it gets the space.
+    /// Joins an accepted suggestion to the text before the caret. Adds one space when the suggestion
+    /// starts with a letter or digit, unless the context is empty or ends in whitespace, an opener or
+    /// connector, an opening ASCII quote (preceded by whitespace or nothing), or both sides are from a
+    /// script with no spaces between words (Han, Kana, CJK and fullwidth punctuation, Thai).
     static func join(context: String, suggestion: String) -> String {
         guard let last = context.last, let first = suggestion.first,
-              !last.isWhitespace, endsWordOrSentence(last), first.isLetter || first.isNumber else { return suggestion }
+              !last.isWhitespace, first.isLetter || first.isNumber else { return suggestion }
+        if noSpaceAfter.contains(last) { return suggestion }
+        if last == "\"" || last == "'" {
+            let before = context.dropLast().last
+            if before == nil || before!.isWhitespace { return suggestion }
+        }
         if isUnspaced(last) && isUnspaced(first) { return suggestion }
         return " " + suggestion
     }
 
-    private static let closingPunctuation: Set<Character> = [
-        ".", ",", ";", ":", "!", "?", ")", "]", "}", "\"", "'", "\u{201D}", "\u{2019}",
-    ]
-
-    private static func endsWordOrSentence(_ c: Character) -> Bool {
-        c.isLetter || c.isNumber || closingPunctuation.contains(c)
-    }
+    private static let noSpaceAfter: Set<Character> = Set("/\\@-\u{2013}\u{2014}_([{<#$~\u{201C}\u{2018}\u{AB}\u{BF}\u{A1}")
 
     private static func isUnspaced(_ c: Character) -> Bool {
         guard let v = c.unicodeScalars.first?.value else { return false }
