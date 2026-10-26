@@ -26,7 +26,10 @@ enum GhostInsertCheck {
         let after = ns.substring(from: min(max(expectedLocation, 0), ns.length))
         guard allows(selectionLocation: sel.location, selectionLength: sel.length, expectedLocation: expectedLocation,
                      fieldLength: ns.length, textAfterCaret: after) else { return .refused }
-        guard field.setSelectedText(text) else { return .setFailed }
+        guard field.setSelectedText(text) else {
+            // A failed set may still have written (timeout, write-then-error): never report it as nothing written.
+            return field.string(location: expectedLocation, length: (text as NSString).length) == text ? .inserted : .setFailed
+        }
         return field.string(location: expectedLocation, length: (text as NSString).length) == text ? .inserted : .unverified
     }
 }

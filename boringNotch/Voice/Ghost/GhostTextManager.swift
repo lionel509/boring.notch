@@ -194,6 +194,7 @@ final class GhostTextManager: ObservableObject {
             handle(.snapshotFailed(gen: gen))
             return
         }
+        guard !Task.isCancelled else { return }
         let before = snapshot.textBeforeCaret ?? ""
         Defaults[.ghostTextCalls] += 1
         GhostTextLog.record(.call)

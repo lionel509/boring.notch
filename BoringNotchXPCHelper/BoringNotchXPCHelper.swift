@@ -350,7 +350,10 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         guard AXIsProcessTrusted() else { return reply(6) }
         guard let element = Self.currentFocusedElement() else { return reply(4) }
         let result = GhostInsertCheck.insert(text, at: location, into: AXGhostField(element: element))
-        if result == .setFailed {
+        var settable: DarwinBoolean = true
+        let canSet = AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success && settable.boolValue
+        if result == .setFailed && !canSet {
+            // Only when the attribute is definitively not settable; a settable-but-failed set may have written.
             // Already tagged, flags empty. Never reached after .unverified, which would double-insert.
             Self.typeUnicode(text)
             return reply(7)

@@ -60,8 +60,12 @@ final class GhostTextGeometryTests: XCTestCase {
     func testOverlayFrameStaysBetweenCaretAndFieldEdge() throws {
         let caret = CGRect(x: 120, y: 150, width: 0, height: 20)
         let field = CGRect(x: 100, y: 100, width: 400, height: 200)
+        // Text wider than the room is never clipped: no overlay, so nothing to accept.
+        XCTAssertNil(G.overlayFrame(caret: caret, field: field,
+                                    textSize: CGSize(width: 800, height: 20), primaryHeight: primary))
         let frame = try XCTUnwrap(G.overlayFrame(caret: caret, field: field,
-                                                 textSize: CGSize(width: 800, height: 20), primaryHeight: primary))
+                                                 textSize: CGSize(width: 200, height: 20), primaryHeight: primary))
+        XCTAssertEqual(frame.width, 200)
         XCTAssertGreaterThanOrEqual(frame.minX, caret.maxX)
         XCTAssertLessThanOrEqual(frame.maxX, field.maxX)
     }
@@ -80,7 +84,7 @@ final class GhostTextGeometryTests: XCTestCase {
             let textSize = CGSize(width: 1 + 400 * unit(), height: 8 + 30 * unit())
             guard G.hasRoom(caret: caret, field: field) else { continue }
             guard let frame = G.overlayFrame(caret: caret, field: field, textSize: textSize, primaryHeight: primary) else {
-                XCTFail("hasRoom true but no frame")
+                XCTAssertGreaterThan(textSize.width, field.maxX - caret.maxX - 4, "hasRoom true, text fits, but no frame")
                 continue
             }
             checked += 1

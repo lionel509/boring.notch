@@ -22,9 +22,11 @@ enum GhostTextGeometry {
     static func overlayFrame(caret: CGRect, field: CGRect, textSize: CGSize, primaryHeight: CGFloat) -> CGRect? {
         guard hasRoom(caret: caret, field: field) else { return nil }
         let x = caret.maxX + 2
+        // Never draw less than what accept would insert.
+        guard textSize.width <= field.maxX - x - 2 else { return nil }
         let rect = CGRect(x: x,
                           y: caret.midY - textSize.height / 2,
-                          width: min(textSize.width, field.maxX - x - 2),
+                          width: textSize.width,
                           height: textSize.height)
         return toCocoa(rect, primaryHeight: primaryHeight)
     }
