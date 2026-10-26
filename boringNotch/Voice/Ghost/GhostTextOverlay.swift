@@ -6,6 +6,7 @@
 import AppKit
 
 /// A non-activating, click-through panel that draws the gray suggestion just after the caret.
+/// Placement is decided by `GhostTextGeometry`; this panel only shows the frame it is given.
 @MainActor
 final class GhostTextOverlay {
     static let shared = GhostTextOverlay()
@@ -35,24 +36,14 @@ final class GhostTextOverlay {
         return panel
     }
 
-    /// `axCaret` is in AX screen coordinates: origin at the top-left of the primary display.
-    func show(_ text: String, axCaret: CGRect) {
-        guard let primary = NSScreen.screens.first else { return }
+    /// `frame` is in Cocoa screen coordinates, already fitted to the field by `GhostTextGeometry.overlayFrame`.
+    func show(_ text: String, frame: CGRect, fontSize: CGFloat) {
         let panel = panel ?? makePanel()
         self.panel = panel
 
         label.stringValue = text
-        label.font = .systemFont(ofSize: min(max(axCaret.height * 0.72, 11), 22))
-
-        let cocoaBottom = primary.frame.height - (axCaret.origin.y + axCaret.height)
-        let x = axCaret.maxX + 1
-        let point = CGPoint(x: x, y: cocoaBottom)
-        let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) ?? primary
-        let size = label.intrinsicContentSize
-        let maxWidth = screen.frame.maxX - x - 8
-        let width = min(size.width, maxWidth)
-        let y = cocoaBottom - (size.height - axCaret.height) / 2
-        panel.setFrame(NSRect(x: x, y: y, width: width, height: size.height), display: true)
+        label.font = .systemFont(ofSize: fontSize)
+        panel.setFrame(frame, display: true)
         panel.orderFrontRegardless()
     }
 
