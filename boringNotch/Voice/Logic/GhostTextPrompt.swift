@@ -29,4 +29,20 @@ enum GhostTextPrompt {
         guard !words.isEmpty else { return nil }
         return words.joined(separator: " ")
     }
+
+    /// Joins an accepted suggestion to the text before the caret. Adds one space when the context
+    /// ends in a word and the suggestion starts with a letter or digit, unless both sides are CJK
+    /// (which carry no spaces between words).
+    static func join(context: String, suggestion: String) -> String {
+        guard let last = context.last, let first = suggestion.first,
+              !last.isWhitespace, first.isLetter || first.isNumber else { return suggestion }
+        if isCJK(last) && isCJK(first) { return suggestion }
+        return " " + suggestion
+    }
+
+    private static func isCJK(_ c: Character) -> Bool {
+        guard let v = c.unicodeScalars.first?.value else { return false }
+        return (0x3040...0x30FF).contains(v) || (0x3400...0x9FFF).contains(v)
+            || (0xAC00...0xD7AF).contains(v) || (0xF900...0xFAFF).contains(v)
+    }
 }

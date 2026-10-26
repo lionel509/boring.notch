@@ -62,6 +62,10 @@ enum FocusedTextReader {
         guard let selection = cfRange(focused, kAXSelectedTextRangeAttribute as String) else {
             return encode(dict)
         }
+        // A selection is replaced by the paste, so there is no caret to continue from.
+        guard selection.length == 0 else {
+            return encode(dict)
+        }
         let caretEnd = selection.location + selection.length
         let before = ns.substring(to: min(max(caretEnd, 0), ns.length))
         dict["textBeforeCaret"] = tail(before, units: maxContextUnits)

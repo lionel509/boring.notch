@@ -202,7 +202,10 @@ final class GhostTextManager: ObservableObject {
             raw = await GhostTextModel.shared.complete(prompt)
         }
         guard !Task.isCancelled else { return }
-        handle(.suggestion(GhostTextPrompt.clean(raw), gen: gen))
+        let suggestion = GhostTextPrompt.clean(raw).map {
+            GhostTextPrompt.join(context: snapshot.textBeforeCaret ?? "", suggestion: $0)
+        }
+        handle(.suggestion(suggestion, gen: gen))
     }
 
     private func caretRect(_ s: GhostTextSnapshot) -> CGRect? {
