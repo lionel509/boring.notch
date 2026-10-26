@@ -7,6 +7,7 @@
 //
 
 import AVFoundation
+import Defaults
 import Foundation
 import Speech
 
@@ -25,6 +26,24 @@ enum VoiceError: LocalizedError {
 /// The tap's converter, built from the first buffer's real format. Only the audio thread uses it.
 private final class ConverterBox: @unchecked Sendable {
     var converter: AVAudioConverter?
+}
+
+/// The buffer the take and the converter read. `.channel(n)` copies that channel's float samples into a
+/// mono buffer; anything else (or a layout this copy does not handle) returns the buffer unchanged.
+/// Runs on the audio thread.
+private func takeMonoBuffer(_ buffer: AVAudioPCMBuffer, source: MicChannelPick.Source) -> AVAudioPCMBuffer {
+    guard case .channel(let index) = source,
+          index < Int(buffer.format.channelCount),
+          buffer.format.commonFormat == .pcmFormatFloat32,
+          !buffer.format.isInterleaved,
+          let samples = buffer.floatChannelData,
+          let mono = AVAudioFormat(standardFormatWithSampleRate: buffer.format.sampleRate, channels: 1),
+          let out = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: buffer.frameLength),
+          let dest = out.floatChannelData
+    else { return buffer }
+    out.frameLength = buffer.frameLength
+    dest[0].update(from: samples[index], count: Int(buffer.frameLength))
+    return out
 }
 
 @available(macOS 26.0, *)
@@ -46,6 +65,15 @@ final class SpeechAnalyzerSession: VoiceSession {
     /// The transcriber's latest unconfirmed text. Used only if finalize does not finish in time.
     private var lastVolatile = ""
     private var configObserver: NSObjectProtocol?
+    /// The take's audio as 16 kHz PCM, for the cloud transcript.
+    private let audio = TakeAudioBuffer()
+    /// Uptime when the engine started and when the first partial arrived, for the take report.
+    private var engineStartedAt: TimeInterval?
+    private var firstPartialAt: TimeInterval?
+    /// True when the take runs with Apple voice processing (echo cancellation, noise suppression, AGC).
+    private(set) var voiceProcessing = false
+    /// True when this take paused the Mac's music, so teardown resumes only what it paused.
+    private var pausedMedia = false
 
     /// Makes sure the on-device en_US model is installed. The OS fetches it once.
     /// `onDownloadStart` runs only when a download is actually needed, so the UI can say so.
@@ -58,7 +86,7 @@ final class SpeechAnalyzerSession: VoiceSession {
         }
     }
 
-    func start(onPartial: @escaping @Sendable (String) -> Void) async throws {
+    func start(contextualStrings: [String], onPartial: @escaping @Sendable (String) -> Void) async throws {
         let transcriber = self.transcriber
             ?? SpeechTranscriber(locale: Locale(identifier: "en_US"), preset: .progressiveTranscription)
         self.transcriber = transcriber
@@ -67,8 +95,32 @@ final class SpeechAnalyzerSession: VoiceSession {
             throw VoiceError.noFormat
         }
 
+        // Dictionary words bias Apple's recognizer toward the spelling the user typed.
+        if !contextualStrings.isEmpty {
+            let context = AnalysisContext()
+            context.contextualStrings = [.general: contextualStrings]
+            try await analyzer.setContext(context)
+        }
+
         let input = engine.inputNode
-        let inFormat = input.outputFormat(forBus: 0)
+        // Before the format is read: voice processing changes the input format the tap sees.
+        if Defaults[.dictationVoiceProcessing] {
+            do {
+                try input.setVoiceProcessingEnabled(true)
+                input.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                    enableAdvancedDucking: false, duckingLevel: .min)
+                voiceProcessing = true
+            } catch {
+                voiceProcessing = false
+            }
+        }
+        var inFormat = input.outputFormat(forBus: 0)
+        if voiceProcessing, !(inFormat.channelCount > 0 && MicLevelMeter.isUsableRate(inFormat.sampleRate)) {
+            // A voice-processing format the take can't use: fall back to the raw mic instead of failing the take.
+            try? input.setVoiceProcessingEnabled(false)
+            voiceProcessing = false
+            inFormat = input.outputFormat(forBus: 0)
+        }
         guard inFormat.channelCount > 0, MicLevelMeter.isUsableRate(inFormat.sampleRate) else {
             throw VoiceError.noMicrophone
         }
@@ -78,11 +130,20 @@ final class SpeechAnalyzerSession: VoiceSession {
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         let tap = levelTap
         let converterBox = ConverterBox()
+        let takeAudio = audio
+        let usesVoiceProcessing = voiceProcessing
         // The format comes from the first buffer, not from the input node at start. CoreAudio can
         // still be switching devices then, and a tap installed with the stale format delivers nothing.
         input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, _ in
             tap.ingest(buffer)
-            let format = buffer.format
+            // With voice processing the input has several channels and channel 0 is the processed voice.
+            // Without it this is the buffer itself (passthrough or downmix, as before).
+            let mono = takeMonoBuffer(
+                buffer,
+                source: MicChannelPick.monoSource(
+                    channelCount: Int(buffer.format.channelCount), voiceProcessing: usesVoiceProcessing))
+            takeAudio.ingest(mono)
+            let format = mono.format
             // The device can change after start, so a buffer may carry a rate the start check never saw.
             guard MicLevelMeter.isUsableRate(format.sampleRate) else {
                 tap.noteConvertFailure()
@@ -96,7 +157,7 @@ final class SpeechAnalyzerSession: VoiceSession {
                 return
             }
             let ratio = target.sampleRate / format.sampleRate
-            let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
+            let capacity = AVAudioFrameCount(Double(mono.frameLength) * ratio) + 64
             guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
             var consumed = false
             var error: NSError?
@@ -107,7 +168,7 @@ final class SpeechAnalyzerSession: VoiceSession {
                 }
                 consumed = true
                 outStatus.pointee = .haveData
-                return buffer
+                return mono
             }
             if status == .error {
                 tap.noteConvertFailure()
@@ -133,6 +194,7 @@ final class SpeechAnalyzerSession: VoiceSession {
                     } else {
                         self?.lastVolatile = text
                         self?.partialCount += 1
+                        if self?.firstPartialAt == nil { self?.firstPartialAt = ProcessInfo.processInfo.systemUptime }
                         onPartial(text)
                     }
                 }
@@ -142,8 +204,24 @@ final class SpeechAnalyzerSession: VoiceSession {
         }
 
         do {
+            if Defaults[.dictationPausesMedia], MusicManager.shared.isPlaying {
+                MusicManager.shared.pause()
+                pausedMedia = true
+            }
             engine.prepare()
-            try engine.start()
+            engineStartedAt = ProcessInfo.processInfo.systemUptime
+            do {
+                try engine.start()
+            } catch where voiceProcessing {
+                // Voice processing failed to start: retry on the raw mic so the take never fails for it.
+                try? input.setVoiceProcessingEnabled(false)
+                voiceProcessing = false
+                engine.prepare()
+                let rawFormat = input.outputFormat(forBus: 0)
+                tapChannels = Int(rawFormat.channelCount)
+                tapSampleRate = Int(rawFormat.sampleRate)
+                try engine.start()
+            }
             try await analyzer.start(inputSequence: stream)
         } catch {
             teardownAudio()
@@ -175,6 +253,18 @@ final class SpeechAnalyzerSession: VoiceSession {
         return TranscriptAssembler.parts(finals: finals, volatileTail: lastVolatile, finalized: finalized)
     }
 
+    /// Stops the microphone at key release without waiting for the analyzer. Returns the transcript so far.
+    /// `finish()` still runs afterwards for the final results.
+    func stopNow() -> [String] {
+        teardownAudio()
+        return TranscriptAssembler.parts(finals: finals, volatileTail: lastVolatile, finalized: false)
+    }
+
+    /// The take's audio as a WAV file, or nil when no audio arrived.
+    func takeWAV() -> Data? {
+        audio.wav()
+    }
+
     func cancel() async {
         teardownAudio()
         if let analyzer {
@@ -193,7 +283,11 @@ final class SpeechAnalyzerSession: VoiceSession {
         report.finals = finals.count
         report.partials = partialCount
         report.finalizeMs = finalizeMs
+        report.voiceProcessing = voiceProcessing
         report.volatileTail = !finalized && !lastVolatile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if let engineStartedAt, let firstPartialAt {
+            report.firstPartialMs = Int((firstPartialAt - engineStartedAt) * 1000)
+        }
         levelTap.fill(&report)
     }
 
@@ -204,6 +298,10 @@ final class SpeechAnalyzerSession: VoiceSession {
         }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        if pausedMedia {
+            pausedMedia = false
+            MusicManager.shared.play()
+        }
         continuation?.finish()
         continuation = nil
     }

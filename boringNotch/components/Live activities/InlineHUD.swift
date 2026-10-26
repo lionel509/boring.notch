@@ -206,6 +206,7 @@ struct InlineHUD: View {
         // The rule picks its own word -- "CPU high" and "Draining" arrive under one type,
         // so there is nothing here that could derive it.
         case .systemAlert: label.isEmpty ? "System" : label
+        case .dictation: label.isEmpty ? "Dictation" : label
         default: Type2Name(type)
         }
     }

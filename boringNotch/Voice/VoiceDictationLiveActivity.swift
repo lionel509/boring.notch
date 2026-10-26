@@ -3,8 +3,11 @@
 //  boringNotch
 //
 //  Closed-notch strip for a dictation take, laid out like the music strip: an icon on
-//  the left and live mic bars on the right, with no text while listening. Failures
-//  and the model download still say why in words.
+//  the left and live mic bars on the right. Nothing the user said is shown here, and a failure
+//  draws nothing in the strip: it is announced beside the notch as a notice instead. The model
+//  download adds a message cell.
+//  The strip animates with the notch on `.smooth`, so it reads as the notch widening, not a
+//  second shape.
 //
 
 import SwiftUI
@@ -40,15 +43,20 @@ struct VoiceDictationLiveActivity: View {
                     Image(systemName: voice.micStatus == .noSignal ? "mic.slash.fill" : "mic.fill")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(problem ? Color.orange : Color.white)
+                        .contentTransition(.symbolEffect(.replace))
                 }
             case .processing:
-                ProgressView().controlSize(.mini)
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.5))
             case .done:
-                Image(systemName: "checkmark.circle.fill")
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.green)
+                    .contentTransition(.symbolEffect(.replace))
             case .failed:
-                Image(systemName: "exclamationmark.circle")
-                    .foregroundStyle(.orange)
+                // The failure is announced as a notice; the strip itself draws nothing for it.
+                EmptyView()
             }
         }
         .frame(width: side, height: side)
@@ -60,30 +68,35 @@ struct VoiceDictationLiveActivity: View {
         case .idle:
             EmptyView()
         case .recording where voice.downloadingModel:
-            Text("Downloading speech model")
-                .font(.caption2)
-                .foregroundStyle(.gray)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.trailing, 6)
+            withMessage("Downloading speech model", bars: bars(.rest, dim: false))
         case .recording:
             bars(.live, dim: voice.micStatus == .waiting || voice.micStatus == .noSignal)
         case .processing:
-            bars(.idle, dim: false)
+            bars(voice.refining ? .rest : .idle, dim: false, refining: voice.refining)
         case .done:
             bars(.rest, dim: false)
-        case .failed(let message):
-            Text(message)
+        case .failed:
+            EmptyView()
+        }
+    }
+
+    /// The strip's bars cell, then one message cell to its right. The message is the
+    /// headline only, so it always fits `DictationStrip.messageWidth`. Used by the download only.
+    private func withMessage<Bars: View>(_ headline: String, bars: Bars) -> some View {
+        HStack(spacing: 0) {
+            bars
+            Text(headline)
                 .font(.caption2)
                 .foregroundStyle(.gray)
                 .lineLimit(1)
-                .fixedSize()
+                .minimumScaleFactor(0.8)
+                .frame(width: DictationStrip.messageWidth, alignment: .leading)
                 .padding(.trailing, 6)
         }
     }
 
     /// The music strip's spectrum cell, fed by the mic instead of the playing track.
-    private func bars(_ mode: MicSpectrumView.Mode, dim: Bool) -> some View {
+    private func bars(_ mode: MicSpectrumView.Mode, dim: Bool, refining: Bool = false) -> some View {
         HStack {
             Rectangle()
                 .fill(Color.white)
@@ -95,5 +108,38 @@ struct VoiceDictationLiveActivity: View {
         }
         .frame(width: side, height: side, alignment: .center)
         .opacity(dim ? 0.4 : 1)
+        .modifier(RefiningShimmer(active: refining))
+    }
+}
+
+/// While the cloud pass refines the pasted text, a dark band sweeps across the bars.
+/// The bars keep their place, so the strip's width does not change.
+private struct RefiningShimmer: ViewModifier {
+    let active: Bool
+    @State private var sweeping = false
+
+    func body(content: Content) -> some View {
+        if active {
+            content
+                .overlay {
+                    GeometryReader { geo in
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.7), .clear],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: geo.size.width * 0.6)
+                        .offset(x: sweeping ? geo.size.width : -geo.size.width * 0.6)
+                    }
+                }
+                .clipped()
+                .onAppear {
+                    withAnimation(.linear(duration: 1.1).repeatForever(autoreverses: false)) {
+                        sweeping = true
+                    }
+                }
+        } else {
+            content
+        }
     }
 }

@@ -39,6 +39,31 @@ struct TakeReport {
     var modWaitMs = -1
     var pasteMs = -1
     var releaseToPasteMs = -1
+    /// U5 / v4-3: the cloud path and the rewrite. Numbers, Bools and enums only (I2).
+    var engineStartMs = -1
+    var firstPartialMs = -1
+    var sttMs = -1
+    var sttSource: SttSource = .none
+    var sttSeconds: Float = -1
+    var sttCostMicroUSD = -1
+    /// Release to the first successful swap of the rewrite.
+    var firstCleanupMs = -1
+    var llmFirstTokenMs = -1
+    var llmTotalMs = -1
+    var llmPromptTokens = -1
+    var llmCompletionTokens = -1
+    var swaps = -1
+    var maxSwapMs = -1
+    var mechanism: RewriteMechanism = .none
+    var rewrite: RewriteOutcome = .none
+    var cleanupSource: CleanupSource = .none
+    var cleanupSkip: CleanupSkip = .none
+    var tone: AppTone = .neutral
+    var dictionaryWords = -1
+    var cloud = false
+    /// #13 r5 / U2: whether an OpenRouter key was read at the press, and whether voice processing is on.
+    var hasKey = false
+    var voiceProcessing = false
 
     /// Copies what the mic meter measured.
     mutating func record(meter: MicLevelMeter) {
@@ -82,6 +107,28 @@ struct TakeReport {
             "mod_wait_ms=\(modWaitMs)",
             "paste_ms=\(pasteMs)",
             "release_to_paste_ms=\(releaseToPasteMs)",
+            "engine_start_ms=\(engineStartMs)",
+            "first_partial_ms=\(firstPartialMs)",
+            "stt_ms=\(sttMs)",
+            "stt=\(sttSource.rawValue)",
+            "stt_s=\(String(format: "%.2f", sttSeconds))",
+            "stt_uusd=\(sttCostMicroUSD)",
+            "first_cleanup_ms=\(firstCleanupMs)",
+            "llm_ttft_ms=\(llmFirstTokenMs)",
+            "llm_ms=\(llmTotalMs)",
+            "llm_in=\(llmPromptTokens)",
+            "llm_out=\(llmCompletionTokens)",
+            "swaps=\(swaps)",
+            "max_swap_ms=\(maxSwapMs)",
+            "mech=\(mechanism.rawValue)",
+            "rewrite=\(rewrite.rawValue)",
+            "cleanup=\(cleanupSource.rawValue)",
+            "skip=\(cleanupSkip.rawValue)",
+            "tone=\(tone.rawValue)",
+            "dict=\(dictionaryWords)",
+            "cloud=\(cloud ? 1 : 0)",
+            "key=\(hasKey ? 1 : 0)",
+            "vp=\(voiceProcessing ? 1 : 0)",
         ].joined(separator: " ")
     }
 }

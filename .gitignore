@@ -53,3 +53,6 @@ build/
 *.xcarchive
 *.dSYM
 
+
+# Demo and bench output (GIFs, WAVs stay local)
+scripts/out/
