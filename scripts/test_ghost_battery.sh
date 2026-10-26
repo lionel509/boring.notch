@@ -31,4 +31,17 @@ check "discharge decode" "mean_w=12.00" "$out"
 out=$(GHOST_PREFS=$prefs GHOST_IOREG_FILE=$tmp/ioreg3 $script 1 2>&1); code=$?
 if (( code != 0 )) && [[ "$out" == *"no battery"* ]]; then print -r -- "PASS no battery is an error"; else print -r -- "FAIL no battery: exit=$code out=$out"; fail=1; fi
 
+# 4. Charging on AC power is an error, not a discharge reading. ExternalConnected = Yes.
+print -r -- '  |   "ExternalConnected" = Yes' > "$tmp/ioreg4"
+print -r -- '  |   "Voltage" = 12000' >> "$tmp/ioreg4"
+print -r -- '  |   "InstantAmperage" = 2000' >> "$tmp/ioreg4"
+out=$(GHOST_PREFS=$prefs GHOST_IOREG_FILE=$tmp/ioreg4 $script 1 2>&1); code=$?
+if (( code != 0 )) && [[ "$out" == *"on AC power: unplug and re-run"* ]]; then print -r -- "PASS AC power is an error (ExternalConnected)"; else print -r -- "FAIL AC power (ExternalConnected): exit=$code out=$out"; fail=1; fi
+
+# 5. A positive InstantAmperage (charging) is an error even without the ExternalConnected line.
+print -r -- '  |   "Voltage" = 12000' > "$tmp/ioreg5"
+print -r -- '  |   "InstantAmperage" = 4321' >> "$tmp/ioreg5"
+out=$(GHOST_PREFS=$prefs GHOST_IOREG_FILE=$tmp/ioreg5 $script 1 2>&1); code=$?
+if (( code != 0 )) && [[ "$out" == *"on AC power: unplug and re-run"* ]]; then print -r -- "PASS AC power is an error (positive amps)"; else print -r -- "FAIL AC power (positive amps): exit=$code out=$out"; fail=1; fi
+
 exit $fail

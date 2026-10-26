@@ -69,4 +69,29 @@ final class GhostTextPromptTests: XCTestCase {
     func testJoinEmptyContextIsSuggestion() {
         XCTAssertEqual(GhostTextPrompt.join(context: "", suggestion: "hi"), "hi")
     }
+
+    func testJoinNoSpaceAfterConnector() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "write me at lionel@", suggestion: "gmail.com"), "gmail.com")
+        XCTAssertEqual(GhostTextPrompt.join(context: "https://github.com/", suggestion: "lionel509"), "lionel509")
+        XCTAssertEqual(GhostTextPrompt.join(context: "we need a long-", suggestion: "term plan"), "term plan")
+    }
+
+    func testJoinNoSpaceBeforeCJKPunctuation() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "你好。", suggestion: "我们"), "我们")
+        XCTAssertEqual(GhostTextPrompt.join(context: "こんにちは、", suggestion: "元気です"), "元気です")
+        XCTAssertEqual(GhostTextPrompt.join(context: "你好，", suggestion: "我们"), "我们")
+        XCTAssertEqual(GhostTextPrompt.join(context: "你好！", suggestion: "我们"), "我们")
+    }
+
+    func testJoinKoreanKeepsWordSpace() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "나는 친구", suggestion: "학교에 갔다"), " 학교에 갔다")
+    }
+
+    func testJoinThaiNoSpace() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "สวัสดี", suggestion: "ครับ"), "ครับ")
+    }
+
+    func testJoinSentenceStartKeepsSpace() {
+        XCTAssertEqual(GhostTextPrompt.join(context: "Hello.", suggestion: "How"), " How")
+    }
 }
