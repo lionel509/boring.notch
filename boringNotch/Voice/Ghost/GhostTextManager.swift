@@ -183,17 +183,14 @@ final class GhostTextManager: ObservableObject {
 
     private func fetch(gen: Int) async {
         let json = await XPCHelperClient.shared.focusedTextSnapshotJSON()
-        guard let snapshot = json.flatMap(GhostTextSnapshot.decode),
-              GhostTextPolicy.shouldRequest(snapshot),
-              let caret = snapshot.caretRect,
-              let field = snapshot.fieldRect,
-              GhostTextGeometry.hasRoom(caret: caret, field: field),
-              let prompt = GhostTextPrompt.build(snapshot),
-              let location = snapshot.caretLocation else {
-            GhostTextLog.record(.dropped)
-            handle(.snapshotFailed(gen: gen))
-            return
-        }
+        guard let json else { return dropFetch(.noSnapshot, gen: gen) }
+        guard let snapshot = GhostTextSnapshot.decode(json) else { return dropFetch(.decodeFailed, gen: gen) }
+        if let check = GhostTextPolicy.failedCheck(snapshot) { return dropFetch(.policy, gen: gen, check: check) }
+        guard let caret = snapshot.caretRect else { return dropFetch(.noCaretRect, gen: gen) }
+        guard let field = snapshot.fieldRect else { return dropFetch(.noFieldRect, gen: gen) }
+        guard GhostTextGeometry.hasRoom(caret: caret, field: field) else { return dropFetch(.noRoom, gen: gen) }
+        guard let prompt = GhostTextPrompt.build(snapshot) else { return dropFetch(.noPrompt, gen: gen) }
+        guard let location = snapshot.caretLocation else { return dropFetch(.noCaretLocation, gen: gen) }
         guard !Task.isCancelled else { return }
         let before = snapshot.textBeforeCaret ?? ""
         Defaults[.ghostTextCalls] += 1
@@ -215,6 +212,11 @@ final class GhostTextManager: ObservableObject {
         pendingCaret = caret
         pendingField = field
         handle(.suggestion(suggestion, gen: gen))
+    }
+
+    private func dropFetch(_ reason: GhostTextEvent.Reason, gen: Int, check: GhostTextPolicy.Check? = nil) {
+        GhostTextLog.record(.dropped, reason: reason, check: check)
+        handle(.snapshotFailed(gen: gen))
     }
 
     /// Shows the suggestion only where it can sit beside the caret. No room means no overlay, and the
@@ -247,12 +249,20 @@ final class GhostTextManager: ObservableObject {
     /// Results 0, 3 and 7 add text, so they count as accepted; anything else is dropped.
     private func insert(_ text: String) async {
         guard let anchor else {
-            GhostTextLog.record(.dropped)
+            GhostTextLog.record(.dropped, reason: .noAnchor)
             return
         }
-        let now = (await XPCHelperClient.shared.focusedTextSnapshotJSON()).flatMap(GhostTextSnapshot.decode)
-        guard let now, GhostTextLogic.insertAllowed(anchor: anchor, now: now) else {
-            GhostTextLog.record(.dropped)
+        let json = await XPCHelperClient.shared.focusedTextSnapshotJSON()
+        guard let json else {
+            GhostTextLog.record(.dropped, reason: .noSnapshot)
+            return
+        }
+        guard let now = GhostTextSnapshot.decode(json) else {
+            GhostTextLog.record(.dropped, reason: .decodeFailed)
+            return
+        }
+        guard GhostTextLogic.insertAllowed(anchor: anchor, now: now) else {
+            GhostTextLog.record(.dropped, reason: .anchorMismatch)
             return
         }
         let result = await XPCHelperClient.shared.ghostInsert(location: anchor.caretLocation, text: text)
@@ -260,7 +270,7 @@ final class GhostTextManager: ObservableObject {
         if [0, 3, 7].contains(result) {
             GhostTextLog.record(.accepted)
         } else {
-            GhostTextLog.record(.dropped)
+            GhostTextLog.record(.dropped, reason: .insertFailed, insertResult: result)
         }
     }
 }
