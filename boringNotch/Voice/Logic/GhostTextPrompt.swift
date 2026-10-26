@@ -31,18 +31,30 @@ enum GhostTextPrompt {
     }
 
     /// Joins an accepted suggestion to the text before the caret. Adds one space when the context
-    /// ends in a word and the suggestion starts with a letter or digit, unless both sides are CJK
-    /// (which carry no spaces between words).
+    /// ends in a letter, digit or closing/sentence punctuation and the suggestion starts with a letter
+    /// or digit, unless both sides are from a script with no spaces between words (Han, Kana, CJK and
+    /// fullwidth punctuation, Thai). Hangul is a spaced script, so it gets the space.
     static func join(context: String, suggestion: String) -> String {
         guard let last = context.last, let first = suggestion.first,
-              !last.isWhitespace, first.isLetter || first.isNumber else { return suggestion }
-        if isCJK(last) && isCJK(first) { return suggestion }
+              !last.isWhitespace, endsWordOrSentence(last), first.isLetter || first.isNumber else { return suggestion }
+        if isUnspaced(last) && isUnspaced(first) { return suggestion }
         return " " + suggestion
     }
 
-    private static func isCJK(_ c: Character) -> Bool {
+    private static let closingPunctuation: Set<Character> = [
+        ".", ",", ";", ":", "!", "?", ")", "]", "}", "\"", "'", "\u{201D}", "\u{2019}",
+    ]
+
+    private static func endsWordOrSentence(_ c: Character) -> Bool {
+        c.isLetter || c.isNumber || closingPunctuation.contains(c)
+    }
+
+    private static func isUnspaced(_ c: Character) -> Bool {
         guard let v = c.unicodeScalars.first?.value else { return false }
-        return (0x3040...0x30FF).contains(v) || (0x3400...0x9FFF).contains(v)
-            || (0xAC00...0xD7AF).contains(v) || (0xF900...0xFAFF).contains(v)
+        return (0x0E00...0x0E7F).contains(v)          // Thai
+            || (0x3000...0x30FF).contains(v)          // CJK punctuation, Hiragana, Katakana
+            || (0x3400...0x9FFF).contains(v)          // CJK ideographs
+            || (0xF900...0xFAFF).contains(v)          // CJK compatibility ideographs
+            || (0xFF00...0xFFEF).contains(v)          // fullwidth forms
     }
 }

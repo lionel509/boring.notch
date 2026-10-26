@@ -16,7 +16,7 @@ check() { # name, expected substring, actual output
 # 1. Counter is read from the sandboxed container prefs (the path the app writes).
 defaults write "$prefs" ghostTextCalls 5
 print -r -- '  |   "Voltage" = 12000' > "$tmp/ioreg1"
-print -r -- '  |   "InstantAmperage" = 1000' >> "$tmp/ioreg1"
+print -r -- '  |   "InstantAmperage" = 18446744073709550616' >> "$tmp/ioreg1"
 out=$( (sleep 0.5; defaults write "$prefs" ghostTextCalls 8) & GHOST_PREFS=$prefs GHOST_IOREG_FILE=$tmp/ioreg1 $script 1 2>&1; wait )
 check "calls delta from prefs" "calls=3" "$out"
 

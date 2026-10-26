@@ -26,6 +26,13 @@ while (( $(date +%s) < end )); do
   if [[ $amps == <-> ]] && { (( ${#amps} == 20 )) || { (( ${#amps} == 19 )) && [[ $amps > 9223372036854775807 ]] } }; then
     amps=$(print -r -- "$amps - 18446744073709551616" | bc)
   fi
+  # Only a discharge is a battery draw. A plugged-in Mac reports charging current (positive or
+  # ExternalConnected = Yes), which would read as a plausible but false wattage.
+  ext=$(print -r -- "$out" | awk -F' = ' '/^[ |]*"ExternalConnected" = /{print $2; exit}')
+  if [[ $ext == Yes || $amps == <1-> ]]; then
+    print -u2 "on AC power: unplug and re-run"
+    exit 3
+  fi
   samples+=("$amps $volts")
   sleep 2
 done
