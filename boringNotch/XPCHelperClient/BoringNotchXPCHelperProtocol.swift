@@ -47,6 +47,24 @@ import Foundation
     /// `AppleDeviceManagementHIDEventService` class contains only the internal keyboard --
     /// while `system_profiler` has `device_batteryLevelLeft = 82%` sitting right there.
     func bluetoothDevices(with reply: @escaping (String?) -> Void)
+    // Dictation rewrite (U4). The helper holds the key file read, AX trust and the event tap.
+    /// The strict OpenRouter key from ~/.config/openrouter-key, trimmed. nil if missing or empty.
+    func openRouterKey(with reply: @escaping (String?) -> Void)
+    /// The focused text value, or nil when unreadable, secure, or longer than 20 000 characters.
+    func focusedTextValue(with reply: @escaping (String?) -> Void)
+    /// Records the focused element for the swaps. JSON of FocusedField, or nil.
+    func beginTracking(with reply: @escaping (String?) -> Void)
+    /// Turns on app pid's accessibility tree (Chromium/Electron build it only on request) and remembers pid as the take's app. True if a focused element now resolves.
+    func prepareFocus(_ pid: Int, with reply: @escaping (Bool) -> Void)
+    /// UTF-16 caret. -1 unknown, -2 focus moved or nothing tracked.
+    func caretLocation(with reply: @escaping (Int) -> Void)
+    func stringForRange(_ location: Int, _ length: Int, with reply: @escaping (String?) -> Void)
+    /// Swap reply codes: 0 ok, 1 selectFailed, 2 setFailed, 3 verifyMismatch, 4 noFocus, 5 focusMoved, 6 notTrusted.
+    /// Codes 1, 2, 4, 5 and 6 leave the text unchanged.
+    func axReplace(_ location: Int, _ length: Int, _ text: String, with reply: @escaping (Int) -> Void)
+    func axSelectThenType(_ location: Int, _ length: Int, _ text: String, _ caretAfter: Int, with reply: @escaping (Int) -> Void)
+    func typeSwap(_ suffixGraphemes: Int, _ oldGraphemes: Int, _ text: String, with reply: @escaping (Int) -> Void)
+    func endTracking()
 }
 
 /*

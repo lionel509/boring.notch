@@ -150,6 +150,20 @@ extension Defaults.Keys {
 
     static let dictationDiagnostic = Key<String>("dictationDiagnostic", default: "not started")
 
+    /// Cloud transcription and cleanup through OpenRouter (zero-retention endpoints). Off: everything stays on this Mac.
+    static let dictationCloud = Key<Bool>("dictationCloud", default: true)
+    /// Apple voice processing on the mic: echo cancellation, noise suppression and gain control, so the take hears the voice, not the speakers.
+    static let dictationVoiceProcessing = Key<Bool>("dictationVoiceProcessing", default: true)
+    /// Pause music from this Mac while a take is recording, and resume it when the mic is released.
+    static let dictationPausesMedia = Key<Bool>("dictationPausesMedia", default: false)
+    /// On-device cleanup (Apple Intelligence) when cloud is off or fails.
+    static let dictationCleanup = Key<Bool>("dictationCleanup", default: true)
+    /// Names and terms, comma separated. Sent as the STT prompt and the cleanup vocabulary.
+    static let dictationDictionary = Key<String>("dictationDictionary", default: "")
+    /// Words the user corrected after a paste, with how often. Promoted into the dictionary at two corrections.
+    static let dictationLearnedWords = Key<[String: Int]>("dictationLearnedWords", default: [:])
+    static let dictationLearnsCorrections = Key<Bool>("dictationLearnsCorrections", default: true)
+
     /// The badge for the app the music is coming from, on the artwork's corner. Off: it
     /// only earns its space when more than one player is actually in use.
     static let showPlayerAppBadge = Key<Bool>("showPlayerAppBadge", default: false)

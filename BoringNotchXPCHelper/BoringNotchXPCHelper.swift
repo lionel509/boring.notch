@@ -6,13 +6,21 @@
 //
 
 import Foundation
+import AppKit
 import ApplicationServices
 import OSLog
 import IOKit
 import CoreGraphics
 
 class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
-    
+
+    /// The element the rewrite swaps into, from `beginTracking` until `endTracking`.
+    private var trackedElement: AXUIElement?
+    /// The app the take was prepared for (#13 r5 / U2). Its focus is read through the app element only while it is frontmost.
+    private static var preparedPid: pid_t = 0
+    /// The app whose AXManualAccessibility this helper turned on, so it can be turned back off.
+    private static var manualAXPid: pid_t = 0
+
     @objc func isAccessibilityAuthorized(with reply: @escaping (Bool) -> Void) {
         reply(AXIsProcessTrusted())
     }
@@ -324,6 +332,8 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         else { return reply(false) }
         down.flags = .maskCommand   // explicit: never inherit whatever modifiers are still physically held
         up.flags = .maskCommand
+        Self.tag(down)
+        Self.tag(up)
         down.post(tap: .cgSessionEventTap)
         up.post(tap: .cgSessionEventTap)
         reply(true)
@@ -334,6 +344,253 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         reply(FocusedTextReader.snapshotJSON())
     }
     
+
+    // MARK: - Dictation rewrite (U4)
+
+    /// Chromium and Electron apps build their accessibility tree only on request. Turns it on for `pid` when the
+    /// system-wide focus cannot be read for that app, and remembers `pid` for the take. Never touches other apps.
+    @objc func prepareFocus(_ pid: Int, with reply: @escaping (Bool) -> Void) {
+        guard AXIsProcessTrusted(), pid > 0 else { return reply(false) }
+        Self.restoreManualAccessibility()
+        Self.preparedPid = pid_t(pid)
+        var systemFocusPid: pid_t = 0
+        if let focused = Self.copyValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as String) {
+            AXUIElementGetPid(focused as! AXUIElement, &systemFocusPid)
+        }
+        if systemFocusPid != pid_t(pid) {
+            let app = AXUIElementCreateApplication(pid_t(pid))
+            if (Self.copyValue(app, "AXManualAccessibility") as? Bool) != true {
+                AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+                Self.manualAXPid = pid_t(pid)
+            }
+        }
+        reply(Self.currentFocusedElement() != nil)
+    }
+
+    /// The strict key from ~/.config/openrouter-key, and only that file. Never logged.
+    @objc func openRouterKey(with reply: @escaping (String?) -> Void) {
+        let home = String(cString: getpwuid(getuid()).pointee.pw_dir)
+        let path = (home as NSString).appendingPathComponent(".config/openrouter-key")
+        let key = (try? String(contentsOfFile: path, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        reply(key.flatMap { $0.isEmpty ? nil : $0 })
+    }
+
+    @objc func focusedTextValue(with reply: @escaping (String?) -> Void) {
+        guard AXIsProcessTrusted(), let element = Self.currentFocusedElement() else { return reply(nil) }
+        if Self.copyString(element, kAXRoleAttribute as String) == "AXSecureTextField"
+            || Self.copyString(element, kAXSubroleAttribute as String) == "AXSecureTextField" { return reply(nil) }
+        guard let value = Self.copyString(element, kAXValueAttribute as String), value.count <= 20_000 else {
+            return reply(nil)
+        }
+        reply(value)
+    }
+
+    @objc func beginTracking(with reply: @escaping (String?) -> Void) {
+        trackedElement = nil
+        guard AXIsProcessTrusted(), let element = Self.currentFocusedElement() else { return reply(nil) }
+        trackedElement = element
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        let role = Self.copyString(element, kAXRoleAttribute as String) ?? ""
+        let subrole = Self.copyString(element, kAXSubroleAttribute as String) ?? ""
+        let bundle: Any = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? NSNull()
+        let field: [String: Any] = [
+            "pid": Int(pid),
+            "bundle": bundle,
+            "role": role,
+            "secure": role == "AXSecureTextField" || subrole == "AXSecureTextField",
+            "caret": Self.selectedRange(element)?.location ?? -1,
+            "rangeSettable": Self.isSettable(element, kAXSelectedTextRangeAttribute as String),
+            "textSettable": Self.isSettable(element, kAXSelectedTextAttribute as String),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: field),
+              let json = String(data: data, encoding: .utf8) else { return reply(nil) }
+        reply(json)
+    }
+
+    @objc func caretLocation(with reply: @escaping (Int) -> Void) {
+        guard AXIsProcessTrusted() else { return reply(-1) }
+        guard let element = trackedFocus() else { return reply(-2) }
+        reply(Self.selectedRange(element)?.location ?? -1)
+    }
+
+    @objc func stringForRange(_ location: Int, _ length: Int, with reply: @escaping (String?) -> Void) {
+        guard AXIsProcessTrusted(), let element = trackedFocus() else { return reply(nil) }
+        reply(Self.string(in: element, location, length))
+    }
+
+    /// Sets the range, then the selected text, then verifies the span. Codes: 0 ok, 1 selectFailed,
+    /// 2 setFailed, 3 verifyMismatch, 4 noFocus, 5 focusMoved, 6 notTrusted. 1, 2, 4, 5, 6 change nothing.
+    @objc func axReplace(_ location: Int, _ length: Int, _ text: String, with reply: @escaping (Int) -> Void) {
+        guard AXIsProcessTrusted() else { return reply(6) }
+        guard let element = trackedFocus() else { return reply(unavailableCode()) }
+        guard Self.setRange(element, location, length) else { return reply(1) }
+        guard Self.setString(element, kAXSelectedTextAttribute as String, text) else { return reply(2) }
+        guard Self.string(in: element, location, text.utf16.count) == text else { return reply(3) }
+        _ = Self.setRange(element, location + text.utf16.count, 0)
+        reply(0)
+    }
+
+    /// Selects the span, checks the selection took, types the new text as real key events, then puts the
+    /// caret at `caretAfter`. A caret failure after typing reports 3, because the text has already changed.
+    @objc func axSelectThenType(_ location: Int, _ length: Int, _ text: String, _ caretAfter: Int,
+                                with reply: @escaping (Int) -> Void) {
+        guard AXIsProcessTrusted() else { return reply(6) }
+        guard let element = trackedFocus() else { return reply(unavailableCode()) }
+        guard Self.setRange(element, location, length),
+              let readBack = Self.selectedRange(element),
+              readBack.location == location, readBack.length == length else { return reply(1) }
+        // An empty replacement types nothing, so a pure deletion is a Delete over the selection.
+        if text.isEmpty {
+            if length > 0 { Self.postKey(51, flags: []) }
+        } else {
+            Self.typeUnicode(text)
+        }
+        reply(Self.setRange(element, caretAfter, 0) ? 0 : 3)
+    }
+
+    /// Keyboard-only swap for apps where the selection cannot be set: caret is at the span end, so go left
+    /// over the suffix, select the old middle with shift+left, type over it, and return to the span end.
+    @objc func typeSwap(_ suffixGraphemes: Int, _ oldGraphemes: Int, _ text: String,
+                        with reply: @escaping (Int) -> Void) {
+        guard AXIsProcessTrusted() else { return reply(6) }
+        guard trackedFocus() != nil else { return reply(unavailableCode()) }
+        for _ in 0..<max(0, suffixGraphemes) { Self.postKey(123, flags: []) }
+        for _ in 0..<max(0, oldGraphemes) { Self.postKey(123, flags: .maskShift) }
+        // An empty replacement types nothing, so a pure deletion is a Delete over the selection.
+        if text.isEmpty {
+            if oldGraphemes > 0 { Self.postKey(51, flags: []) }
+        } else {
+            Self.typeUnicode(text)
+        }
+        for _ in 0..<max(0, suffixGraphemes) { Self.postKey(124, flags: []) }
+        reply(0)
+    }
+
+    @objc func endTracking() {
+        trackedElement = nil
+        Self.restoreManualAccessibility()
+        Self.preparedPid = 0
+    }
+
+    /// Turns AXManualAccessibility back off on the app this helper turned it on for.
+    private static func restoreManualAccessibility() {
+        if manualAXPid > 0 {
+            AXUIElementSetAttributeValue(AXUIElementCreateApplication(manualAXPid), "AXManualAccessibility" as CFString,
+                                         kCFBooleanFalse)
+            manualAXPid = 0
+        }
+    }
+
+    /// The tracked element while it still has focus, or nil.
+    private func trackedFocus() -> AXUIElement? {
+        guard let tracked = trackedElement, let focused = Self.currentFocusedElement(),
+              CFEqual(focused, tracked) else { return nil }
+        return tracked
+    }
+
+    /// 4 when nothing is tracked, 5 when focus has moved away.
+    private func unavailableCode() -> Int {
+        trackedElement == nil ? 4 : 5
+    }
+
+    /// The system-wide focus. Falls back to the prepared app's own focus, but only while that app is frontmost:
+    /// typeSwap posts keys to the frontmost app, so a background app's element must never be returned.
+    private static func currentFocusedElement() -> AXUIElement? {
+        if let ref = copyValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as String) {
+            return (ref as! AXUIElement)
+        }
+        guard preparedPid > 0,
+              (copyValue(AXUIElementCreateApplication(preparedPid), kAXFrontmostAttribute as String) as? Bool) == true,
+              let ref = copyValue(AXUIElementCreateApplication(preparedPid), kAXFocusedUIElementAttribute as String)
+        else { return nil }
+        return (ref as! AXUIElement)
+    }
+
+    private static func copyValue(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &ref) == .success else { return nil }
+        return ref
+    }
+
+    private static func copyString(_ element: AXUIElement, _ attribute: String) -> String? {
+        copyValue(element, attribute) as? String
+    }
+
+    private static func selectedRange(_ element: AXUIElement) -> CFRange? {
+        guard let ref = copyValue(element, kAXSelectedTextRangeAttribute as String),
+              CFGetTypeID(ref) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(ref as! AXValue, .cfRange, &range) else { return nil }
+        return range
+    }
+
+    private static func setRange(_ element: AXUIElement, _ location: Int, _ length: Int) -> Bool {
+        var range = CFRange(location: location, length: length)
+        guard let value = AXValueCreate(.cfRange, &range) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
+    }
+
+    private static func setString(_ element: AXUIElement, _ attribute: String, _ text: String) -> Bool {
+        AXUIElementSetAttributeValue(element, attribute as CFString, text as CFString) == .success
+    }
+
+    private static func string(in element: AXUIElement, _ location: Int, _ length: Int) -> String? {
+        var range = CFRange(location: location, length: length)
+        guard let param = AXValueCreate(.cfRange, &range) else { return nil }
+        var ref: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element, kAXStringForRangeParameterizedAttribute as CFString, param, &ref) == .success else { return nil }
+        return ref as? String
+    }
+
+    private static func isSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
+        var settable: DarwinBoolean = false
+        return AXUIElementIsAttributeSettable(element, attribute as CFString, &settable) == .success
+            && settable.boolValue
+    }
+
+    /// Arrow keys and shift+arrow, as tagged events the app's own tap ignores.
+    private static func postKey(_ code: CGKeyCode, flags: CGEventFlags) {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) else { return }
+        down.flags = flags
+        up.flags = flags
+        tag(down)
+        tag(up)
+        down.post(tap: .cgSessionEventTap)
+        up.post(tap: .cgSessionEventTap)
+    }
+
+    /// Types unicode in chunks of at most 20 UTF-16 units, never splitting a surrogate pair.
+    private static func typeUnicode(_ text: String) {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let units = Array(text.utf16)
+        var start = 0
+        while start < units.count {
+            var end = min(start + 20, units.count)
+            if end < units.count, end - 1 > start, (0xD800...0xDBFF).contains(units[end - 1]) {
+                end -= 1
+            }
+            let chunk = Array(units[start..<end])
+            for keyDown in [true, false] {
+                guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: keyDown) else { continue }
+                event.flags = []
+                event.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                tag(event)
+                event.post(tap: .cgSessionEventTap)
+            }
+            start = end
+        }
+    }
+
+    /// Every synthesized event carries the dictation tag, so the app's tap ignores it.
+    private static func tag(_ event: CGEvent) {
+        event.setIntegerValueField(.eventSourceUserData, value: DictationEvents.tag)
+    }
+
     private class KeyboardBrightnessClient {
         private static let keyboardID: UInt64 = 1
         private var clientInstance: NSObject?

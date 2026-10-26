@@ -1,7 +1,7 @@
 import XCTest
 @testable import VoiceDictationLogic
 
-private struct LCG: RandomNumberGenerator {
+private struct GhostTextLCG: RandomNumberGenerator {
     var state: UInt64
     mutating func next() -> UInt64 {
         state = state &* 6364136223846793005 &+ 1442695040888963407
@@ -56,7 +56,7 @@ final class GhostTextPolicyTests: XCTestCase {
 
     /// Generated invariant: forbidden inputs never reach the prompt, allowed ones always do.
     func testInvariantOverGeneratedSnapshots() {
-        var rng = LCG(state: 29)
+        var rng = GhostTextLCG(state: 29)
         let bundles = Array(GhostTextPolicy.excludedBundleIDs) + ["com.apple.Safari", "com.apple.TextEdit", "com.hnc.Discord"]
         let subroles = ["", "AXSecureTextField", "AXSearchField"]
         let roles = ["AXTextArea", "AXTextField", "AXSecureTextField", "AXWebArea"]

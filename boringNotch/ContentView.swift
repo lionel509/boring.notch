@@ -67,6 +67,15 @@ struct ContentView: View {
         )
     }
 
+    /// Only the model download shows a message cell. A failure shows its short headline in the
+    /// failure cell at the listening width, so the strip never grows for it.
+    private var dictationShowsMessage: Bool {
+        switch voiceDictation.state {
+        case .recording: return voiceDictation.downloadingModel
+        default: return false
+        }
+    }
+
     private var computedChinWidth: CGFloat {
         var chinWidth: CGFloat = vm.closedNotchSize.width
 
@@ -76,7 +85,8 @@ struct ContentView: View {
             chinWidth = 640
         } else if vm.notchState == .closed && voiceDictation.state != .idle && !vm.hideOnClosed {
             // Same two-cell strip as music: an icon on the left and the mic bars on the right.
-            chinWidth += (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
+            chinWidth += DictationStrip.extraWidth(
+                side: max(0, vm.effectiveClosedNotchHeight - 12), showsMessage: dictationShowsMessage)
         } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music)
             && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle)
             && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed
@@ -226,7 +236,7 @@ struct ContentView: View {
                         return view
                             .animation(vm.notchState == .open ? openAnimation : closeAnimation, value: vm.notchState)
                             .animation(.smooth, value: gestureProgress)
-                            .animation(.timingCurve(0.05, 0.6, 0.4, 0.95, duration: 0.12), value: voiceDictation.state)
+                            .animation(.smooth, value: voiceDictation.state)
                     }
                     .contentShape(Rectangle())
                     .onHover { hovering in
@@ -361,8 +371,9 @@ struct ContentView: View {
     /// width it already has.
     private var peekTakesIntrinsicWidth: Bool {
         guard coordinator.sneakPeek.show, vm.notchState == .closed else { return false }
-        guard coordinator.sneakPeek.type == .music else { return true }
-        return !vm.hideOnClosed && Defaults[.sneakPeekStyles] == .standard
+        // A dictation notice is always the row, so it skips the style check the music row makes.
+        guard coordinator.sneakPeek.type == .music || coordinator.sneakPeek.type == .dictation else { return true }
+        return !vm.hideOnClosed && (coordinator.sneakPeek.type == .dictation || Defaults[.sneakPeekStyles] == .standard)
     }
 
     func NotchLayout() -> some View {
@@ -406,7 +417,7 @@ struct ContentView: View {
                             .frame(width: 76, alignment: .trailing)
                         }
                         .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
-                      } else if coordinator.sneakPeek.show && (Defaults[.inlineHUD] || coordinator.sneakPeek.type.isAnnouncement) && (coordinator.sneakPeek.type != .music) && (coordinator.sneakPeek.type != .battery) && vm.notchState == .closed {
+                      } else if coordinator.sneakPeek.show && (Defaults[.inlineHUD] || coordinator.sneakPeek.type.isAnnouncement) && (coordinator.sneakPeek.type != .music) && (coordinator.sneakPeek.type != .battery) && (coordinator.sneakPeek.type != .dictation) && vm.notchState == .closed {
                           InlineHUD(type: $coordinator.sneakPeek.type, value: $coordinator.sneakPeek.value, icon: $coordinator.sneakPeek.icon, detail: $coordinator.sneakPeek.detail, detailSecondary: $coordinator.sneakPeek.detailSecondary, label: $coordinator.sneakPeek.label,
                             tint: $coordinator.sneakPeek.tint, hoverAnimation: $isHovering, gestureProgress: $gestureProgress)
                               .transition(.opacity)
@@ -469,6 +480,21 @@ struct ContentView: View {
                                       GeometryReader { geo in
                                           MarqueeText(.constant(musicManager.nowPlayingLine),  textColor: Defaults[.playerColorTinting] ? Color(nsColor: musicManager.avgColor).ensureMinimumBrightness(factor: 0.6) : .gray, minDuration: 1, frameWidth: geo.size.width)
                                       }
+                                  }
+                                  .foregroundStyle(.gray)
+                                  .padding(.bottom, 10)
+                              }
+                          }
+                          // A dictation notice: the same row as the song change, with the notice's icon and text.
+                          else if coordinator.sneakPeek.type == .dictation {
+                              if vm.notchState == .closed && !vm.hideOnClosed {
+                                  HStack(alignment: .center) {
+                                      Image(systemName: coordinator.sneakPeek.icon)
+                                      Text(coordinator.sneakPeek.detail.isEmpty
+                                           ? coordinator.sneakPeek.label
+                                           : coordinator.sneakPeek.label + " · " + coordinator.sneakPeek.detail)
+                                          .font(.body)
+                                          .lineLimit(1)
                                   }
                                   .foregroundStyle(.gray)
                                   .padding(.bottom, 10)

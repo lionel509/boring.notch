@@ -1,7 +1,7 @@
 import XCTest
 
 /// Structural checks on the app side: the feature is off by default, uses a defaultTap only,
-/// and only one file imports FoundationModels.
+/// and only allowlisted Voice files import FoundationModels.
 final class GhostTextOffByDefaultTests: XCTestCase {
     private func root() -> URL {
         URL(fileURLWithPath: "\(#filePath)")
@@ -30,6 +30,10 @@ final class GhostTextOffByDefaultTests: XCTestCase {
         let importers = try files.filter {
             try String(contentsOf: $0, encoding: .utf8).contains("import FoundationModels")
         }.map { $0.lastPathComponent }
-        XCTAssertEqual(importers, ["GhostTextModel.swift"])
+        // Allowlist: GhostTextModel (ghost text) and TranscriptCleanup (#15, on-device dictation cleanup).
+        // Any other Voice file importing FoundationModels fails this test.
+        let allowed: Set<String> = ["GhostTextModel.swift", "TranscriptCleanup.swift"]
+        XCTAssertEqual(Set(importers), allowed, "only the allowlisted Voice files may import FoundationModels")
+        XCTAssertEqual(importers.count, allowed.count, "each allowlisted file should import FoundationModels exactly once")
     }
 }
