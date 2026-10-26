@@ -343,6 +343,42 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
     @objc func focusedTextSnapshot(with reply: @escaping (String?) -> Void) {
         reply(FocusedTextReader.snapshotJSON())
     }
+
+    /// Inserts ghost text at `location`, the caret the app read, and only if GhostInsertCheck still allows it.
+    /// Replies: 0 inserted, 2 set failed (typed instead, 7), 3 unverified, 4 no focus, 5 refused, 6 not trusted, 7 typed fallback.
+    @objc func ghostInsert(_ location: Int, _ text: String, with reply: @escaping (Int) -> Void) {
+        guard AXIsProcessTrusted() else { return reply(6) }
+        guard let element = Self.currentFocusedElement() else { return reply(4) }
+        let result = GhostInsertCheck.insert(text, at: location, into: AXGhostField(element: element))
+        if result == .setFailed {
+            // Already tagged, flags empty. Never reached after .unverified, which would double-insert.
+            Self.typeUnicode(text)
+            return reply(7)
+        }
+        reply(result.rawValue)
+    }
+
+    /// The focused AX field as a GhostTextField. It reads and sets only the selection and the text around it.
+    private struct AXGhostField: GhostTextField {
+        let element: AXUIElement
+
+        var selection: (location: Int, length: Int)? {
+            guard let range = BoringNotchXPCHelper.selectedRange(element) else { return nil }
+            return (Int(range.location), Int(range.length))
+        }
+
+        var value: String? {
+            BoringNotchXPCHelper.copyString(element, kAXValueAttribute as String)
+        }
+
+        func setSelectedText(_ text: String) -> Bool {
+            BoringNotchXPCHelper.setString(element, kAXSelectedTextAttribute as String, text)
+        }
+
+        func string(location: Int, length: Int) -> String? {
+            BoringNotchXPCHelper.string(in: element, location, length)
+        }
+    }
     
 
     // MARK: - Dictation rewrite (U4)
