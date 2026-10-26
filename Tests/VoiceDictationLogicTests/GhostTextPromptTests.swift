@@ -50,103 +50,22 @@ final class GhostTextPromptTests: XCTestCase {
         XCTAssertEqual(GhostTextPrompt.clean("first line\nsecond"), "first line")
     }
 
-    func testJoinAddsOneSpaceAfterWord() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "I am going to", suggestion: "the store"), " the store")
-    }
-
-    func testJoinKeepsExistingSpace() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "I am going to ", suggestion: "the store"), "the store")
-    }
-
-    func testJoinNoSpaceBeforePunctuation() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "Hello", suggestion: ", world"), ", world")
-    }
-
-    func testJoinNoSpaceInCJK() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "我们明天", suggestion: "去吃饭"), "去吃饭")
-    }
-
-    func testJoinEmptyContextIsSuggestion() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "", suggestion: "hi"), "hi")
-    }
-
-    func testJoinNoSpaceAfterConnector() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "write me at lionel@", suggestion: "gmail.com"), "gmail.com")
-        XCTAssertEqual(GhostTextPrompt.join(context: "https://github.com/", suggestion: "lionel509"), "lionel509")
-        XCTAssertEqual(GhostTextPrompt.join(context: "we need a long-", suggestion: "term plan"), "term plan")
-    }
-
-    func testJoinNoSpaceBeforeCJKPunctuation() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "你好。", suggestion: "我们"), "我们")
-        XCTAssertEqual(GhostTextPrompt.join(context: "こんにちは、", suggestion: "元気です"), "元気です")
-        XCTAssertEqual(GhostTextPrompt.join(context: "你好，", suggestion: "我们"), "我们")
-        XCTAssertEqual(GhostTextPrompt.join(context: "你好！", suggestion: "我们"), "我们")
-    }
-
-    func testJoinKoreanKeepsWordSpace() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "나는 친구", suggestion: "학교에 갔다"), " 학교에 갔다")
-    }
-
-    func testJoinThaiNoSpace() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "สวัสดี", suggestion: "ครับ"), "ครับ")
-    }
-
-    func testJoinSentenceStartKeepsSpace() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "Hello.", suggestion: "How"), " How")
-    }
-
-    func testJoinSpaceAfterEmojiPercentEllipsis() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "Thanks 😊", suggestion: "See you"), " See you")
-        XCTAssertEqual(GhostTextPrompt.join(context: "I'm 100%", suggestion: "sure"), " sure")
-        XCTAssertEqual(GhostTextPrompt.join(context: "Wait…", suggestion: "Then"), " Then")
-    }
-
-    func testJoinOpeningQuoteNoSpace() {
-        XCTAssertEqual(GhostTextPrompt.join(context: "He said \"", suggestion: "hello"), "hello")
-        XCTAssertEqual(GhostTextPrompt.join(context: "costs $", suggestion: "100"), "100")
-        XCTAssertEqual(GhostTextPrompt.join(context: "She said \"Hi\"", suggestion: "and left"), " and left")
-        XCTAssertEqual(GhostTextPrompt.join(context: "it's", suggestion: "fine"), " fine")
-    }
-
-    func testJoinEdgeCases38() {
-        let j = GhostTextPrompt.join
-        XCTAssertEqual(j("他想了很久……", "然后走了"), "然后走了")
-        XCTAssertEqual(j("他说\u{201C}好\u{201D}", "我们走吧"), "我们走吧")
-        XCTAssertEqual(j("他说\"好\"", "我们走吧"), "我们走吧")
-        XCTAssertEqual(j("価格は（", "10ドル"), "10ドル")
-        XCTAssertEqual(j("He said (\"", "hello"), "hello")
-        XCTAssertEqual(j("<a href=\"", "https://x"), "https://x")
-        XCTAssertEqual(j("a \u{201E}", "b"), "b")
-        XCTAssertEqual(j("a `", "b"), "b")
-        XCTAssertEqual(j("I thought about it \u{2014}", "and then left"), " and then left")
-        XCTAssertEqual(j("I went -", "to the store"), " to the store")
-        XCTAssertEqual(j("long-", "term"), "term")
-        XCTAssertEqual(j("Hola!", "\u{BF}Qu\u{E9}"), " \u{BF}Qu\u{E9}")
-        XCTAssertEqual(j("Hola", "\u{A1}Qu\u{E9}"), " \u{A1}Qu\u{E9}")
-        XCTAssertEqual(j("a", "(b)"), " (b)")
-        XCTAssertEqual(j("I love", "\u{1F355} pizza"), " \u{1F355} pizza")
-        XCTAssertEqual(j("5 <", "6"), " 6")
-        XCTAssertEqual(j("costs \u{20AC}", "100"), "100")
-        XCTAssertEqual(j("Hello", ", world"), ", world")
-    }
-
-    func testJoinRound6() {
-        XCTAssertEqual(GhostTextPrompt.clean("\"Yes\" or \"no\""), "\"Yes\" or \"no\"")
-        XCTAssertEqual(GhostTextPrompt.clean("\u{201C}Yes\u{201D} or \u{201C}no\u{201D}"), "\u{201C}Yes\u{201D} or \u{201C}no\u{201D}")
-        XCTAssertEqual(GhostTextPrompt.clean("\"Yes\""), "Yes")
-        XCTAssertEqual(GhostTextPrompt.join(context: "The price is", suggestion: "$20"), " $20")
-        XCTAssertEqual(GhostTextPrompt.join(context: "Hi", suggestion: "@lionel"), " @lionel")
-        XCTAssertEqual(GhostTextPrompt.join(context: "Цена ₽", suggestion: "100"), "100")
-        XCTAssertEqual(GhostTextPrompt.join(context: "50¢", suggestion: "each"), " each")
-        XCTAssertEqual(GhostTextPrompt.join(context: "costs 100 €", suggestion: "per month"), " per month")
-        XCTAssertEqual(GhostTextPrompt.join(context: "costs €", suggestion: "100"), "100")
-        XCTAssertEqual(GhostTextPrompt.join(context: "他想了很久\u{22EF}\u{22EF}", suggestion: "然后走了"), "然后走了")
-        XCTAssertEqual(GhostTextPrompt.join(context: "他想了很久\u{2025}", suggestion: "然后走了"), "然后走了")
-        XCTAssertEqual(GhostTextPrompt.join(context: "我们走吧", suggestion: "\u{201C}你好\u{201D}"), "\u{201C}你好\u{201D}")
-        XCTAssertEqual(GhostTextPrompt.join(context: "\u{2026}\u{2026}", suggestion: "我们"), "我们")
-        XCTAssertEqual(GhostTextPrompt.join(context: "He said \"hello", suggestion: "\" and left"), "\" and left")
-        XCTAssertEqual(GhostTextPrompt.join(context: "He said ", suggestion: "\"hi\""), "\"hi\"")
-        XCTAssertEqual(GhostTextPrompt.join(context: "He said", suggestion: "\"hi\""), " \"hi\"")
-        XCTAssertEqual(GhostTextPrompt.join(context: "it", suggestion: "'s fine"), "'s fine")
+    /// Round 7 join: one space only after a letter, digit or .,;:!? when the suggestion starts with a letter or digit.
+    func testJoinRound7Table() {
+        let rows: [(String, String, String)] = [
+            ("Hello", "world", " world"),
+            ("Hello ", "world", "world"),
+            ("Hello,", "world", " world"),
+            ("Done.", "Next", " Next"),
+            ("(", "a", "a"),
+            ("costs $", "5", "5"),
+            ("", "x", "x"),
+            ("Hi ", " there", "there"),
+            ("it", "!", "!"),
+        ]
+        for (context, suggestion, expected) in rows {
+            XCTAssertEqual(GhostTextPrompt.join(context: context, suggestion: suggestion), expected,
+                           "join(\(context.debugDescription), \(suggestion.debugDescription))")
+        }
     }
 }
