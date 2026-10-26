@@ -107,4 +107,26 @@ final class GhostTextPromptTests: XCTestCase {
         XCTAssertEqual(GhostTextPrompt.join(context: "She said \"Hi\"", suggestion: "and left"), " and left")
         XCTAssertEqual(GhostTextPrompt.join(context: "it's", suggestion: "fine"), " fine")
     }
+
+    func testJoinEdgeCases38() {
+        let j = GhostTextPrompt.join
+        XCTAssertEqual(j("他想了很久……", "然后走了"), "然后走了")
+        XCTAssertEqual(j("他说\u{201C}好\u{201D}", "我们走吧"), "我们走吧")
+        XCTAssertEqual(j("他说\"好\"", "我们走吧"), "我们走吧")
+        XCTAssertEqual(j("価格は（", "10ドル"), "10ドル")
+        XCTAssertEqual(j("He said (\"", "hello"), "hello")
+        XCTAssertEqual(j("<a href=\"", "https://x"), "https://x")
+        XCTAssertEqual(j("a \u{201E}", "b"), "b")
+        XCTAssertEqual(j("a `", "b"), "b")
+        XCTAssertEqual(j("I thought about it \u{2014}", "and then left"), " and then left")
+        XCTAssertEqual(j("I went -", "to the store"), " to the store")
+        XCTAssertEqual(j("long-", "term"), "term")
+        XCTAssertEqual(j("Hola!", "\u{BF}Qu\u{E9}"), " \u{BF}Qu\u{E9}")
+        XCTAssertEqual(j("Hola", "\u{A1}Qu\u{E9}"), " \u{A1}Qu\u{E9}")
+        XCTAssertEqual(j("a", "(b)"), " (b)")
+        XCTAssertEqual(j("I love", "\u{1F355} pizza"), " \u{1F355} pizza")
+        XCTAssertEqual(j("5 <", "6"), " 6")
+        XCTAssertEqual(j("costs \u{20AC}", "100"), "100")
+        XCTAssertEqual(j("Hello", ", world"), ", world")
+    }
 }
