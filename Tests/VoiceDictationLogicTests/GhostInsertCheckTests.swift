@@ -157,4 +157,45 @@ final class GhostInsertCheckTests: XCTestCase {
             XCTAssertFalse(text.contains(banned), "GhostTextManager.swift still contains \(banned)")
         }
     }
+
+    private final class WriteThenErrorField: GhostTextField {
+        var selection: (location: Int, length: Int)?
+        var value: String?
+        init(value: String, caret: Int) { self.value = value; self.selection = (caret, 0) }
+        func setSelectedText(_ text: String) -> Bool {
+            guard let v = value, let s = selection else { return false }
+            let ns = v as NSString
+            value = ns.substring(to: s.location) + text + ns.substring(from: s.location)
+            return false
+        }
+        func string(location: Int, length: Int) -> String? {
+            guard let v = value else { return nil }
+            return (v as NSString).substring(with: NSRange(location: location, length: length))
+        }
+    }
+
+    func testWriteThenErrorIsInsertedOnce() {
+        let field = WriteThenErrorField(value: "Hello ", caret: 6)
+        XCTAssertEqual(GhostInsertCheck.insert("world", at: 6, into: field), .inserted)
+        XCTAssertEqual(field.value, "Hello world")
+    }
+
+    func testMayTypeOnlyForSetFailedWithSuccessfulNotSettableQuery() {
+        for r in [GhostInsertCheck.Result.inserted, .unverified, .refused, .setFailed] {
+            for q in [true, false] {
+                for st in [true, false] {
+                    let expected = r == .setFailed && q && !st
+                    XCTAssertEqual(GhostInsertCheck.mayType(r, querySucceeded: q, settable: st), expected)
+                }
+            }
+        }
+    }
+
+    func testHelperTypesOnlyThroughMayType() throws {
+        let text = try read("BoringNotchXPCHelper/BoringNotchXPCHelper.swift")
+        XCTAssertTrue(text.contains("GhostInsertCheck.mayType"))
+        let body = text.components(separatedBy: "func ghostInsert").last ?? ""
+        let before = body.components(separatedBy: "typeUnicode(text)").first ?? ""
+        XCTAssertTrue(before.contains("mayType"), "typeUnicode in ghostInsert must sit inside the mayType branch")
+    }
 }
