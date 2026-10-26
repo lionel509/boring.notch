@@ -129,4 +129,24 @@ final class GhostTextPromptTests: XCTestCase {
         XCTAssertEqual(j("costs \u{20AC}", "100"), "100")
         XCTAssertEqual(j("Hello", ", world"), ", world")
     }
+
+    func testJoinRound6() {
+        XCTAssertEqual(GhostTextPrompt.clean("\"Yes\" or \"no\""), "\"Yes\" or \"no\"")
+        XCTAssertEqual(GhostTextPrompt.clean("\u{201C}Yes\u{201D} or \u{201C}no\u{201D}"), "\u{201C}Yes\u{201D} or \u{201C}no\u{201D}")
+        XCTAssertEqual(GhostTextPrompt.clean("\"Yes\""), "Yes")
+        XCTAssertEqual(GhostTextPrompt.join(context: "The price is", suggestion: "$20"), " $20")
+        XCTAssertEqual(GhostTextPrompt.join(context: "Hi", suggestion: "@lionel"), " @lionel")
+        XCTAssertEqual(GhostTextPrompt.join(context: "Цена ₽", suggestion: "100"), "100")
+        XCTAssertEqual(GhostTextPrompt.join(context: "50¢", suggestion: "each"), " each")
+        XCTAssertEqual(GhostTextPrompt.join(context: "costs 100 €", suggestion: "per month"), " per month")
+        XCTAssertEqual(GhostTextPrompt.join(context: "costs €", suggestion: "100"), "100")
+        XCTAssertEqual(GhostTextPrompt.join(context: "他想了很久\u{22EF}\u{22EF}", suggestion: "然后走了"), "然后走了")
+        XCTAssertEqual(GhostTextPrompt.join(context: "他想了很久\u{2025}", suggestion: "然后走了"), "然后走了")
+        XCTAssertEqual(GhostTextPrompt.join(context: "我们走吧", suggestion: "\u{201C}你好\u{201D}"), "\u{201C}你好\u{201D}")
+        XCTAssertEqual(GhostTextPrompt.join(context: "\u{2026}\u{2026}", suggestion: "我们"), "我们")
+        XCTAssertEqual(GhostTextPrompt.join(context: "He said \"hello", suggestion: "\" and left"), "\" and left")
+        XCTAssertEqual(GhostTextPrompt.join(context: "He said ", suggestion: "\"hi\""), "\"hi\"")
+        XCTAssertEqual(GhostTextPrompt.join(context: "He said", suggestion: "\"hi\""), " \"hi\"")
+        XCTAssertEqual(GhostTextPrompt.join(context: "it", suggestion: "'s fine"), "'s fine")
+    }
 }
