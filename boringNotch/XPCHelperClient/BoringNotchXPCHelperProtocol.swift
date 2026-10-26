@@ -13,6 +13,9 @@ import Foundation
     func requestAccessibilityAuthorization()
     func ensureAccessibilityAuthorization(_ promptIfNeeded: Bool, with reply: @escaping (Bool) -> Void)
     func postPasteKeystroke(_ keyCode: Int, with reply: @escaping (Bool) -> Void)
+    /// The focused text field as JSON (see GhostTextSnapshot keys), or nil when Accessibility is not trusted
+    /// or nothing has focus. A secure field's value is never read.
+    func focusedTextSnapshot(with reply: @escaping (String?) -> Void)
     // Keyboard backlight / CoreBrightness access (performed by the helper)
     func isKeyboardBrightnessAvailable(with reply: @escaping (Bool) -> Void)
     func currentKeyboardBrightness(with reply: @escaping (NSNumber?) -> Void)
@@ -46,3 +49,22 @@ import Foundation
     func bluetoothDevices(with reply: @escaping (String?) -> Void)
 }
 
+/*
+ To use the service from an application or other process, use NSXPCConnection to establish a connection to the service by doing something like this:
+
+     connectionToService = NSXPCConnection(serviceName: "theboringteam.boringnotch.BoringNotchXPCHelper")
+     connectionToService.remoteObjectInterface = NSXPCInterface(with: (any BoringNotchXPCHelperProtocol).self)
+     connectionToService.resume()
+
+ Once you have a connection to the service, you can use it like this:
+
+     if let proxy = connectionToService.remoteObjectProxy as? BoringNotchXPCHelperProtocol {
+         proxy.performCalculation(firstNumber: 23, secondNumber: 19) { result in
+             NSLog("Result of calculation is: \(result)")
+         }
+     }
+
+ And, when you are finished with the service, clean up the connection like this:
+
+     connectionToService.invalidate()
+*/

@@ -257,6 +257,23 @@ final class XPCHelperClient: NSObject {
         }
     }
     
+    /// The focused text field as JSON, or nil when unavailable. A secure field is never read.
+    nonisolated func focusedTextSnapshotJSON() async -> String? {
+        do {
+            let service = await MainActor.run {
+                ensureRemoteService()
+            }
+            let result: String? = try await service.withContinuation { service, continuation in
+                service.focusedTextSnapshot { json in
+                    continuation.resume(returning: json)
+                }
+            }
+            return result
+        } catch {
+            return nil
+        }
+    }
+    
     // MARK: - Keyboard Brightness
     
     nonisolated func isKeyboardBrightnessAvailable() async -> Bool {
