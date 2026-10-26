@@ -5,7 +5,7 @@ private struct InsertLCG: RandomNumberGenerator {
     var state: UInt64
     mutating func next() -> UInt64 {
         state = state &* 6364136223846793005 &+ 1442695040888963407
-        return state
+        return state >> 33   // high bits: low bits of an LCG cycle too fast
     }
 }
 
@@ -102,14 +102,14 @@ final class GhostInsertCheckTests: XCTestCase {
         XCTAssertEqual(field.value, "Hello wor")
     }
 
-    /// 2,000 seeded random fields, selections and expected locations.
+    /// 5,000 seeded random fields, selections and expected locations.
     /// Invariant: refused leaves the field untouched; inserted gives exactly the spliced value.
     func testRandomFieldsEitherRefuseOrSpliceExactly() {
         var rng = InsertLCG(state: 0x29_1C5)
         let alphabet = Array("ab é\n")
         let textAlphabet = Array("xy z")
         var inserted = 0
-        for _ in 0..<2_000 {
+        for _ in 0..<5_000 {
             let len = Int(rng.next() % 21)
             let value = String((0..<len).map { _ in alphabet[Int(rng.next() % UInt64(alphabet.count))] })
             let ns = value as NSString

@@ -1873,7 +1873,7 @@ struct Shortcuts: View {
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 }
-                Text("Model calls this session: \(ghost.callsThisSession)")
+                Text("Model calls this session: \(Defaults[.ghostTextCalls])")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             } header: {

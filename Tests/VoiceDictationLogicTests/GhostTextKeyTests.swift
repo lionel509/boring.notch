@@ -5,7 +5,7 @@ private struct KeyDecisionLCG: RandomNumberGenerator {
     var state: UInt64
     mutating func next() -> UInt64 {
         state = state &* 6364136223846793005 &+ 1442695040888963407
-        return state
+        return state >> 33   // high bits: low bits of an LCG cycle too fast
     }
 }
 
@@ -120,7 +120,7 @@ final class GhostTextKeyTests: XCTestCase {
             var flags: UInt64 = 0
             for m in masks where rng.next() % 2 == 0 { flags |= m }
             let e = L.KeyEvent(
-                keyCode: Int(rng.next() % 128),
+                keyCode: rng.next() % 4 == 0 ? 48 : Int(rng.next() % 128),
                 flags: flags,
                 isKeyDown: rng.next() % 4 != 0,
                 isAutorepeat: rng.next() % 8 == 0,

@@ -5,7 +5,7 @@ private struct MachineLCG: RandomNumberGenerator {
     var state: UInt64
     mutating func next() -> UInt64 {
         state = state &* 6364136223846793005 &+ 1442695040888963407
-        return state
+        return state >> 33   // high bits: low bits of an LCG cycle too fast
     }
 }
 
@@ -132,13 +132,13 @@ final class GhostTextLogicTests: XCTestCase {
                 var event: L.KeyEvent? = nil
                 let input: L.Input
                 let roll = rng.next() % 9
-                let genPick = Int(rng.next() % UInt64(m.gen + 2))
+                let genPick = rng.next() % 2 == 0 ? m.gen : Int(rng.next() % UInt64(m.gen + 2))
                 switch roll {
                 case 0, 1, 2:
                     var flags: UInt64 = 0
                     for mask in masks where rng.next() % 3 == 0 { flags |= mask }
                     let e = L.KeyEvent(
-                        keyCode: Int(rng.next() % 128), flags: flags,
+                        keyCode: rng.next() % 4 == 0 ? 48 : Int(rng.next() % 128), flags: flags,
                         isKeyDown: rng.next() % 4 != 0, isAutorepeat: rng.next() % 8 == 0,
                         isSynthetic: rng.next() % 8 == 0,
                         characters: pool[Int(rng.next() % UInt64(pool.count))])

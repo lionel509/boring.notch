@@ -116,7 +116,8 @@ final class GhostTextManager: ObservableObject {
             handle(.focusChanged)
             return Unmanaged.passUnretained(event)
         case .keyDown:
-            let effects = handle(.key(Self.keyEvent(from: event)))
+            let key = GhostTextLogic.decide(Self.keyEvent(from: event), suggestionVisible: machine.isShowing)
+            let effects = handle(.key(key))
             return effects.contains(.swallow) ? nil : Unmanaged.passUnretained(event)
         default:
             return Unmanaged.passUnretained(event)
