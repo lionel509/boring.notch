@@ -35,18 +35,32 @@ enum GhostTextPrompt {
     /// connector, an opening ASCII quote (preceded by whitespace or nothing), or both sides are from a
     /// script with no spaces between words (Han, Kana, CJK and fullwidth punctuation, Thai).
     static func join(context: String, suggestion: String) -> String {
-        guard let last = context.last, let first = suggestion.first,
-              !last.isWhitespace, first.isLetter || first.isNumber else { return suggestion }
+        guard let last = context.last, let first = suggestion.first, !last.isWhitespace,
+              first.isLetter || first.isNumber || openers.contains(first) || isEmoji(first)
+        else { return suggestion }
         if noSpaceAfter.contains(last) { return suggestion }
+        let before = context.dropLast().last
         if last == "\"" || last == "'" {
-            let before = context.dropLast().last
-            if before == nil || before!.isWhitespace { return suggestion }
+            if before == nil || before!.isWhitespace || "([{=<".contains(before!) { return suggestion }
         }
-        if isUnspaced(last) && isUnspaced(first) { return suggestion }
+        if "-\u{2013}\u{2014}<".contains(last) {
+            // Spaced dash or operator gets a space; a glued one (long-term, <a) does not.
+            return before?.isWhitespace == true ? " " + suggestion : suggestion
+        }
+        // Skip trailing closing punctuation (ellipsis, quotes, brackets) to find the real last character.
+        let core = context.last { !closers.contains($0) } ?? last
+        if isUnspaced(core) && isUnspaced(first) { return suggestion }
         return " " + suggestion
     }
 
-    private static let noSpaceAfter: Set<Character> = Set("/\\@-\u{2013}\u{2014}_([{<#$~\u{201C}\u{2018}\u{AB}\u{BF}\u{A1}")
+    private static let closers: Set<Character> = Set("\u{2026}\"'\u{201D}\u{2019}\u{BB}\u{203A}")
+    private static let openers: Set<Character> = Set("\u{BF}\u{A1}([{\u{201C}\u{2018}\u{AB}\u{201E}\u{2039}\"'")
+
+    private static func isEmoji(_ c: Character) -> Bool {
+        c.unicodeScalars.first.map { $0.properties.isEmojiPresentation } ?? false
+    }
+
+    private static let noSpaceAfter: Set<Character> = Set("/\\@_([{#$~`\u{201C}\u{2018}\u{AB}\u{BF}\u{A1}\u{201E}\u{2039}\u{FF08}\u{300C}\u{300E}\u{3010}\u{20AC}\u{A3}\u{A5}\u{20A9}\u{A2}\u{20B9}")
 
     private static func isUnspaced(_ c: Character) -> Bool {
         guard let v = c.unicodeScalars.first?.value else { return false }
