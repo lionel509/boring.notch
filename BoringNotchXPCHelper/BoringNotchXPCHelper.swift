@@ -329,6 +329,11 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         reply(true)
     }
     
+    /// Focused text field for the ghost-text feature. Here because only this process holds Accessibility trust.
+    @objc func focusedTextSnapshot(with reply: @escaping (String?) -> Void) {
+        reply(FocusedTextReader.snapshotJSON())
+    }
+    
     private class KeyboardBrightnessClient {
         private static let keyboardID: UInt64 = 1
         private var clientInstance: NSObject?
