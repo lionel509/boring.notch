@@ -20,6 +20,11 @@ enum GhostInsertCheck {
             && textAfterCaret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The typed fallback runs only after a definite set failure, on a successful settability query that says not settable.
+    static func mayType(_ r: Result, querySucceeded: Bool, settable: Bool) -> Bool {
+        r == .setFailed && querySucceeded && !settable
+    }
+
     static func insert(_ text: String, at expectedLocation: Int, into field: GhostTextField) -> Result {
         guard !text.isEmpty, let sel = field.selection, let value = field.value else { return .refused }
         let ns = value as NSString
