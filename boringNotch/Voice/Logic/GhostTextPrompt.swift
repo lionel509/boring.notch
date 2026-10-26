@@ -21,15 +21,22 @@ enum GhostTextPrompt {
             .components(separatedBy: .newlines).first ?? ""
         var body = firstLine.trimmingCharacters(in: .whitespaces)
         let pairs: [(Character, Character)] = [("\"", "\""), ("'", "'"), ("`", "`"), ("\u{201C}", "\u{201D}")]
-        if body.count >= 2, let first = body.first, let last = body.last,
-           pairs.contains(where: { $0.0 == first && $0.1 == last }) {
-            let inner = String(body.dropFirst().dropLast())
-            // Keep the quotes when the reply holds several quoted phrases ("Yes" or "no").
-            if !inner.contains(first) && !inner.contains(last) { body = inner }
+        // A quoted phrase may be followed by plain punctuation: "world". becomes world.
+        if let first = body.first, let pair = pairs.first(where: { $0.0 == first }),
+           let end = body.lastIndex(of: pair.1), end > body.startIndex {
+            let tail = body[body.index(after: end)...]
+            if tail.allSatisfy({ ".,;:!?".contains($0) }) {
+                let inner = String(body[body.index(after: body.startIndex)..<end])
+                // Keep the quotes when the reply holds several quoted phrases ("Yes" or "no").
+                if !inner.contains(first) && !inner.contains(pair.1) { body = inner + tail }
+            }
         }
         let words = body.split(whereSeparator: { $0.isWhitespace }).prefix(GhostTextPolicy.maxSuggestionWords)
         guard !words.isEmpty else { return nil }
-        return words.joined(separator: " ")
+        let suggestion = words.joined(separator: " ")
+        // Fences, quote marks, ellipses and rules have no words: nothing to show or insert.
+        guard suggestion.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
+        return suggestion
     }
 
     /// Joins an accepted suggestion to the text before the caret. The suggestion loses its leading whitespace.

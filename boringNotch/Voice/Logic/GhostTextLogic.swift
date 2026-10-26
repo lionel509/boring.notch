@@ -25,10 +25,14 @@ enum GhostTextLogic {
     /// Classifies a key event. Only a real Option+Tab keyDown (no shift, cmd or ctrl, not a repeat)
     /// accepts, and only while a suggestion is visible. Everything else passes through.
     static func decide(_ e: KeyEvent, suggestionVisible: Bool) -> KeyDecision {
-        // 1. Our own events, key releases and the modifier keys themselves never change state.
-        if e.isSynthetic || !e.isKeyDown || (54...63).contains(e.keyCode) { return .ignore }
-        // 2. Option+Tab, and nothing else, accepts.
         let optionOnly = e.flags & optionMask != 0 && e.flags & (shiftMask | commandMask | controlMask) == 0
+        // 1. Key releases and the modifier keys themselves never change state.
+        if !e.isKeyDown || (54...63).contains(e.keyCode) { return .ignore }
+        // 2. Option+Tab, and nothing else, accepts. Our own synthetic events never accept.
+        if e.isSynthetic {
+            // The rewrite posts its own text and arrow keys; they change the text under a visible overlay.
+            return suggestionVisible && !(e.keyCode == 48 && optionOnly) ? .dismiss : .ignore
+        }
         if e.keyCode == 48 && optionOnly && !e.isAutorepeat && suggestionVisible { return .accept }
         // 3. Command and control chords always dismiss.
         if e.flags & (commandMask | controlMask) != 0 { return .dismiss }
