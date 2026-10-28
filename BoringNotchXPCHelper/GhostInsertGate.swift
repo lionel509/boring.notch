@@ -12,7 +12,7 @@ enum GhostInsertGate {
 
     /// A secure field, or one whose role cannot be read or is empty (fail closed).
     static func isSecure(role: String?, subrole: String?) -> Bool {
-        guard let role, !role.isEmpty else { return true }
+        guard let role, !role.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
         return role == "AXSecureTextField" || subrole == "AXSecureTextField"
     }
 
