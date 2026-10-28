@@ -27,7 +27,14 @@ if pgrep -x xcodebuild >/dev/null || pgrep -x swift-build >/dev/null; then
 fi
 
 # b. The identity: created once, in the login keychain, and trusted for code signing.
-has_identity() { security find-identity -v -p codesigning | grep -qF -- "\"$IDENTITY\""; }  # -F: the name is literal, not a regex
+trusted_count() { security find-identity -v -p codesigning | grep -cF -- "\"$IDENTITY\"" || true; }  # -F: literal name
+has_identity() { (( $(trusted_count) >= 1 )); }
+# Two trusted identities with one name make codesign's choice ambiguous, so refuse before the build (round-1 fix 3).
+n=$(trusted_count)
+if (( n > 1 )); then
+  print -u2 "ambiguous identity: $n trusted identities are named '$IDENTITY'; delete the extras in Keychain Access"
+  exit 4
+fi
 if ! has_identity; then
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
