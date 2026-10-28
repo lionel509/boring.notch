@@ -12,6 +12,8 @@ enum GhostTextEvent: String, CaseIterable {
         case roleNotAllowed, subroleNotAllowed
         /// Round 8 (#31): every outcome after `.call` logs one line.
         case modelError, modelUnavailable, modelEmpty, cleanedAway, overlayNoRoom, overlayNoCaret
+        /// Round 9 (#31): a fetch cancelled after `.call`, and an accept whose Option+Tab pass-through failed.
+        case cancelled, passThroughFailed
     }
 
     /// Why a model reply that gave no suggestion was dropped: modelEmpty when blank, cleanedAway otherwise.

@@ -34,6 +34,8 @@ final class GhostTextManager: ObservableObject {
     private var anchor: GhostTextLogic.Anchor?
     private var pendingCaret: CGRect?
     private var pendingField: CGRect?
+    /// Set while showOverlay hides the overlay itself through focusChanged. That hide is not a user dismissal, so it logs nothing.
+    private var overlayHide = false
 
     private init() {}
 
@@ -171,7 +173,7 @@ final class GhostTextManager: ObservableObject {
             showOverlay(text)
         case .hide(let reason):
             GhostTextOverlay.shared.hide()
-            if reason == .dismissed { GhostTextLog.record(.dismissed) }
+            if reason == .dismissed && !overlayHide { GhostTextLog.record(.dismissed) }
         case .accept(let text):
             // The app the key was pressed in, read now: a later frontmost change must not be mistaken for it.
             let keyApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
@@ -221,7 +223,11 @@ final class GhostTextManager: ObservableObject {
         if #available(macOS 26.0, *) {
             completion = await GhostTextModel.shared.complete(prompt)
         }
-        guard !Task.isCancelled else { return }
+        // Round 9 (#31): a cancel after .call still logs one line, so every outcome after .call has one.
+        guard !Task.isCancelled else {
+            GhostTextLog.record(.dropped, reason: .cancelled)
+            return
+        }
         // Round 8 (#31): each way the reply gives no suggestion logs one dropped line before the machine goes idle.
         let suggestion: String?
         switch completion {
@@ -261,8 +267,7 @@ final class GhostTextManager: ObservableObject {
     /// machine is told so it never stays in the showing state with nothing on screen.
     private func showOverlay(_ text: String) {
         guard let caret = pendingCaret, let field = pendingField else {
-            GhostTextLog.record(.dropped, reason: .overlayNoCaret)
-            handle(.focusChanged)
+            dropOverlay(.overlayNoCaret)
             return
         }
         let fontSize = GhostTextGeometry.fontSize(caretHeight: caret.height)
@@ -275,12 +280,19 @@ final class GhostTextManager: ObservableObject {
             textSize: measure.intrinsicContentSize,
             primaryHeight: primaryHeight
         ) else {
-            GhostTextLog.record(.dropped, reason: .overlayNoRoom)
-            handle(.focusChanged)
+            dropOverlay(.overlayNoRoom)
             return
         }
         GhostTextOverlay.shared.show(text, frame: frame, fontSize: fontSize)
         GhostTextLog.record(.shown)
+    }
+
+    /// Logs the one reason the overlay could not be shown, then tells the machine to go idle without logging a dismissal.
+    private func dropOverlay(_ reason: GhostTextEvent.Reason) {
+        GhostTextLog.record(.dropped, reason: reason)
+        overlayHide = true
+        handle(.focusChanged)
+        overlayHide = false
     }
 
     // MARK: - Accept
@@ -293,6 +305,9 @@ final class GhostTextManager: ObservableObject {
         guard GhostInsertGate.passThrough(result: result, keyApp: keyApp, frontNow: front) else { return }
         if await XPCHelperClient.shared.postGhostAcceptKey() {
             GhostTextLog.record(.passedThrough, insertResult: result)
+        } else {
+            // Round 9 (#31): a lost pass-through is logged with its reason, so the key is never dropped silently.
+            GhostTextLog.record(.dropped, reason: .passThroughFailed)
         }
     }
 
