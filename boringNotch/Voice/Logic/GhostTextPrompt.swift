@@ -56,14 +56,15 @@ enum GhostTextPrompt {
 
     static let titleAbbreviations: Set<String> = ["mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "mt", "inc", "ltd", "co", "corp"]
 
-    /// Round 12 (#47): a dot after a title, a single letter, or inside a dotted token ("U.S.") is not a sentence end.
+    /// Round 12 (#47): a dot after a title or a dotted single-letter initialism ("U.S.", "e.g.") is not a sentence end.
     private static func isAbbreviationDot(_ body: String, at dot: String.Index) -> Bool {
         let head = body[..<dot]
         guard let lastCh = head.last, !lastCh.isWhitespace else { return false }
         let token = head.split(whereSeparator: { $0.isWhitespace }).last.map(String.init) ?? ""
-        if token.contains(".") { return true }
-        if token.count == 1, token.first?.isLetter == true { return true }
-        return titleAbbreviations.contains(token.lowercased())
+        if titleAbbreviations.contains(token.lowercased()) { return true }
+        // A dotted initialism of single letters ("U.S", "e.g", "i.e"); "wait.." and "config.json" are not.
+        let segments = token.split(separator: ".", omittingEmptySubsequences: false)
+        return segments.count >= 2 && segments.allSatisfy { $0.count == 1 && $0.first?.isLetter == true }
     }
 
     /// Round 12 (#47, break 5): common abbreviations that end in a dot and are followed by a space.
