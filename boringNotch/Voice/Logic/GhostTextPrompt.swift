@@ -39,7 +39,7 @@ enum GhostTextPrompt {
         while i < body.endIndex {
             let next = body.index(after: i)
             let c = body[i]
-            if GhostTextPolicy.cjkStops.contains(c) || (GhostTextPolicy.suggestionStops.contains(c) && (next == body.endIndex || body[next].isWhitespace)) {
+            if GhostTextPolicy.cjkStops.contains(c) || (GhostTextPolicy.suggestionStops.contains(c) && (next == body.endIndex || body[next].isWhitespace) && !(c == "." && next != body.endIndex && isAbbreviationDot(body, at: i))) {
                 body = String(body[..<i]); break
             }
             i = next
@@ -51,6 +51,17 @@ enum GhostTextPrompt {
         // Fences, quote marks, ellipses and rules have no words: nothing to show or insert.
         guard suggestion.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
         return suggestion
+    }
+
+    static let titleAbbreviations: Set<String> = ["mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "mt", "inc", "ltd", "co", "corp"]
+
+    /// Round 12 (#47): a dot after a title, a single letter, or inside a dotted token ("U.S.") is not a sentence end.
+    private static func isAbbreviationDot(_ body: String, at dot: String.Index) -> Bool {
+        let head = body[..<dot]
+        let token = head.split(whereSeparator: { $0.isWhitespace }).last.map(String.init) ?? ""
+        if token.contains(".") { return true }
+        if token.count == 1, token.first?.isLetter == true { return true }
+        return titleAbbreviations.contains(token.lowercased())
     }
 
     /// Round 12 (#47, break 5): common abbreviations that end in a dot and are followed by a space.
