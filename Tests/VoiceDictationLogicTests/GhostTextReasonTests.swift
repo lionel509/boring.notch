@@ -85,4 +85,52 @@ final class GhostTextReasonTests: XCTestCase {
             XCTAssertEqual(GhostTextPolicy.shouldRequest(s), whole)
         }
     }
+
+    // MARK: #47 fields: axError and app
+
+    func testAppAndAxErrorRenderAfterInsertResult() {
+        let line = GhostTextEvent.line(.dropped, callsTotal: 2, reason: .noFocusedApp,
+                                       axError: -25204, app: "com.google.Chrome")
+        XCTAssertEqual(line, "ghost event=dropped calls=2 reason=noFocusedApp axError=-25204 app=com.google.Chrome")
+    }
+
+    func testEmptyAppRendersAsNone() {
+        let line = GhostTextEvent.line(.dropped, callsTotal: 2, reason: .xpcError, app: "")
+        XCTAssertEqual(line, "ghost event=dropped calls=2 reason=xpcError app=none")
+    }
+
+    /// Privacy invariant (#47): whatever a bundle ID or a stray string contains, the line carries only
+    /// `key=token` pairs drawn from `[A-Za-z0-9.-]`, and one ` app=` at most.
+    func testNoLineCarriesUserTextWhateverTheAppString() throws {
+        let shape = try NSRegularExpression(pattern: "^ghost( [a-zA-Z]+=-?[A-Za-z0-9.-]+)+$")
+        let pool = Array("abcXYZ019 =\n\".-é字🙂".unicodeScalars)
+        var state: UInt64 = 47
+        func next() -> UInt64 {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return state >> 33
+        }
+        var apps = ["com.evil app=x\nghost event=accepted", "com.google.Chrome"]
+        for _ in 0..<500 {
+            let length = Int(next() % 301)
+            var s = String.UnicodeScalarView()
+            for _ in 0..<length { s.append(pool[Int(next() % UInt64(pool.count))]) }
+            apps.append(String(s))
+        }
+        let reasons: [GhostTextEvent.Reason?] = [nil] + GhostTextEvent.Reason.allCases.map { Optional($0) }
+        for event in GhostTextEvent.allCases {
+            for reason in reasons {
+                for app in apps {
+                    for axError in [nil, -25204] as [Int?] {
+                        let line = GhostTextEvent.line(event, callsTotal: 1, reason: reason,
+                                                       axError: axError, app: app)
+                        let range = NSRange(line.startIndex..., in: line)
+                        XCTAssertNotNil(shape.firstMatch(in: line, range: range), line)
+                        XCTAssertEqual(line.components(separatedBy: " app=").count - 1, 1, line)
+                        let value = String(line.components(separatedBy: " app=")[1])
+                        XCTAssertLessThanOrEqual(value.count, 155, line)
+                    }
+                }
+            }
+        }
+    }
 }
