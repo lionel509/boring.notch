@@ -194,9 +194,18 @@ final class GhostTextManager: ObservableObject {
         }
     }
 
+    /// The overlay's font: the field's own family and size when the helper read them, else the caret-height estimate.
+    private static func overlayFont(name: String?, size: Double?, caretHeight: CGFloat) -> NSFont {
+        let points = GhostTextGeometry.fontSize(fieldFontSize: size, caretHeight: caretHeight)
+        return name.flatMap { NSFont(name: $0, size: points) } ?? .systemFont(ofSize: points)
+    }
+
     private func fetch(gen: Int) async {
+        let frontApp = NSWorkspace.shared.frontmostApplication
+        let frontPid = Int(frontApp?.processIdentifier ?? 0)
+        let frontBundle = frontApp?.bundleIdentifier ?? ""
         let raced: String?? = await TimeoutRace.run(seconds: 3) { () -> String? in
-            await XPCHelperClient.shared.focusedTextSnapshotJSON()
+            await XPCHelperClient.shared.focusedTextSnapshotJSON(frontPid: frontPid, frontBundle: frontBundle)
         }
         guard !Task.isCancelled else { GhostTextLog.record(.dropped, reason: .cancelled); return }
         let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
@@ -238,7 +247,7 @@ final class GhostTextManager: ObservableObject {
             return
         }
         // Round 8 (#31): each way the reply gives no suggestion logs one dropped line before the machine goes idle.
-        let suggestion: String?
+        var suggestion: String?
         switch completion {
         case .unavailable:
             GhostTextLog.record(.dropped, reason: .modelUnavailable)
@@ -247,12 +256,19 @@ final class GhostTextManager: ObservableObject {
             GhostTextLog.record(.dropped, reason: .modelError, value: value)
             suggestion = nil
         case .reply(let raw):
-            if let cleaned = GhostTextPrompt.clean(raw) {
-                suggestion = GhostTextPrompt.join(context: before, suggestion: cleaned)
+            // Round 12 (#47): a repeated word is dropped before the machine sees the suggestion.
+            if let cleaned = GhostTextPrompt.clean(raw), let kept = GhostTextPrompt.dedupe(context: before, suggestion: cleaned) {
+                suggestion = GhostTextPrompt.join(context: before, suggestion: kept)
             } else {
-                GhostTextLog.record(.dropped, reason: GhostTextEvent.noSuggestionReason(raw))
+                GhostTextLog.record(.dropped, reason: GhostTextPrompt.clean(raw) == nil ? GhostTextEvent.noSuggestionReason(raw) : .cleanedAway)
                 suggestion = nil
             }
+        }
+        // Round 12 (#47): fit to whole words that fit the field, so the drawn text is exactly what accept inserts.
+        if let joined = suggestion {
+            let font = Self.overlayFont(name: snapshot.fontName, size: snapshot.fontSize, caretHeight: caret.height)
+            suggestion = GhostTextGeometry.fitWords(joined, caret: caret, field: field) { GhostTextOverlay.textSize($0, font: font).width }
+            if suggestion == nil { GhostTextLog.record(.dropped, reason: .overlayNoRoom) }
         }
         anchor = GhostTextLogic.Anchor(
             bundleID: snapshot.bundleID,
@@ -281,15 +297,12 @@ final class GhostTextManager: ObservableObject {
             dropOverlay(.overlayNoCaret)
             return
         }
-        let fontSize = GhostTextGeometry.fontSize(fieldFontSize: pendingFontSize, caretHeight: caret.height)
-        let font = pendingFontName.flatMap { NSFont(name: $0, size: fontSize) } ?? .systemFont(ofSize: fontSize)
-        let measure = NSTextField(labelWithString: text)
-        measure.font = font
+        let font = Self.overlayFont(name: pendingFontName, size: pendingFontSize, caretHeight: caret.height)
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         guard let frame = GhostTextGeometry.overlayFrame(
             caret: caret,
             field: field,
-            textSize: measure.intrinsicContentSize,
+            textSize: GhostTextOverlay.textSize(text, font: font),
             primaryHeight: primaryHeight
         ) else {
             dropOverlay(.overlayNoRoom)
@@ -347,8 +360,11 @@ final class GhostTextManager: ObservableObject {
         guard let anchor else {
             return InsertOutcome(reason: .noAnchor)
         }
+        let frontApp = NSWorkspace.shared.frontmostApplication
+        let frontPid = Int(frontApp?.processIdentifier ?? 0)
+        let frontBundle = frontApp?.bundleIdentifier ?? ""
         let raced: String?? = await TimeoutRace.run(seconds: 3) { () -> String? in
-            await XPCHelperClient.shared.focusedTextSnapshotJSON()
+            await XPCHelperClient.shared.focusedTextSnapshotJSON(frontPid: frontPid, frontBundle: frontBundle)
         }
         let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let now: GhostTextSnapshot
@@ -368,7 +384,8 @@ final class GhostTextManager: ObservableObject {
         guard GhostTextLogic.insertAllowed(anchor: anchor, now: now) else {
             return InsertOutcome(reason: .anchorMismatch)
         }
-        let result = await XPCHelperClient.shared.ghostInsert(token: token, location: anchor.caretLocation, text: text)
+        let result = await XPCHelperClient.shared.ghostInsert(token: token, location: anchor.caretLocation, text: text,
+                                                              frontPid: Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0))
         // 0 inserted, 3 unverified (may have landed, so never retried), 7 typed fallback.
         if [0, 3, 7].contains(result) {
             return InsertOutcome(event: .accepted, result: result)

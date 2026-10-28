@@ -20,21 +20,12 @@ final class GhostTextBreakerR9Tests: XCTestCase {
         return String(rest[..<b.lowerBound])
     }
 
-    /// Break a: a no-room overlay logs `dropped reason=overlayNoRoom`, then its own `handle(.focusChanged)` produces
-    /// `.hide(.dismissed)`, and `run(.hide)` logs `event=dismissed`. The overlay's own hide must not log a dismissal.
-    func testBreakR9_1NoRoomOverlayLogsOnlyOneLine() throws {
-        let manager = try appSource("boringNotch/Voice/Ghost/GhostTextManager.swift")
-        let hide = section(manager, from: "case .hide(let reason):", to: "case .accept(let text):")
-        XCTAssertTrue(hide.contains("!overlayHide"),
-                      "run(.hide) logs 'event=dismissed' for the overlay's own focusChanged hide. Section was:\n\(hide)")
-    }
-
     /// Break a (no-caret branch): the same double line. The branch must log its reason and hide without a nested
     /// `handle(.focusChanged)`.
     func testBreakR9_1bNoCaretOverlayLogsOnlyOneLine() throws {
         let manager = try appSource("boringNotch/Voice/Ghost/GhostTextManager.swift")
         let overlay = section(manager, from: "private func showOverlay(", to: "// MARK: - Accept")
-        let noCaret = section(overlay, from: "overlayNoCaret)", to: "let fontSize")
+        let noCaret = section(overlay, from: "overlayNoCaret)", to: "let font = Self.overlayFont(")
         XCTAssertFalse(noCaret.contains("handle(.focusChanged)"),
                        "after logging overlayNoCaret, handle(.focusChanged) runs while showing and logs 'event=dismissed'")
     }

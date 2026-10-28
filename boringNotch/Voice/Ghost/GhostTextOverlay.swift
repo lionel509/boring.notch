@@ -30,10 +30,19 @@ final class GhostTextOverlay {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         label.textColor = .systemGray
-        label.lineBreakMode = .byTruncatingTail
+        label.lineBreakMode = .byClipping
         label.maximumNumberOfLines = 1
         panel.contentView = label
         return panel
+    }
+
+    /// What the label needs for `text` in `font`, rounded up plus 2 pt so pixel rounding never clips (#47 round 12).
+    static func textSize(_ text: String, font: NSFont) -> CGSize {
+        let measure = NSTextField(labelWithString: text)
+        measure.font = font
+        measure.lineBreakMode = .byClipping
+        let size = measure.intrinsicContentSize
+        return CGSize(width: ceil(size.width) + 2, height: ceil(size.height))
     }
 
     /// `frame` is in Cocoa screen coordinates, already fitted to the field by `GhostTextGeometry.overlayFrame`.

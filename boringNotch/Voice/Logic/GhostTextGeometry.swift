@@ -31,6 +31,22 @@ enum GhostTextGeometry {
         return toCocoa(rect, primaryHeight: primaryHeight)
     }
 
+    /// Round 12 (#47): the longest whole-word prefix of `text` that `overlayFrame` accepts, or nil when not even the
+    /// first word fits. Leading whitespace (the join space) is kept. Never ellipsizes: what this returns is what accept inserts.
+    static func fitWords(_ text: String, caret: CGRect, field: CGRect, width: (String) -> CGFloat) -> String? {
+        let lead = String(text.prefix(while: { $0.isWhitespace }))
+        let words = text.dropFirst(lead.count).split(separator: " ", omittingEmptySubsequences: true)
+        var count = words.count
+        while count > 0 {
+            let candidate = lead + words.prefix(count).joined(separator: " ")
+            if overlayFrame(caret: caret, field: field, textSize: CGSize(width: width(candidate), height: 1), primaryHeight: 0) != nil {
+                return candidate
+            }
+            count -= 1
+        }
+        return nil
+    }
+
     /// Font size that tracks the caret height, clamped to 11...22 points.
     static func fontSize(caretHeight: CGFloat) -> CGFloat {
         min(max(caretHeight * 0.72, 11), 22)
