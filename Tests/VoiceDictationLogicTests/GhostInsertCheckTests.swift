@@ -145,7 +145,7 @@ final class GhostInsertCheckTests: XCTestCase {
 
     func testHelperGhostInsertUsesTheCheckAndNeverSetsWholeValue() throws {
         let text = try read("BoringNotchXPCHelper/BoringNotchXPCHelper.swift")
-        XCTAssertTrue(text.contains("GhostInsertCheck.insert"))
+        XCTAssertTrue(text.contains("GhostInsertCheck.accept"))
         for line in text.components(separatedBy: "\n") where line.contains("kAXValueAttribute as CFString") {
             XCTAssertFalse(line.contains("Set"), "the helper may read the whole value, never set it: \(line)")
         }
@@ -192,10 +192,19 @@ final class GhostInsertCheckTests: XCTestCase {
     }
 
     func testHelperTypesOnlyThroughMayType() throws {
+        // Round 12 (#47): typing lives inside GhostInsertCheck.accept, which gates it on mayType.
+        let logic = try read("boringNotch/Voice/Logic/GhostInsertCheck.swift")
+        let accept = logic.components(separatedBy: "static func accept(").last ?? ""
+        XCTAssertTrue(accept.contains("mayType("), "accept must gate typing on mayType")
         let text = try read("BoringNotchXPCHelper/BoringNotchXPCHelper.swift")
-        XCTAssertTrue(text.contains("GhostInsertCheck.mayType"))
-        let body = text.components(separatedBy: "func ghostInsert").last ?? ""
-        let before = body.components(separatedBy: "typeUnicode(text)").first ?? ""
-        XCTAssertTrue(before.contains("mayType"), "typeUnicode in ghostInsert must sit inside the mayType branch")
+        let start = text.range(of: "func ghostInsert(")
+        let end = text.range(of: "private struct AXGhostField")
+        let body = start.flatMap { s in end.map { String(text[s.lowerBound..<$0.lowerBound]) } } ?? ""
+        XCTAssertTrue(body.contains("GhostInsertCheck.accept("), "ghostInsert must call accept")
+        XCTAssertEqual(body.components(separatedBy: "typeUnicode(").count - 1, 1, "one typing call in ghostInsert")
+        let typed = body.range(of: "type: { typed in")?.lowerBound
+        let call = body.range(of: "typeUnicode(")?.lowerBound
+        XCTAssertNotNil(typed)
+        if let typed, let call { XCTAssertLessThan(typed, call, "typing must sit inside the accept type closure") }
     }
 }

@@ -340,38 +340,44 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
     }
     
     /// Focused text field for the ghost-text feature. Here because only this process holds Accessibility trust.
-    @objc func focusedTextSnapshot(with reply: @escaping (String?) -> Void) {
-        reply(FocusedTextReader.snapshotJSON())
+    @objc func focusedTextSnapshot(_ frontPid: Int, _ frontBundle: String, with reply: @escaping (String?) -> Void) {
+        reply(FocusedTextReader.snapshotJSON(frontPid: pid_t(clamping: frontPid), frontBundle: frontBundle))
     }
 
     /// Inserts ghost text at `location` into the element the read that issued `token` found (#47, finding 5).
     /// Writes only through that element, never through the system-wide focus, and only if GhostInsertGate and
     /// GhostInsertCheck still allow it. Replies: 0 inserted, 2 set failed (typed instead, 7), 3 unverified, 4 no focus,
-    /// 5 refused, 6 not trusted, 7 typed fallback, 8 stale or unknown token, 9 app not frontmost, 10 focus moved, 11 secure.
-    @objc func ghostInsert(_ token: String, _ location: Int, _ text: String, with reply: @escaping (Int) -> Void) {
+    /// 5 refused, 6 not trusted, 7 typed (web content, or a not-settable native field), 8 stale or unknown token,
+    /// 9 app not frontmost, 10 focus moved, 11 secure.
+    @objc func ghostInsert(_ token: String, _ location: Int, _ text: String, _ frontPid: Int, with reply: @escaping (Int) -> Void) {
         guard AXIsProcessTrusted() else { return reply(6) }
         let taken = FocusedTextReader.takeToken(token)
         let still = taken.map { Self.ghostTargetFocused(pid: $0.pid, element: $0.element) }
+        // Round 12 (#47): the field must belong to the app the caller says is frontmost, as well as being AX-frontmost.
+        let sameApp = taken.map { $0.pid == pid_t(clamping: frontPid) } ?? false
         if let refusal = GhostInsertGate.refusal(
-            age: taken?.age, pidFrontmost: still?.frontmost ?? false, focusUnchanged: still?.focused ?? false,
+            age: taken?.age, pidFrontmost: (still?.frontmost ?? false) && sameApp, focusUnchanged: still?.focused ?? false,
             role: taken.flatMap { Self.copyString($0.element, kAXRoleAttribute as String) },
             subrole: taken.flatMap { Self.copyString($0.element, kAXSubroleAttribute as String) }) {
             return reply(refusal.rawValue)
         }
         guard let taken else { return reply(GhostInsertGate.Refusal.staleToken.rawValue) }
         let element = taken.element
-        let result = GhostInsertCheck.insert(text, at: location, into: AXGhostField(element: element))
-        var settable: DarwinBoolean = true
-        let q = AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
-        if GhostInsertCheck.mayType(result, querySucceeded: q == .success, settable: settable.boolValue) {
-            // Typed keys go to the frontmost focus: re-check it is still the stored element (nothing written yet).
-            let now = Self.ghostTargetFocused(pid: taken.pid, element: element)
-            guard now.frontmost, now.focused else { return reply(GhostInsertGate.Refusal.focusMoved.rawValue) }
-            // Only when the attribute is definitively not settable; a settable-but-failed set may have written.
-            // Already tagged, flags empty. Never reached after .unverified, which would double-insert.
-            Self.typeUnicode(text)
-            return reply(7)
-        }
+        let result = GhostInsertCheck.accept(
+            text, at: location, into: AXGhostField(element: element), inWebArea: Self.isInWebArea(element),
+            settable: {
+                var settable: DarwinBoolean = true
+                let q = AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
+                return q == .success ? settable.boolValue : nil
+            },
+            type: { typed in
+                // Typed keys go only to the field's own app, after re-checking that the stored element still has focus.
+                let now = Self.ghostTargetFocused(pid: taken.pid, element: element)
+                guard now.frontmost, now.focused else { return false }
+                // Already tagged, flags empty. Never reached after .inserted or .unverified, which would double-insert.
+                Self.typeUnicode(typed, pid: taken.pid)
+                return true
+            })
         reply(result.rawValue)
     }
 
@@ -565,6 +571,22 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         return (frontmost, focused)
     }
 
+    /// True when an AXWebArea encloses `element` (Safari, Chrome and Electron web content). Walks at most 64 parents
+    /// within 0.3 s; an unreadable parent or the time limit gives false, which keeps the AX path (it never types on its own).
+    private static func isInWebArea(_ element: AXUIElement) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.3
+        var node: AXUIElement? = element
+        for _ in 0..<64 {
+            guard let current = node, ProcessInfo.processInfo.systemUptime < deadline else { return false }
+            AXUIElementSetMessagingTimeout(current, 0.25)
+            if copyString(current, kAXRoleAttribute as String) == "AXWebArea" { return true }
+            guard let parent = copyValue(current, kAXParentAttribute as String),
+                  CFGetTypeID(parent) == AXUIElementGetTypeID() else { return false }
+            node = (parent as! AXUIElement)
+        }
+        return false
+    }
+
     /// The system-wide focus. Falls back to the prepared app's own focus, but only while that app is frontmost:
     /// typeSwap posts keys to the frontmost app, so a background app's element must never be returned.
     private static func currentFocusedElement() -> AXUIElement? {
@@ -635,7 +657,7 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
     }
 
     /// Types unicode in chunks of at most 20 UTF-16 units, never splitting a surrogate pair.
-    private static func typeUnicode(_ text: String) {
+    private static func typeUnicode(_ text: String, pid: pid_t? = nil) {
         let source = CGEventSource(stateID: .combinedSessionState)
         let units = Array(text.utf16)
         var start = 0
@@ -650,7 +672,7 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
                 event.flags = []
                 event.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
                 tag(event)
-                event.post(tap: .cgSessionEventTap)
+                if let pid { event.postToPid(pid) } else { event.post(tap: .cgSessionEventTap) }
             }
             start = end
         }

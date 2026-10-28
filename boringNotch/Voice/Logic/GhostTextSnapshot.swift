@@ -58,8 +58,8 @@ struct GhostTextSnapshot: Codable, Equatable {
         fieldWidth = try c.decodeIfPresent(Double.self, forKey: .fieldWidth)
         fieldHeight = try c.decodeIfPresent(Double.self, forKey: .fieldHeight)
         token = try c.decodeIfPresent(String.self, forKey: .token)
-        fontName = try c.decodeIfPresent(String.self, forKey: .fontName)
-        fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize)
+        fontName = try? c.decodeIfPresent(String.self, forKey: .fontName)
+        fontSize = try? c.decodeIfPresent(Double.self, forKey: .fontSize)
     }
 
     var hasCaret: Bool {

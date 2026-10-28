@@ -23,7 +23,7 @@ enum FocusedTextReader {
     private static let slotLock = NSLock()
 
     /// JSON snapshot of the focused field, or `{"failure":"<token>"[,"axError":N]}` saying why there is none (#47).
-    static func snapshotJSON() -> String {
+    static func snapshotJSON(frontPid: pid_t, frontBundle: String) -> String {
         clearToken()
         guard AXIsProcessTrusted() else { return failure("untrusted") }
         let system = AXUIElementCreateSystemWide()
@@ -33,9 +33,9 @@ enum FocusedTextReader {
         let app: AXUIElement
         if err == .success, let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() {
             app = raw as! AXUIElement
-        } else if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier, pid > 0 {
-            // The system-wide lookup failed: use the frontmost app. The app side accepts this only when it is frontmost too.
-            app = AXUIElementCreateApplication(pid)
+        } else if frontPid > 0, !frontBundle.isEmpty, NSRunningApplication(processIdentifier: frontPid)?.bundleIdentifier == frontBundle {
+            // The system-wide lookup failed: use the app the caller says is frontmost. The helper's own NSWorkspace is stale (#47 round 12).
+            app = AXUIElementCreateApplication(frontPid)
             dict["focusVia"] = "frontmost"
             dict["axError"] = Int(err.rawValue)
         } else {

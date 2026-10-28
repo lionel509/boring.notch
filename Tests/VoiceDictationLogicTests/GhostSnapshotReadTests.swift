@@ -116,7 +116,7 @@ final class GhostSnapshotReadTests: XCTestCase {
         for reason in GhostSnapshotRead.helperFailures {
             XCTAssertTrue(helper.contains("\"\(reason.rawValue)\""), reason.rawValue)
         }
-        for token in ["failure", "axError", "focusVia", "frontmost", "frontmostApplication", "AXUIElementCreateApplication"] {
+        for token in ["failure", "axError", "focusVia", "frontmost", "frontPid", "AXUIElementCreateApplication"] {
             XCTAssertTrue(helper.contains(token), token)
         }
     }

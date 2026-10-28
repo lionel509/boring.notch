@@ -16,7 +16,7 @@ final class XPCProtocolCopiesTests: XCTestCase {
 
     func testProtocolDeclaresFocusedTextSnapshot() throws {
         let helper = try read("BoringNotchXPCHelper/BoringNotchXPCHelperProtocol.swift")
-        XCTAssertTrue(helper.contains("focusedTextSnapshot(with reply"))
+        XCTAssertTrue(helper.contains("focusedTextSnapshot(_ frontPid: Int, _ frontBundle: String, with reply"))
     }
 
     /// #47 finding 5: the insert takes the one-use token, and Option+Tab can be posted back by the helper.
