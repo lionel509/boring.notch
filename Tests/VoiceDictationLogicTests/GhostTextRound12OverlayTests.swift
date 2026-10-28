@@ -106,13 +106,26 @@ final class GhostTextRound12OverlayTests: XCTestCase {
         XCTAssertTrue(show.contains("GhostTextOverlay.textSize(text, font: font)"))
         XCTAssertTrue(show.contains("GhostTextLog.record(.shown, latencyMs:"))
         XCTAssertFalse(show.contains("measure.intrinsicContentSize"), "showOverlay still measures with its own label")
+        XCTAssertTrue(show.contains("modelMs: pendingModelMs"), "the shown line lost modelMs")
+    }
+
+    /// #47 round 13: the shown line carries the model's own time, so the next live test shows where the time goes.
+    func testShownLineCarriesModelMs() {
+        XCTAssertTrue(GhostTextEvent.line(.shown, callsTotal: 1, latencyMs: 900, modelMs: 500)
+            .hasSuffix(" latencyMs=900 modelMs=500"))
+    }
+
+    /// #47 round 13 amendment: the pause before a call is 0.25 s, as the source says.
+    func testPauseDelaySourceIsZeroPointTwentyFive() throws {
+        let policy = try read("boringNotch/Voice/Logic/GhostTextPolicy.swift")
+        XCTAssertTrue(policy.contains("static let pauseDelay: TimeInterval = 0.25"), "pauseDelay is not 0.25 in the source")
     }
 
     func testManagerTakesTheFrontPidFromTheApp() throws {
         let manager = try read("boringNotch/Voice/Ghost/GhostTextManager.swift")
         XCTAssertEqual(count(manager, "focusedTextSnapshotJSON(frontPid: frontPid, frontBundle: frontBundle)"), 2)
         XCTAssertEqual(count(manager, "frontPid: Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)"), 1)
-        XCTAssertFalse(manager.contains("modelMs"), "the timing field came back")
+        XCTAssertTrue(manager.contains("let modelMs = GhostTextEvent.latencyMs("), "the model time is not measured")
     }
 
     func testEventAndLogFilesAreUnchangedSince31da357() throws {

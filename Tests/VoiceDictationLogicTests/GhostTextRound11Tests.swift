@@ -168,8 +168,8 @@ final class GhostTextRound11Tests: XCTestCase {
 
     // MARK: - Pause
 
-    func testPauseIsZeroPointFourSeconds() {
-        XCTAssertEqual(GhostTextPolicy.pauseDelay, 0.4)
+    func testPauseIsZeroPointTwentyFiveSeconds() {
+        XCTAssertEqual(GhostTextPolicy.pauseDelay, 0.25)
     }
 
     // MARK: - Font
