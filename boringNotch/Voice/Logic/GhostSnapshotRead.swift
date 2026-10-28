@@ -15,6 +15,14 @@ enum GhostSnapshotRead: Equatable {
         return nil
     }
 
+    /// An AXError code is an integer. JSONSerialization also bridges a float such as -25212.0, which the helper never sends (round-1 fix 7).
+    private static func integralAXError(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber else { return nil }
+        let type = String(cString: number.objCType)
+        guard type != "f", type != "d" else { return nil }
+        return number.intValue
+    }
+
     /// `raced` is TimeoutRace's result: outer nil = timed out, inner nil = XPC error.
     static func classify(_ raced: String??, frontmostBundleID: String?) -> GhostSnapshotRead {
         guard let reply = raced else { return .failed(.xpcTimeout, axError: nil) }
@@ -22,7 +30,7 @@ enum GhostSnapshotRead: Equatable {
         guard let obj = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] else {
             return .failed(.decodeFailed, axError: nil)
         }
-        let axError = obj["axError"] as? Int
+        let axError = integralAXError(obj["axError"])
         if let token = obj["failure"] {
             if let name = token as? String, let reason = GhostTextEvent.Reason(rawValue: name),
                helperFailures.contains(reason) {
