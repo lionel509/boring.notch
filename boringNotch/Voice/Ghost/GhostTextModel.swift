@@ -45,7 +45,7 @@ final class GhostTextModel {
         do {
             let response = try await session.respond(
                 to: prompt,
-                options: GenerationOptions(temperature: 0.3, maximumResponseTokens: 12))
+                options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 8))
             return .reply(response.content)
         } catch {
             // The case name is the text before any associated value, so the payload (which may hold prompt text) is dropped.

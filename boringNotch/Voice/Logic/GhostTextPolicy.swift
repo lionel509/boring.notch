@@ -4,11 +4,13 @@ import Foundation
 /// reaches the prompt or the overlay.
 enum GhostTextPolicy {
     static let pauseDelay: TimeInterval = 0.4
-    static let maxContextChars = 1500
+    static let maxContextChars = 600
     static let minContextChars = 3
     static let maxSuggestionWords = 4
     /// A suggestion ends before the first of these that is followed by whitespace or the end of the reply.
     static let suggestionStops: Set<Character> = [".", "!", "?", ";", ":", ",", "\u{2026}"]
+    /// Round 12 (#47): CJK sentence and clause stops. A suggestion is cut before any of these, with no whitespace needed.
+    static let cjkStops: Set<Character> = ["。", "！", "？", "，", "、", "；", "："]
     static let secureSubrole = "AXSecureTextField"
     static let excludedBundleIDs: Set<String> = [
         "md.obsidian",
