@@ -27,7 +27,7 @@ if pgrep -x xcodebuild >/dev/null || pgrep -x swift-build >/dev/null; then
 fi
 
 # b. The identity: created once, in the login keychain, and trusted for code signing.
-has_identity() { security find-identity -v -p codesigning | grep -q "\"$IDENTITY\""; }
+has_identity() { security find-identity -v -p codesigning | grep -qF -- "\"$IDENTITY\""; }  # -F: the name is literal, not a regex
 if ! has_identity; then
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
