@@ -47,4 +47,16 @@ final class GhostTextWiringTests: XCTestCase {
         let fetch = section(manager, from: "private func fetch(gen", to: "GhostSnapshotRead.classify")
         XCTAssertTrue(fetch.contains("Task.isCancelled"), "fetch must drop a cancelled read before classifying it")
     }
+
+    /// Round-1 fix 1: insert must refuse a frontmost-app fallback before it asks the helper to write.
+    func testInsertRefusesFallbackReadsBeforeWriting() throws {
+        let manager = try appSource("boringNotch/Voice/Ghost/GhostTextManager.swift")
+        let insert = section(manager, from: "private func insert(", to: "private let ghostTapCallback")
+        XCTAssertTrue(insert.contains("GhostSnapshotRead.insertRefusal("), "insert must ask insertRefusal")
+        XCTAssertTrue(insert.contains(".fallbackInsert"), "a refused fallback must log its own reason")
+        let refuse = section(insert, from: "GhostSnapshotRead.insertRefusal(", to: "GhostTextLogic.insertAllowed")
+        let write = section(insert, from: "GhostTextLogic.insertAllowed", to: "XPCHelperClient.shared.ghostInsert")
+        XCTAssertFalse(refuse.isEmpty)
+        XCTAssertTrue(write.contains("insertAllowed"), "the refusal must come before the write")
+    }
 }

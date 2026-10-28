@@ -31,10 +31,23 @@ EOF
 cat > "$stubs/security" <<'EOF'
 #!/bin/zsh
 print -r -- "security $*" >> "$CALLS"
+name=${STUB_IDENT_NAME:-boringNotch Local Signing}
 if [[ "$1" == find-identity ]]; then
-  [[ -n "${STUB_NO_IDENTITY:-}" ]] || print -r -- '  1) 0123ABCD "boringNotch Local Signing"'
-  print -r -- '     1 valid identities found'
+  if [[ " $* " == *" -v "* ]]; then
+    # -v lists only trusted identities; STUB_UNTRUSTED hides the one there is, STUB_DUP adds a second with the same name.
+    if [[ -z "${STUB_NO_IDENTITY:-}" && -z "${STUB_UNTRUSTED:-}" ]]; then
+      print -r -- "  1) 0123ABCD \"$name\""
+      [[ -n "${STUB_DUP:-}" ]] && print -r -- "  2) 0123EEEE \"$name\""
+    fi
+    print -r -- '     1 valid identities found'
+  elif [[ -z "${STUB_NO_IDENTITY:-}" ]]; then
+    # Without -v the untrusted one is listed, marked as not trusted.
+    mark=""
+    [[ -n "${STUB_UNTRUSTED:-}" ]] && mark=" (CSSMERR_TP_NOT_TRUSTED)"
+    print -r -- "  1) 0123ABCD \"$name\"$mark"
+  fi
 fi
+if [[ "$1" == add-trusted-cert && -n "${STUB_TRUST_FAIL:-}" ]]; then exit 1; fi
 exit 0
 EOF
 cat > "$stubs/codesign" <<'EOF'
@@ -80,7 +93,7 @@ chmod +x "$stubs"/*
 run() { # runs the script with the stubs first on PATH; prints combined output
   PATH="$stubs:$PATH" zsh "$script" "$@" 2>&1
 }
-reset() { rm -f "$CALLS" "$LAUNCHED"; rm -rf "$BN_DERIVED_DATA" "$BN_INSTALL_DIR"; mkdir -p "$BN_INSTALL_DIR"; unset STUB_RUNNING STUB_NO_IDENTITY; export STUB_CODESIGN_OUT; }
+reset() { rm -f "$CALLS" "$LAUNCHED"; rm -rf "$BN_DERIVED_DATA" "$BN_INSTALL_DIR"; mkdir -p "$BN_INSTALL_DIR"; unset STUB_RUNNING STUB_NO_IDENTITY STUB_UNTRUSTED STUB_DUP STUB_TRUST_FAIL STUB_IDENT_NAME BN_SIGN_IDENTITY; export STUB_CODESIGN_OUT; }
 calls_has() { grep -q -- "$1" "$CALLS" 2>/dev/null; }
 
 # 1. Another xcodebuild running: refuse before anything else runs.
@@ -148,5 +161,59 @@ o=$(grep -n '^open ' "$CALLS" | head -1 | cut -d: -f1)
 [[ -n "$q" && -n "$d" && -n "$o" ]] || ok=1
 (( ${q:-0} < ${d:-0} && ${d:-0} < ${o:-0} )) || ok=1
 check "--install quits, copies, then opens (exit $code)" $ok
+
+# 7. Round-1 fix 2: an untrusted same-name identity exists. Exit 4 without importing a second copy.
+reset
+export STUB_UNTRUSTED=1
+out=$(run); code=$?
+ok=0
+(( code == 4 )) || ok=1
+calls_has '^security import ' && ok=1
+check "untrusted same-name identity is not imported again (exit $code)" $ok
+
+# 8. Round-1 fix 2: add-trusted-cert fails (declined prompt). Exit 4 with a message, not security's own status.
+reset
+export STUB_NO_IDENTITY=1 STUB_TRUST_FAIL=1
+out=$(run); code=$?
+ok=0
+(( code == 4 )) || ok=1
+[[ "$out" == *"trust"* ]] || ok=1
+check "a declined trust prompt exits 4 with a message (exit $code)" $ok
+
+# 9. Round-1 fix 3: two trusted identities with the same name. Exit 4 before xcodebuild.
+reset
+export STUB_DUP=1
+out=$(run); code=$?
+ok=0
+(( code == 4 )) || ok=1
+calls_has '^xcodebuild ' && ok=1
+check "two same-name trusted identities are refused before the build (exit $code)" $ok
+
+# 10. Round-1 fix 6: a stray argument after --install is a usage error, nothing installs.
+reset
+out=$(run --install extra); code=$?
+ok=0
+(( code == 2 )) || ok=1
+calls_has '^ditto ' && ok=1
+calls_has '^xcodebuild ' && ok=1
+check "a stray argument exits 2 and installs nothing (exit $code)" $ok
+
+# 11. Round-1 fix 4: the identity is matched literally, so 'boringNotch.Local' does not match 'boringNotchXLocal'.
+reset
+export STUB_IDENT_NAME='boringNotchXLocal' BN_SIGN_IDENTITY='boringNotch.Local'
+out=$(run); code=$?
+ok=0
+calls_has '^xcodebuild ' && ok=1
+check "identity is matched literally, not as a regex (exit $code)" $ok
+
+# 12. Round-1 fix 5: a name containing 'runtime' is not hardened runtime. Only the flags= line decides.
+reset
+export STUB_IDENT_NAME='boringNotch runtime dev' BN_SIGN_IDENTITY='boringNotch runtime dev'
+export STUB_CODESIGN_OUT='Authority=boringNotch runtime dev
+flags=0x0(none)
+designated => identifier "theboringteam.boringnotch" and certificate leaf = H"0123abcd"'
+out=$(run); code=$?
+(( code == 0 )) && ok=0 || ok=1
+check "a 'runtime' name in Authority is not a hardened runtime (exit $code)" $ok
 
 exit $fail
