@@ -9,18 +9,42 @@ enum GhostTextEvent: String, CaseIterable {
         case decodeFailed, policy, noCaretLocation, noCaretRect, noFieldRect, noRoom, noPrompt
         case noAnchor, anchorMismatch, insertFailed
         case untrusted, noFocusedApp, encodeFailed, xpcError, xpcTimeout, notFrontmost, noToken
+        case roleNotAllowed, subroleNotAllowed
+    }
+
+    /// The allow-list reason for a refused field (#31 round 7).
+    static func reason(_ refused: GhostInsertGate.Refused) -> Reason {
+        switch refused {
+        case .roleNotAllowed: return .roleNotAllowed
+        case .subroleNotAllowed: return .subroleNotAllowed
+        }
     }
 
     static func line(_ event: GhostTextEvent, callsTotal: Int, reason: Reason? = nil,
                      check: GhostTextPolicy.Check? = nil, insertResult: Int? = nil,
-                     axError: Int? = nil, app: String? = nil) -> String {
+                     axError: Int? = nil, app: String? = nil, value: String? = nil) -> String {
         var out = "ghost event=\(event.rawValue) calls=\(callsTotal)"
         if let reason { out += " reason=\(reason.rawValue)" }
         if let check { out += " check=\(check.rawValue)" }
         if let insertResult { out += " insertResult=\(insertResult)" }
         if let axError { out += " axError=\(axError)" }
         if let app { out += " app=\(appToken(app))" }
+        if let value { out += " value=\(escaped(value))" }
         return out
+    }
+
+    /// A raw AX value for the log: printable ASCII as-is, except quote and backslash; every other scalar as \u{hex}.
+    /// Spaces are escaped too, so padding shows. At most 64 scalars, in double quotes.
+    static func escaped(_ raw: String) -> String {
+        var out = "\""
+        for scalar in raw.unicodeScalars.prefix(64) {
+            if (0x21...0x7E).contains(scalar.value), scalar != "\"", scalar != "\\" {
+                out.unicodeScalars.append(scalar)
+            } else {
+                out += "\\u{" + String(scalar.value, radix: 16) + "}"
+            }
+        }
+        return out + "\""
     }
 
     /// The app ID as one log token: `[A-Za-z0-9.-]` only, at most 155 characters, `none` when nothing is left.

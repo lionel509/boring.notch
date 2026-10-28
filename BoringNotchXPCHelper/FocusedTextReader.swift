@@ -60,7 +60,7 @@ enum FocusedTextReader {
         guard let focused = element(app, kAXFocusedUIElementAttribute as String) else {
             return encode(dict)
         }
-        // An unreadable role is secure (fail closed), the same rule ghostInsert applies, so read and insert agree.
+        // A role or subrole off the allow-list is refused (fail closed), the same rule ghostInsert applies, so read and insert agree.
         let roleRead = string(focused, kAXRoleAttribute as String)
         let subrole = string(focused, kAXSubroleAttribute as String) ?? ""
         let isSecure = GhostInsertGate.isSecure(role: roleRead, subrole: subrole)

@@ -197,6 +197,10 @@ final class GhostTextManager: ObservableObject {
             if viaFrontmost { GhostTextLog.record(.fallback, axError: axError, app: front ?? "") }
             snapshot = read
         }
+        // Round 7 (#31): the allow-list runs first, so the log names the refused role or subrole and its raw value.
+        if let refused = GhostInsertGate.refusedBy(role: snapshot.role, subrole: snapshot.subrole) {
+            return dropFetch(GhostTextEvent.reason(refused.reason), gen: gen, value: refused.value)
+        }
         if let check = GhostTextPolicy.failedCheck(snapshot) { return dropFetch(.policy, gen: gen, check: check) }
         guard let caret = snapshot.caretRect else { return dropFetch(.noCaretRect, gen: gen) }
         guard let field = snapshot.fieldRect else { return dropFetch(.noFieldRect, gen: gen) }
@@ -234,8 +238,8 @@ final class GhostTextManager: ObservableObject {
     }
 
     private func dropFetch(_ reason: GhostTextEvent.Reason, gen: Int, check: GhostTextPolicy.Check? = nil,
-                           axError: Int? = nil, app: String? = nil) {
-        GhostTextLog.record(.dropped, reason: reason, check: check, axError: axError, app: app)
+                           axError: Int? = nil, app: String? = nil, value: String? = nil) {
+        GhostTextLog.record(.dropped, reason: reason, check: check, axError: axError, app: app, value: value)
         handle(.snapshotFailed(gen: gen))
     }
 
@@ -298,7 +302,11 @@ final class GhostTextManager: ObservableObject {
         }
         guard GhostInsertGate.appAllows(token: now.token, isSecure: now.isSecure, role: now.role, subrole: now.subrole),
               let token = now.token else {
-            GhostTextLog.record(.dropped, reason: .noToken, app: front ?? "")
+            if let refused = GhostInsertGate.refusedBy(role: now.role, subrole: now.subrole) {
+                GhostTextLog.record(.dropped, reason: GhostTextEvent.reason(refused.reason), app: front ?? "", value: refused.value)
+            } else {
+                GhostTextLog.record(.dropped, reason: .noToken, app: front ?? "")
+            }
             return nil
         }
         guard GhostTextLogic.insertAllowed(anchor: anchor, now: now) else {

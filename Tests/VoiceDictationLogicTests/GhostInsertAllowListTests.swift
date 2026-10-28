@@ -130,4 +130,23 @@ final class GhostInsertAllowListTests: XCTestCase {
         let manager = try read("boringNotch/Voice/Ghost/GhostTextManager.swift")
         XCTAssertTrue(manager.contains("GhostInsertGate.refusedBy("), "the manager must log the refusal reason")
     }
+
+    func testRefusedValueIsEscapedInTheLogLine() {
+        XCTAssertEqual(GhostTextEvent.escaped("AXTextArea"), "\"AXTextArea\"")
+        XCTAssertEqual(GhostTextEvent.escaped(" AXTextArea "), "\"\\u{20}AXTextArea\\u{20}\"")
+        XCTAssertEqual(GhostTextEvent.escaped("a\"b\\c"), "\"a\\u{22}b\\u{5c}c\"")
+        XCTAssertEqual(GhostTextEvent.escaped("\u{FEFF}"), "\"\\u{feff}\"")
+        XCTAssertEqual(GhostTextEvent.escaped(""), "\"\"")
+        XCTAssertEqual(GhostTextEvent.escaped(String(repeating: "x", count: 100)).count, 66, "at most 64 scalars")
+        let line = GhostTextEvent.line(.dropped, callsTotal: 0, reason: .roleNotAllowed, app: "com.google.Chrome", value: "\u{FEFF}")
+        XCTAssertEqual(line, "ghost event=dropped calls=0 reason=roleNotAllowed app=com.google.Chrome value=\"\\u{feff}\"")
+    }
+
+    func testRefusedFieldsMapToTheirLogReason() {
+        XCTAssertEqual(GhostTextEvent.reason(.roleNotAllowed), .roleNotAllowed)
+        XCTAssertEqual(GhostTextEvent.reason(.subroleNotAllowed), .subroleNotAllowed)
+        XCTAssertEqual(G.refusedBy(role: "AXWebArea", subrole: "")?.value, "AXWebArea")
+        XCTAssertEqual(G.refusedBy(role: "AXTextField", subrole: "AXFoo")?.reason, .subroleNotAllowed)
+        XCTAssertNil(G.refusedBy(role: "AXTextField", subrole: nil))
+    }
 }

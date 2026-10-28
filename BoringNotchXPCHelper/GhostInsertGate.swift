@@ -10,10 +10,26 @@ enum GhostInsertGate {
     /// Insert re-reads the field just before it writes, so the token it sends is milliseconds old.
     static let tokenLifetime: TimeInterval = 2.0
 
-    /// A secure field, or one whose role cannot be read or is empty (fail closed).
+    /// Round 7 (#31): an exact allow-list, failing closed. Compared byte for byte: no trimming, no case folding,
+    /// so padded, invisible-character, case-changed or unknown values are refused.
+    static let allowedRoles = ["AXTextField", "AXTextArea", "AXComboBox"]
+    static let allowedSubroles = ["", "AXSearchField"]
+
+    /// Why a field may not take ghost text, with the raw value that was refused. nil when role and subrole are both allowed.
+    /// A nil subrole counts as "", and an unreadable role counts as "", which is refused.
+    enum Refused: String { case roleNotAllowed, subroleNotAllowed }
+
+    static func refusedBy(role: String?, subrole: String?) -> (reason: Refused, value: String)? {
+        let r = role ?? ""
+        guard allowedRoles.contains(where: { $0.utf8.elementsEqual(r.utf8) }) else { return (.roleNotAllowed, r) }
+        let s = subrole ?? ""
+        guard allowedSubroles.contains(where: { $0.utf8.elementsEqual(s.utf8) }) else { return (.subroleNotAllowed, s) }
+        return nil
+    }
+
+    /// True when the field is not on the allow-list (the name predates the allow-list; a refused field is treated as secure).
     static func isSecure(role: String?, subrole: String?) -> Bool {
-        guard let role, !role.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
-        return role == "AXSecureTextField" || subrole == "AXSecureTextField"
+        refusedBy(role: role, subrole: subrole) != nil
     }
 
     /// Helper side, inside ghostInsert, before any write. nil means the write may go ahead.
