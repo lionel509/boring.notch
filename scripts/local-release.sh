@@ -36,6 +36,11 @@ if (( n > 1 )); then
   exit 4
 fi
 if ! has_identity; then
+  # An untrusted copy from an earlier run (its trust prompt was declined): import another and the copies pile up (round-1 fix 2).
+  if security find-identity -p codesigning | grep -qF -- "\"$IDENTITY\""; then
+    print -u2 "the identity '$IDENTITY' exists but is not trusted for code signing: trust it in Keychain Access (Get Info, Trust, Code Signing: Always Trust), or delete it, then re-run"
+    exit 4
+  fi
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   cat > "$tmp/cfg" <<CFG
@@ -54,7 +59,10 @@ CFG
     -config "$tmp/cfg" -extensions codesign -keyout "$tmp/key.pem" -out "$tmp/cert.pem" 2>/dev/null
   /usr/bin/openssl pkcs12 -export -inkey "$tmp/key.pem" -in "$tmp/cert.pem" -out "$tmp/id.p12" -passout pass:bn-local
   security import "$tmp/id.p12" -k "$KEYCHAIN" -P bn-local -T /usr/bin/codesign
-  security add-trusted-cert -p codeSign -k "$KEYCHAIN" "$tmp/cert.pem"
+  if ! security add-trusted-cert -p codeSign -k "$KEYCHAIN" "$tmp/cert.pem"; then
+    print -u2 "the identity '$IDENTITY' was imported but not trusted (was the trust prompt declined?): trust it in Keychain Access, or delete it, then re-run"
+    exit 4
+  fi
   if ! has_identity; then
     print -u2 "the signing identity '$IDENTITY' is still missing after the import"
     exit 4
