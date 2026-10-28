@@ -12,6 +12,8 @@ DD=${BN_DERIVED_DATA:-$HOME/worktrees/boring.notch/local-dd}
 INSTALL_DIR=${BN_INSTALL_DIR:-/Applications}
 KEYCHAIN=$HOME/Library/Keychains/login.keychain-db
 install=0
+# One optional argument only: a stray second one used to be ignored (round-1 fix 6).
+(( $# <= 1 )) || { print -u2 "usage: scripts/local-release.sh [--install]"; exit 2; }
 case "${1:-}" in
   --install) install=1 ;;
   "") ;;
