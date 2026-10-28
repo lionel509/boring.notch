@@ -145,9 +145,10 @@ final class GhostTextRound11Tests: XCTestCase {
         XCTAssertFalse(GhostTextPrompt.instructions.contains("12"), GhostTextPrompt.instructions)
     }
 
-    func testModelCapsResponseTokensAtTwelveAndPrewarms() throws {
+    func testModelCapsResponseTokensAtEightGreedyAndPrewarms() throws {
         let model = try appSource("boringNotch/Voice/Ghost/GhostTextModel.swift")
-        XCTAssertTrue(model.contains("maximumResponseTokens: 12"), "response cap is not 12")
+        XCTAssertTrue(model.contains("maximumResponseTokens: 8"), "response cap is not 8")
+        XCTAssertTrue(model.contains("sampling: .greedy"), "decoding is not greedy")
         XCTAssertTrue(model.contains("session.prewarm()"), "the next session is not prewarmed")
         XCTAssertTrue(model.contains("next ?? LanguageModelSession("), "complete does not take the prewarmed session")
         XCTAssertTrue(model.contains("func prewarm()"), "prewarm() is missing")
