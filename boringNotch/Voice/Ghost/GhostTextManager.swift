@@ -182,9 +182,19 @@ final class GhostTextManager: ObservableObject {
     }
 
     private func fetch(gen: Int) async {
-        let json = await XPCHelperClient.shared.focusedTextSnapshotJSON()
-        guard let json else { return dropFetch(.noSnapshot, gen: gen) }
-        guard let snapshot = GhostTextSnapshot.decode(json) else { return dropFetch(.decodeFailed, gen: gen) }
+        let raced: String?? = await TimeoutRace.run(seconds: 3) { () -> String? in
+            await XPCHelperClient.shared.focusedTextSnapshotJSON()
+        }
+        guard !Task.isCancelled else { return }
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let snapshot: GhostTextSnapshot
+        switch GhostSnapshotRead.classify(raced, frontmostBundleID: front) {
+        case .failed(let reason, let axError):
+            return dropFetch(reason, gen: gen, axError: axError, app: front ?? "")
+        case .snapshot(let read, let viaFrontmost, let axError):
+            if viaFrontmost { GhostTextLog.record(.fallback, axError: axError, app: front ?? "") }
+            snapshot = read
+        }
         if let check = GhostTextPolicy.failedCheck(snapshot) { return dropFetch(.policy, gen: gen, check: check) }
         guard let caret = snapshot.caretRect else { return dropFetch(.noCaretRect, gen: gen) }
         guard let field = snapshot.fieldRect else { return dropFetch(.noFieldRect, gen: gen) }
@@ -214,8 +224,9 @@ final class GhostTextManager: ObservableObject {
         handle(.suggestion(suggestion, gen: gen))
     }
 
-    private func dropFetch(_ reason: GhostTextEvent.Reason, gen: Int, check: GhostTextPolicy.Check? = nil) {
-        GhostTextLog.record(.dropped, reason: reason, check: check)
+    private func dropFetch(_ reason: GhostTextEvent.Reason, gen: Int, check: GhostTextPolicy.Check? = nil,
+                           axError: Int? = nil, app: String? = nil) {
+        GhostTextLog.record(.dropped, reason: reason, check: check, axError: axError, app: app)
         handle(.snapshotFailed(gen: gen))
     }
 
@@ -252,14 +263,18 @@ final class GhostTextManager: ObservableObject {
             GhostTextLog.record(.dropped, reason: .noAnchor)
             return
         }
-        let json = await XPCHelperClient.shared.focusedTextSnapshotJSON()
-        guard let json else {
-            GhostTextLog.record(.dropped, reason: .noSnapshot)
-            return
+        let raced: String?? = await TimeoutRace.run(seconds: 3) { () -> String? in
+            await XPCHelperClient.shared.focusedTextSnapshotJSON()
         }
-        guard let now = GhostTextSnapshot.decode(json) else {
-            GhostTextLog.record(.dropped, reason: .decodeFailed)
+        guard !Task.isCancelled else { return }
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let now: GhostTextSnapshot
+        switch GhostSnapshotRead.classify(raced, frontmostBundleID: front) {
+        case .failed(let reason, let axError):
+            GhostTextLog.record(.dropped, reason: reason, axError: axError, app: front ?? "")
             return
+        case .snapshot(let read, _, _):
+            now = read
         }
         guard GhostTextLogic.insertAllowed(anchor: anchor, now: now) else {
             GhostTextLog.record(.dropped, reason: .anchorMismatch)

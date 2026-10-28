@@ -18,8 +18,8 @@ flags=0x0(none)
 designated => identifier "theboringteam.boringnotch" and certificate leaf = H"0123abcd"'
 fail=0
 
-check() { # name, exit status of the test
-  if (( $2 == 0 )); then print -r -- "PASS $1"; else print -r -- "FAIL $1"; fail=1; fi
+check() { # name, exit status of the test; on failure the last run's output is shown
+  if (( $2 == 0 )); then print -r -- "PASS $1"; else print -r -- "FAIL $1"; print -r -- "$out" | tail -12 | sed 's/^/    | /'; fail=1; fi
 }
 
 # Stubs: each one appends its argv to $CALLS and acts on the env vars the cases set.

@@ -18,19 +18,31 @@ enum FocusedTextReader {
     /// Pids we have already asked to expose their AX tree (Chromium/Electron need the flag).
     nonisolated(unsafe) private static var primedPIDs = Set<pid_t>()
 
-    static func snapshotJSON() -> String? {
-        guard AXIsProcessTrusted() else { return nil }
+    /// JSON snapshot of the focused field, or `{"failure":"<token>"[,"axError":N]}` saying why there is none (#47).
+    static func snapshotJSON() -> String {
+        guard AXIsProcessTrusted() else { return failure("untrusted") }
         let system = AXUIElementCreateSystemWide()
-        guard let app = element(system, kAXFocusedApplicationAttribute as String) else { return nil }
+        var dict: [String: Any] = [:]
+        var raw: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &raw)
+        let app: AXUIElement
+        if err == .success, let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() {
+            app = raw as! AXUIElement
+        } else if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier, pid > 0 {
+            // The system-wide lookup failed: use the frontmost app. The app side accepts this only when it is frontmost too.
+            app = AXUIElementCreateApplication(pid)
+            dict["focusVia"] = "frontmost"
+            dict["axError"] = Int(err.rawValue)
+        } else {
+            return failure("noFocusedApp", axError: Int(err.rawValue))
+        }
         AXUIElementSetMessagingTimeout(app, 0.25)
 
         var pid: pid_t = 0
         AXUIElementGetPid(app, &pid)
         let running = NSRunningApplication(processIdentifier: pid)
-        var dict: [String: Any] = [
-            "bundleID": running?.bundleIdentifier ?? "",
-            "appName": running?.localizedName ?? "",
-        ]
+        dict["bundleID"] = running?.bundleIdentifier ?? ""
+        dict["appName"] = running?.localizedName ?? ""
 
         if !primedPIDs.contains(pid) {
             primedPIDs.insert(pid)
@@ -89,6 +101,12 @@ enum FocusedTextReader {
         return encode(dict)
     }
 
+    private static func failure(_ token: String, axError: Int? = nil) -> String {
+        var dict: [String: Any] = ["failure": token]
+        if let axError { dict["axError"] = axError }
+        return encode(dict)
+    }
+
     /// Bounds of the caret. Uses the character before it first (x = its right edge, width 0), because some
     /// apps answer a zero-length range with a line-start rect. The zero-length range is only used at location 0.
     private static func caretRect(_ element: AXUIElement, caretEnd: Int) -> CGRect? {
@@ -140,11 +158,12 @@ enum FocusedTextReader {
         return ns.substring(from: start)
     }
 
-    private static func encode(_ dict: [String: Any]) -> String? {
-        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]) else {
-            return nil
+    private static func encode(_ dict: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            return #"{"failure":"encodeFailed"}"#
         }
-        return String(data: data, encoding: .utf8)
+        return text
     }
 
     private static func element(_ parent: AXUIElement, _ attribute: String) -> AXUIElement? {
