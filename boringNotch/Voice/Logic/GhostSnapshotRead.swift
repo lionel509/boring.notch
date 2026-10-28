@@ -8,6 +8,13 @@ enum GhostSnapshotRead: Equatable {
     /// The only failure tokens the helper may send. Anything else is decodeFailed.
     static let helperFailures: [GhostTextEvent.Reason] = [.untrusted, .noFocusedApp, .encodeFailed]
 
+    /// Insert writes through the system-wide focus (ghostInsert), so a frontmost-app fallback read may name a
+    /// different element. Refuse it, and say why (round-1 fix 1). nil means the read may be used for insert.
+    static func insertRefusal(_ read: GhostSnapshotRead) -> GhostTextEvent.Reason? {
+        if case .snapshot(_, viaFrontmost: true, _) = read { return .fallbackInsert }
+        return nil
+    }
+
     /// `raced` is TimeoutRace's result: outer nil = timed out, inner nil = XPC error.
     static func classify(_ raced: String??, frontmostBundleID: String?) -> GhostSnapshotRead {
         guard let reply = raced else { return .failed(.xpcTimeout, axError: nil) }

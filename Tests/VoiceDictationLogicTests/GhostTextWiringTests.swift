@@ -53,7 +53,7 @@ final class GhostTextWiringTests: XCTestCase {
         let manager = try appSource("boringNotch/Voice/Ghost/GhostTextManager.swift")
         let insert = section(manager, from: "private func insert(", to: "private let ghostTapCallback")
         XCTAssertTrue(insert.contains("GhostSnapshotRead.insertRefusal("), "insert must ask insertRefusal")
-        XCTAssertTrue(insert.contains(".fallbackInsert"), "a refused fallback must log its own reason")
+        XCTAssertTrue(insert.contains("record(.dropped, reason: refusal"), "a refused fallback must log the refusal reason")
         let refuse = section(insert, from: "GhostSnapshotRead.insertRefusal(", to: "GhostTextLogic.insertAllowed")
         let write = section(insert, from: "GhostTextLogic.insertAllowed", to: "XPCHelperClient.shared.ghostInsert")
         XCTAssertFalse(refuse.isEmpty)

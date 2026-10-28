@@ -8,7 +8,7 @@ enum GhostTextEvent: String, CaseIterable {
     enum Reason: String, CaseIterable {
         case decodeFailed, policy, noCaretLocation, noCaretRect, noFieldRect, noRoom, noPrompt
         case noAnchor, anchorMismatch, insertFailed
-        case untrusted, noFocusedApp, encodeFailed, xpcError, xpcTimeout, notFrontmost
+        case untrusted, noFocusedApp, encodeFailed, xpcError, xpcTimeout, notFrontmost, fallbackInsert
     }
 
     static func line(_ event: GhostTextEvent, callsTotal: Int, reason: Reason? = nil,

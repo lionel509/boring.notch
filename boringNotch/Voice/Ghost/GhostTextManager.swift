@@ -268,13 +268,19 @@ final class GhostTextManager: ObservableObject {
         }
         guard !Task.isCancelled else { return }
         let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let read = GhostSnapshotRead.classify(raced, frontmostBundleID: front)
+        if let refusal = GhostSnapshotRead.insertRefusal(read) {
+            // The fallback read is for showing suggestions only: ghostInsert writes to the system-wide focus.
+            GhostTextLog.record(.dropped, reason: refusal, app: front ?? "")
+            return
+        }
         let now: GhostTextSnapshot
-        switch GhostSnapshotRead.classify(raced, frontmostBundleID: front) {
+        switch read {
         case .failed(let reason, let axError):
             GhostTextLog.record(.dropped, reason: reason, axError: axError, app: front ?? "")
             return
-        case .snapshot(let read, _, _):
-            now = read
+        case .snapshot(let snapshot, _, _):
+            now = snapshot
         }
         guard GhostTextLogic.insertAllowed(anchor: anchor, now: now) else {
             GhostTextLog.record(.dropped, reason: .anchorMismatch)
