@@ -10,9 +10,9 @@ enum GhostInsertGate {
     /// Insert re-reads the field just before it writes, so the token it sends is milliseconds old.
     static let tokenLifetime: TimeInterval = 2.0
 
-    /// A secure field, or one whose role cannot be read (fail closed).
+    /// A secure field, or one whose role cannot be read or is empty (fail closed).
     static func isSecure(role: String?, subrole: String?) -> Bool {
-        guard let role else { return true }
+        guard let role, !role.isEmpty else { return true }
         return role == "AXSecureTextField" || subrole == "AXSecureTextField"
     }
 

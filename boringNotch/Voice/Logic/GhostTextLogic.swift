@@ -89,7 +89,8 @@ enum GhostTextLogic {
     }
 
     /// Insert-time guard: same app, caret still at the end of the field and at the anchored location,
-    /// the last 64 characters before the caret unchanged, and the same field frame as the fetch read,
+    /// the last 64 characters before the caret unchanged, and the same field frame as the fetch read
+/// (an anchor without a full frame never allows an insert),
     /// so a suggestion made for one field is never written into another.
     static func insertAllowed(anchor: Anchor, now: GhostTextSnapshot) -> Bool {
         now.bundleID == anchor.bundleID
@@ -98,6 +99,7 @@ enum GhostTextLogic {
             && now.textBeforeCaret.map { String($0.suffix(64)) } == anchor.contextTail
             && now.fieldX == anchor.fieldX && now.fieldY == anchor.fieldY
             && now.fieldWidth == anchor.fieldWidth && now.fieldHeight == anchor.fieldHeight
+            && anchor.fieldX != nil && anchor.fieldY != nil && anchor.fieldWidth != nil && anchor.fieldHeight != nil
     }
 
     struct Machine: Equatable {
