@@ -57,7 +57,7 @@ final class GhostInsertGateTests: XCTestCase {
     /// I1, exhaustive: the write is allowed exactly when every guard holds.
     func testWriteOnlyWhenEveryGuardHolds() {
         let ages: [TimeInterval?] = [nil, -0.1, 0, 1, 2, 2.0001, 60]
-        let roles: [String?] = [nil, "AXTextField", "AXTextArea", "AXComboBox", "AXSecureTextField"]
+        let roles: [String?] = [nil, "AXTextField", "AXTextArea", "AXComboBox", "AXWebArea", "AXSecureTextField"]
         let subroles: [String?] = [nil, "", "AXSearchField", "AXSecureTextField"]
         for age in ages {
             for front in [true, false] {
@@ -65,8 +65,10 @@ final class GhostInsertGateTests: XCTestCase {
                     for role in roles {
                         for subrole in subroles {
                             let fresh = age.map { $0 >= 0 && $0 <= 2 } ?? false
-                            let plain = role != nil && role != "AXSecureTextField" && subrole != "AXSecureTextField"
-                            let expected = fresh && front && focused && plain
+                            // #31 round 7: the allow-list, exact match. Anything else is refused.
+                            let allowedRole = ["AXTextField", "AXTextArea", "AXComboBox"].contains(role ?? "")
+                            let allowedSubrole = subrole == nil || subrole == "" || subrole == "AXSearchField"
+                            let expected = fresh && front && focused && allowedRole && allowedSubrole
                             let got = refusal(age: age, front: front, focused: focused, role: role, subrole: subrole)
                             XCTAssertEqual(got == nil, expected,
                                            "age \(String(describing: age)) front \(front) focused \(focused) role \(String(describing: role)) subrole \(String(describing: subrole))")
