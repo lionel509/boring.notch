@@ -173,8 +173,10 @@ final class GhostTextManager: ObservableObject {
             GhostTextOverlay.shared.hide()
             if reason == .dismissed { GhostTextLog.record(.dismissed) }
         case .accept(let text):
+            // The app the key was pressed in, read now: a later frontmost change must not be mistaken for it.
+            let keyApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
             Task { @MainActor [weak self] in
-                await self?.insert(text)
+                await self?.insert(text, keyApp: keyApp)
             }
         case .swallow:
             break
@@ -201,6 +203,11 @@ final class GhostTextManager: ObservableObject {
         guard GhostTextGeometry.hasRoom(caret: caret, field: field) else { return dropFetch(.noRoom, gen: gen) }
         guard let prompt = GhostTextPrompt.build(snapshot) else { return dropFetch(.noPrompt, gen: gen) }
         guard let location = snapshot.caretLocation else { return dropFetch(.noCaretLocation, gen: gen) }
+        // Same gate as insert: a suggestion is shown only for a field whose insert the helper will accept.
+        guard GhostInsertGate.appAllows(token: snapshot.token, isSecure: snapshot.isSecure,
+                                        role: snapshot.role, subrole: snapshot.subrole) else {
+            return dropFetch(.noToken, gen: gen)
+        }
         guard !Task.isCancelled else { return }
         let before = snapshot.textBeforeCaret ?? ""
         Defaults[.ghostTextCalls] += 1
@@ -256,43 +263,54 @@ final class GhostTextManager: ObservableObject {
 
     // MARK: - Accept
 
-    /// Re-reads the field, checks it still matches the anchor, then asks the helper for an insert at the caret.
+    /// Runs the accept. When nothing can have been written, the Option+Tab it swallowed goes back to the app it was
+    /// pressed in, so the key is never lost for nothing (#47, finding 5).
+    private func insert(_ text: String, keyApp: String?) async {
+        let result = await attemptInsert(text)
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        guard GhostInsertGate.passThrough(result: result, keyApp: keyApp, frontNow: front) else { return }
+        if await XPCHelperClient.shared.postGhostAcceptKey() {
+            GhostTextLog.record(.passedThrough, insertResult: result)
+        }
+    }
+
+    /// Re-reads the field, checks the gate and the anchor, then asks the helper to write into the element that read found.
     /// Results 0, 3 and 7 add text, so they count as accepted; anything else is dropped.
-    private func insert(_ text: String) async {
+    /// nil when the app refused before calling the helper (the reason is logged here); otherwise the helper's reply.
+    private func attemptInsert(_ text: String) async -> Int? {
         guard let anchor else {
             GhostTextLog.record(.dropped, reason: .noAnchor)
-            return
+            return nil
         }
         let raced: String?? = await TimeoutRace.run(seconds: 3) { () -> String? in
             await XPCHelperClient.shared.focusedTextSnapshotJSON()
         }
-        guard !Task.isCancelled else { return }
         let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        let read = GhostSnapshotRead.classify(raced, frontmostBundleID: front)
-        if let refusal = GhostSnapshotRead.insertRefusal(read) {
-            // The fallback read is for showing suggestions only: ghostInsert writes to the system-wide focus.
-            GhostTextLog.record(.dropped, reason: refusal, app: front ?? "")
-            return
-        }
         let now: GhostTextSnapshot
-        switch read {
+        switch GhostSnapshotRead.classify(raced, frontmostBundleID: front) {
         case .failed(let reason, let axError):
             GhostTextLog.record(.dropped, reason: reason, axError: axError, app: front ?? "")
-            return
+            return nil
         case .snapshot(let snapshot, _, _):
             now = snapshot
         }
+        guard GhostInsertGate.appAllows(token: now.token, isSecure: now.isSecure, role: now.role, subrole: now.subrole),
+              let token = now.token else {
+            GhostTextLog.record(.dropped, reason: .noToken, app: front ?? "")
+            return nil
+        }
         guard GhostTextLogic.insertAllowed(anchor: anchor, now: now) else {
             GhostTextLog.record(.dropped, reason: .anchorMismatch)
-            return
+            return nil
         }
-        let result = await XPCHelperClient.shared.ghostInsert(location: anchor.caretLocation, text: text)
+        let result = await XPCHelperClient.shared.ghostInsert(token: token, location: anchor.caretLocation, text: text)
         // 0 inserted, 3 unverified (may have landed, so never retried), 7 typed fallback.
         if [0, 3, 7].contains(result) {
             GhostTextLog.record(.accepted)
         } else {
             GhostTextLog.record(.dropped, reason: .insertFailed, insertResult: result)
         }
+        return result
     }
 }
 

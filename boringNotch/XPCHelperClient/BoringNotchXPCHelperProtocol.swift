@@ -14,9 +14,10 @@ import Foundation
     func ensureAccessibilityAuthorization(_ promptIfNeeded: Bool, with reply: @escaping (Bool) -> Void)
     func postPasteKeystroke(_ keyCode: Int, with reply: @escaping (Bool) -> Void)
     /// The focused text field as JSON (see GhostTextSnapshot keys), or nil when Accessibility is not trusted
-    /// or nothing has focus. A secure field's value is never read.
+    /// or nothing has focus. A secure field's value is never read. The JSON carries a one-use `token` for the field, when it has a caret.
     func focusedTextSnapshot(with reply: @escaping (String?) -> Void)
-    func ghostInsert(_ location: Int, _ text: String, with reply: @escaping (Int) -> Void)
+    func ghostInsert(_ token: String, _ location: Int, _ text: String, with reply: @escaping (Int) -> Void)
+    func postGhostAcceptKey(with reply: @escaping (Bool) -> Void)
     // Keyboard backlight / CoreBrightness access (performed by the helper)
     func isKeyboardBrightnessAvailable(with reply: @escaping (Bool) -> Void)
     func currentKeyboardBrightness(with reply: @escaping (NSNumber?) -> Void)

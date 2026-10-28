@@ -18,8 +18,13 @@ enum FocusedTextReader {
     /// Pids we have already asked to expose their AX tree (Chromium/Electron need the flag).
     nonisolated(unsafe) private static var primedPIDs = Set<pid_t>()
 
+    /// The field the newest read found, for the one-use token ghostInsert needs (#47, review finding 5).
+    nonisolated(unsafe) private static var slot = GhostTokenSlot<(pid: pid_t, element: AXUIElement)>()
+    private static let slotLock = NSLock()
+
     /// JSON snapshot of the focused field, or `{"failure":"<token>"[,"axError":N]}` saying why there is none (#47).
     static func snapshotJSON() -> String {
+        clearToken()
         guard AXIsProcessTrusted() else { return failure("untrusted") }
         let system = AXUIElementCreateSystemWide()
         var dict: [String: Any] = [:]
@@ -98,6 +103,7 @@ enum FocusedTextReader {
             dict["fieldWidth"] = Double(frame.width)
             dict["fieldHeight"] = Double(frame.height)
         }
+        dict["token"] = issueToken(pid: pid, element: focused)
         return encode(dict)
     }
 
@@ -105,6 +111,28 @@ enum FocusedTextReader {
         var dict: [String: Any] = ["failure": token]
         if let axError { dict["axError"] = axError }
         return encode(dict)
+    }
+
+    /// Forgets the field of the previous read, so its token can no longer insert anything.
+    static func clearToken() {
+        slotLock.lock()
+        defer { slotLock.unlock() }
+        slot.clear()
+    }
+
+    /// Stores the field this read found and returns the one-use token that names it.
+    static func issueToken(pid: pid_t, element: AXUIElement) -> String {
+        slotLock.lock()
+        defer { slotLock.unlock() }
+        return slot.put((pid, element), now: ProcessInfo.processInfo.systemUptime)
+    }
+
+    /// The field behind a token, once. nil when the token is unknown, used, or replaced by a newer read.
+    static func takeToken(_ token: String) -> (pid: pid_t, element: AXUIElement, age: TimeInterval)? {
+        slotLock.lock()
+        defer { slotLock.unlock() }
+        guard let taken = slot.take(token, now: ProcessInfo.processInfo.systemUptime) else { return nil }
+        return (taken.value.pid, taken.value.element, taken.age)
     }
 
     /// Bounds of the caret. Uses the character before it first (x = its right edge, width 0), because some

@@ -2,13 +2,13 @@ import Foundation
 
 /// One log line per ghost-text event. Numbers and enum names only: never field or suggestion text.
 enum GhostTextEvent: String, CaseIterable {
-    case call, shown, accepted, dismissed, dropped, fallback
+    case call, shown, accepted, dismissed, dropped, fallback, passedThrough
 
     /// Why a `dropped` line happened. Fixed tokens only, one per guard.
     enum Reason: String, CaseIterable {
         case decodeFailed, policy, noCaretLocation, noCaretRect, noFieldRect, noRoom, noPrompt
         case noAnchor, anchorMismatch, insertFailed
-        case untrusted, noFocusedApp, encodeFailed, xpcError, xpcTimeout, notFrontmost, fallbackInsert
+        case untrusted, noFocusedApp, encodeFailed, xpcError, xpcTimeout, notFrontmost, noToken
     }
 
     static func line(_ event: GhostTextEvent, callsTotal: Int, reason: Reason? = nil,

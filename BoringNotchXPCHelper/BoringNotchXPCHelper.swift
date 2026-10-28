@@ -344,21 +344,43 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         reply(FocusedTextReader.snapshotJSON())
     }
 
-    /// Inserts ghost text at `location`, the caret the app read, and only if GhostInsertCheck still allows it.
-    /// Replies: 0 inserted, 2 set failed (typed instead, 7), 3 unverified, 4 no focus, 5 refused, 6 not trusted, 7 typed fallback.
-    @objc func ghostInsert(_ location: Int, _ text: String, with reply: @escaping (Int) -> Void) {
+    /// Inserts ghost text at `location` into the element the read that issued `token` found (#47, finding 5).
+    /// Writes only through that element, never through the system-wide focus, and only if GhostInsertGate and
+    /// GhostInsertCheck still allow it. Replies: 0 inserted, 2 set failed (typed instead, 7), 3 unverified, 4 no focus,
+    /// 5 refused, 6 not trusted, 7 typed fallback, 8 stale or unknown token, 9 app not frontmost, 10 focus moved, 11 secure.
+    @objc func ghostInsert(_ token: String, _ location: Int, _ text: String, with reply: @escaping (Int) -> Void) {
         guard AXIsProcessTrusted() else { return reply(6) }
-        guard let element = Self.currentFocusedElement() else { return reply(4) }
+        let taken = FocusedTextReader.takeToken(token)
+        let still = taken.map { Self.ghostTargetFocused(pid: $0.pid, element: $0.element) }
+        if let refusal = GhostInsertGate.refusal(
+            age: taken?.age, pidFrontmost: still?.frontmost ?? false, focusUnchanged: still?.focused ?? false,
+            role: taken.flatMap { Self.copyString($0.element, kAXRoleAttribute as String) },
+            subrole: taken.flatMap { Self.copyString($0.element, kAXSubroleAttribute as String) }) {
+            return reply(refusal.rawValue)
+        }
+        guard let taken else { return reply(GhostInsertGate.Refusal.staleToken.rawValue) }
+        let element = taken.element
         let result = GhostInsertCheck.insert(text, at: location, into: AXGhostField(element: element))
         var settable: DarwinBoolean = true
         let q = AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
         if GhostInsertCheck.mayType(result, querySucceeded: q == .success, settable: settable.boolValue) {
+            // Typed keys go to the frontmost focus: re-check it is still the stored element (nothing written yet).
+            let now = Self.ghostTargetFocused(pid: taken.pid, element: element)
+            guard now.frontmost, now.focused else { return reply(GhostInsertGate.Refusal.focusMoved.rawValue) }
             // Only when the attribute is definitively not settable; a settable-but-failed set may have written.
             // Already tagged, flags empty. Never reached after .unverified, which would double-insert.
             Self.typeUnicode(text)
             return reply(7)
         }
         reply(result.rawValue)
+    }
+
+    /// Posts back an Option+Tab that the app swallowed for an accept which wrote nothing (#47, finding 5).
+    /// Tagged, so the app's own tap ignores it and it cannot accept again.
+    @objc func postGhostAcceptKey(with reply: @escaping (Bool) -> Void) {
+        guard AXIsProcessTrusted() else { return reply(false) }
+        Self.postKey(48, flags: .maskAlternate)
+        reply(true)
     }
 
     /// The focused AX field as a GhostTextField. It reads and sets only the selection and the text around it.
@@ -532,6 +554,15 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
     /// 4 when nothing is tracked, 5 when focus has moved away.
     private func unavailableCode() -> Int {
         trackedElement == nil ? 4 : 5
+    }
+
+    /// Whether `pid` is frontmost and `element` is still its focused element (AX, 0.25 s timeout).
+    private static func ghostTargetFocused(pid: pid_t, element: AXUIElement) -> (frontmost: Bool, focused: Bool) {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.25)
+        let frontmost = (copyValue(app, kAXFrontmostAttribute as String) as? Bool) == true
+        let focused = copyValue(app, kAXFocusedUIElementAttribute as String).map { CFEqual($0, element) } ?? false
+        return (frontmost, focused)
     }
 
     /// The system-wide focus. Falls back to the prepared app's own focus, but only while that app is frontmost:

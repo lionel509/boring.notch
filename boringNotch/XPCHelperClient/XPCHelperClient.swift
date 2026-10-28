@@ -257,17 +257,31 @@ final class XPCHelperClient: NSObject {
         }
     }
     
-    /// Inserts ghost text at the caret. Codes are the helper's (0 inserted, 2 set failed, 3 unverified,
-    /// 4 no focus, 5 refused, 6 not trusted, 7 typed fallback). -1 when the XPC call fails.
-    nonisolated func ghostInsert(location: Int, text: String) async -> Int {
+    /// Inserts ghost text into the field the read that issued `token` found. Codes are the helper's (0 inserted,
+    /// 2 set failed, 3 unverified, 4 no focus, 5 refused, 6 not trusted, 7 typed fallback, 8 stale token,
+    /// 9 not frontmost, 10 focus moved, 11 secure). -1 when the XPC call fails.
+    nonisolated func ghostInsert(token: String, location: Int, text: String) async -> Int {
         do {
             let service = await MainActor.run { ensureRemoteService() }
             let code: Int = try await service.withContinuation { service, continuation in
-                service.ghostInsert(location, text) { code in continuation.resume(returning: code) }
+                service.ghostInsert(token, location, text) { code in continuation.resume(returning: code) }
             }
             return code
         } catch {
             return -1
+        }
+    }
+
+    /// Posts back an Option+Tab the app swallowed for an accept that wrote nothing. False when the XPC call fails.
+    nonisolated func postGhostAcceptKey() async -> Bool {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let posted: Bool = try await service.withContinuation { service, continuation in
+                service.postGhostAcceptKey { posted in continuation.resume(returning: posted) }
+            }
+            return posted
+        } catch {
+            return false
         }
     }
 

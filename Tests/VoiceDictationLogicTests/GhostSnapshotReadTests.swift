@@ -59,21 +59,6 @@ final class GhostSnapshotReadTests: XCTestCase {
                        .failed(.notFrontmost, axError: -25212))
     }
 
-    /// Round-1 fix 1: insert writes through the system-wide focus, so a frontmost-app fallback must never reach it.
-    func testFallbackSnapshotIsRefusedForInsert() {
-        let read = GhostSnapshotRead.classify(.some(fallback), frontmostBundleID: "com.google.Chrome")
-        XCTAssertEqual(GhostSnapshotRead.insertRefusal(read), .fallbackInsert)
-    }
-
-    func testDirectSnapshotIsAllowedForInsert() {
-        let read = GhostSnapshotRead.classify(.some(textEdit), frontmostBundleID: "com.apple.Safari")
-        XCTAssertNil(GhostSnapshotRead.insertRefusal(read))
-    }
-
-    func testFailedReadKeepsItsOwnReasonForInsert() {
-        XCTAssertNil(GhostSnapshotRead.insertRefusal(.failed(.untrusted, axError: nil)))
-    }
-
     /// Round-1 fix 7: the helper never sends a float axError, so a float must not classify as an AXError code.
     func testFloatAXErrorIsNotAnAXErrorCode() {
         let json = #"{"bundleID":"com.apple.TextEdit","appName":"TextEdit","textBeforeCaret":"hello wor","caretLocation":9,"caretAtEnd":true,"caretX":10,"caretY":10,"caretWidth":1,"caretHeight":14,"fieldX":0,"fieldY":0,"fieldWidth":400,"fieldHeight":30,"focusVia":"frontmost","axError":-25212.0}"#

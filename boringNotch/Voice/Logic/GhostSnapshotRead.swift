@@ -8,13 +8,6 @@ enum GhostSnapshotRead: Equatable {
     /// The only failure tokens the helper may send. Anything else is decodeFailed.
     static let helperFailures: [GhostTextEvent.Reason] = [.untrusted, .noFocusedApp, .encodeFailed]
 
-    /// Insert writes through the system-wide focus (ghostInsert), so a frontmost-app fallback read may name a
-    /// different element. Refuse it, and say why (round-1 fix 1). nil means the read may be used for insert.
-    static func insertRefusal(_ read: GhostSnapshotRead) -> GhostTextEvent.Reason? {
-        if case .snapshot(_, viaFrontmost: true, _) = read { return .fallbackInsert }
-        return nil
-    }
-
     /// An AXError code is an integer. JSONSerialization also bridges a float such as -25212.0, which the helper never sends (round-1 fix 7),
     /// and a JSON boolean, which bridges to an NSNumber too (round-3 finding 4).
     private static func integralAXError(_ value: Any?) -> Int? {

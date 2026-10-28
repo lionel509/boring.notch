@@ -24,10 +24,12 @@ struct GhostTextSnapshot: Codable, Equatable {
     var fieldY: Double? = nil
     var fieldWidth: Double? = nil
     var fieldHeight: Double? = nil
+    /// One-use id of the field this read found; the helper writes only there. Never logged, never sent to the model.
+    var token: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case bundleID, appName, windowTitle, role, subrole, isSecure, textBeforeCaret, caretLocation, caretAtEnd
-        case caretX, caretY, caretWidth, caretHeight, fieldX, fieldY, fieldWidth, fieldHeight
+        case caretX, caretY, caretWidth, caretHeight, fieldX, fieldY, fieldWidth, fieldHeight, token
     }
 
     init() {}
@@ -51,6 +53,7 @@ struct GhostTextSnapshot: Codable, Equatable {
         fieldY = try c.decodeIfPresent(Double.self, forKey: .fieldY)
         fieldWidth = try c.decodeIfPresent(Double.self, forKey: .fieldWidth)
         fieldHeight = try c.decodeIfPresent(Double.self, forKey: .fieldHeight)
+        token = try c.decodeIfPresent(String.self, forKey: .token)
     }
 
     var hasCaret: Bool {
