@@ -198,15 +198,15 @@ final class GhostInsertGateTests: XCTestCase {
         XCTAssertFalse(body.contains("currentFocusedElement"), "ghostInsert must not read the focus")
         XCTAssertFalse(body.contains("AXUIElementCreateSystemWide"), "ghostInsert must not read the system-wide focus")
         let gate = body.range(of: "GhostInsertGate.refusal(")?.lowerBound
-        let write = body.range(of: "GhostInsertCheck.insert(")?.lowerBound
+        let write = body.range(of: "GhostInsertCheck.accept(")?.lowerBound
         XCTAssertNotNil(gate)
         XCTAssertNotNil(write)
         if let gate, let write { XCTAssertLessThan(gate, write, "the gate must come before any write") }
-        let beforeTyping = body.components(separatedBy: "typeUnicode(text)").first ?? ""
+        let beforeTyping = body.components(separatedBy: "typeUnicode(typed, pid: taken.pid)").first ?? ""
         XCTAssertGreaterThanOrEqual(count(beforeTyping, "ghostTargetFocused("), 2,
                                     "typed fallback must re-check the focus right before typing")
         // Finding 3: the focus re-check must refuse before typing. Deleting this guard must turn the test red.
-        let recheck = "guard now.frontmost, now.focused else { return reply(GhostInsertGate.Refusal.focusMoved.rawValue) }"
+        let recheck = "guard now.frontmost, now.focused else { return false }"
         let lastCheck = beforeTyping.range(of: "ghostTargetFocused(", options: .backwards)?.lowerBound
         let guardAt = beforeTyping.range(of: recheck)?.lowerBound
         XCTAssertNotNil(guardAt, "the typed fallback must refuse when the focus moved")
@@ -219,7 +219,7 @@ final class GhostInsertGateTests: XCTestCase {
     func testReaderIssuesTokenOnlyForANonSecureCaret() throws {
         let text = try read("BoringNotchXPCHelper/FocusedTextReader.swift")
         XCTAssertEqual(count(text, "issueToken("), 2, "one definition and one call")
-        let snapshot = section(text, from: "static func snapshotJSON()", to: "private static func failure(")
+        let snapshot = section(text, from: "static func snapshotJSON(", to: "private static func failure(")
         XCTAssertTrue(snapshot.contains("clearToken()"))
         // XCTUnwrap, not `!`: a missing marker must fail this one test, not crash the whole xctest run (finding 4).
         let clear = try XCTUnwrap(snapshot.range(of: "clearToken()")).lowerBound
