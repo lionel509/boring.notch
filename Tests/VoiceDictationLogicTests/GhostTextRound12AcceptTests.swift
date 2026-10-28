@@ -22,6 +22,8 @@ final class GhostTextRound12AcceptTests: XCTestCase {
         var setCalls = 0
         var setWrites = false
         var setReturns = false
+        /// The set reports failure after writing only a proper prefix of the text (a partial write).
+        var setWritesPartial = false
 
         init(value: String, caret: Int) {
             self.value = value
@@ -32,11 +34,19 @@ final class GhostTextRound12AcceptTests: XCTestCase {
 
         func setSelectedText(_ text: String) -> Bool {
             setCalls += 1
+            if setWritesPartial {
+                write(String(text.prefix(max(1, text.count / 2))))
+                return false
+            }
             guard setWrites else { return setReturns }
+            write(text)
+            return setReturns
+        }
+
+        private func write(_ text: String) {
             let ns = (value ?? "") as NSString
             value = ns.replacingCharacters(in: NSRange(location: selectionLocation, length: 0), with: text)
             selectionLocation += (text as NSString).length
-            return setReturns
         }
 
         func string(location: Int, length: Int) -> String? {
@@ -81,6 +91,7 @@ final class GhostTextRound12AcceptTests: XCTestCase {
             let field = AcceptField(value: value, caret: caret)
             field.setWrites = Bool.random(using: &rng)
             field.setReturns = Bool.random(using: &rng)
+            field.setWritesPartial = Int.random(in: 0..<4, using: &rng) == 0
             let typeReturns = Bool.random(using: &rng)
             let inWeb = Bool.random(using: &rng)
             let settable: Bool? = [true, false, nil].randomElement(using: &rng)!
@@ -95,7 +106,7 @@ final class GhostTextRound12AcceptTests: XCTestCase {
                     valueAtType = field.value
                     return typeReturns
                 })
-            let setWrote = field.setCalls > 0 && field.setWrites
+            let setWrote = field.setCalls > 0 && (field.setWrites || field.setWritesPartial)
 
             XCTAssertLessThanOrEqual(typeCalls, 1, "run \(run): typed more than once")
             XCTAssertLessThanOrEqual((setWrote ? 1 : 0) + typeCalls, 1, "run \(run): written twice")
@@ -168,6 +179,19 @@ final class GhostTextRound12AcceptTests: XCTestCase {
         XCTAssertEqual(typeCalls, 0)
     }
 
+    /// A native set that fails after writing a prefix must not be typed over (the byte-identical guard in `accept`).
+    func testPartialWriteThatReportsFailureIsNotTypedOver() {
+        let field = AcceptField(value: "hi ", caret: 3)
+        field.setWritesPartial = true
+        var typeCalls = 0
+        let result = GhostInsertCheck.accept("lazy", at: 3, into: field, inWebArea: false,
+            settable: { false },
+            type: { _ in typeCalls += 1; return true })
+        XCTAssertEqual(result, .setFailed)
+        XCTAssertEqual(typeCalls, 0)
+        XCTAssertEqual(field.value, "hi la")
+    }
+
     func testWebFieldWithTextAfterTheCaretIsRefused() {
         let field = AcceptField(value: "hello world", caret: 5)
         var typeCalls = 0
@@ -186,6 +210,8 @@ final class GhostTextRound12AcceptTests: XCTestCase {
         let insert = section(helper, from: "func ghostInsert(", to: "private struct AXGhostField")
         XCTAssertTrue(insert.contains("_ frontPid: Int, with reply"), "ghostInsert does not take the caller's pid")
         XCTAssertTrue(insert.contains("pid_t(clamping: frontPid)"), "ghostInsert does not compare against the caller's pid")
+        XCTAssertTrue(insert.contains("$0.pid == pid_t(clamping: frontPid)"), "sameApp is missing: the field may belong to another app")
+        XCTAssertTrue(insert.contains("pidFrontmost: (still?.frontmost ?? false) && sameApp"), "the gate does not require sameApp")
         XCTAssertTrue(insert.contains("Self.isInWebArea(element)"), "ghostInsert does not check for web content")
         XCTAssertTrue(insert.contains("GhostInsertCheck.accept("), "ghostInsert does not use accept")
         XCTAssertFalse(insert.contains("GhostInsertCheck.insert("), "ghostInsert still calls insert directly")

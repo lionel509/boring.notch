@@ -260,15 +260,17 @@ final class GhostTextManager: ObservableObject {
             if let cleaned = GhostTextPrompt.clean(raw), let kept = GhostTextPrompt.dedupe(context: before, suggestion: cleaned) {
                 suggestion = GhostTextPrompt.join(context: before, suggestion: kept)
             } else {
-                GhostTextLog.record(.dropped, reason: GhostTextPrompt.clean(raw) == nil ? GhostTextEvent.noSuggestionReason(raw) : .cleanedAway)
+                let reason = GhostTextPrompt.clean(raw) == nil ? GhostTextEvent.noSuggestionReason(raw) : .cleanedAway
+                GhostTextLog.record(.dropped, reason: reason)
                 suggestion = nil
             }
         }
         // Round 12 (#47): fit to whole words that fit the field, so the drawn text is exactly what accept inserts.
         if let joined = suggestion {
             let font = Self.overlayFont(name: snapshot.fontName, size: snapshot.fontSize, caretHeight: caret.height)
-            suggestion = GhostTextGeometry.fitWords(joined, caret: caret, field: field) { GhostTextOverlay.textSize($0, font: font).width }
-            if suggestion == nil { GhostTextLog.record(.dropped, reason: .overlayNoRoom) }
+            let fitted = GhostTextGeometry.fitWords(joined, caret: caret, field: field) { GhostTextOverlay.textSize($0, font: font).width }
+            if fitted == nil { GhostTextLog.record(.dropped, reason: .overlayNoRoom) }
+            suggestion = fitted
         }
         anchor = GhostTextLogic.Anchor(
             bundleID: snapshot.bundleID,
