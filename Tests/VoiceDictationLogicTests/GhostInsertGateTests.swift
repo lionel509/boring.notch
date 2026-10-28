@@ -131,7 +131,7 @@ final class GhostInsertGateTests: XCTestCase {
     /// Finding 5: fetch and insert must agree for direct and frontmost-fallback reads alike.
     func testFetchAndInsertAgreeForDirectAndFallbackReads() {
         func json(fallback: Bool, token: Bool) -> String {
-            var s = #"{"bundleID":"com.google.Chrome","appName":"Chrome","textBeforeCaret":"hello wor","caretLocation":9,"caretAtEnd":true,"caretX":10,"caretY":10,"caretWidth":1,"caretHeight":14,"fieldX":0,"fieldY":0,"fieldWidth":400,"fieldHeight":30"#
+            var s = #"{"bundleID":"com.google.Chrome","appName":"Chrome","role":"AXTextArea","textBeforeCaret":"hello wor","caretLocation":9,"caretAtEnd":true,"caretX":10,"caretY":10,"caretWidth":1,"caretHeight":14,"fieldX":0,"fieldY":0,"fieldWidth":400,"fieldHeight":30"#
             if fallback { s += #","focusVia":"frontmost","axError":-25212"# }
             if token { s += #","token":"t""# }
             return s + "}"
@@ -203,6 +203,14 @@ final class GhostInsertGateTests: XCTestCase {
         let beforeTyping = body.components(separatedBy: "typeUnicode(text)").first ?? ""
         XCTAssertGreaterThanOrEqual(count(beforeTyping, "ghostTargetFocused("), 2,
                                     "typed fallback must re-check the focus right before typing")
+        // Finding 3: the focus re-check must refuse before typing. Deleting this guard must turn the test red.
+        let recheck = "guard now.frontmost, now.focused else { return reply(GhostInsertGate.Refusal.focusMoved.rawValue) }"
+        let lastCheck = beforeTyping.range(of: "ghostTargetFocused(", options: .backwards)?.lowerBound
+        let guardAt = beforeTyping.range(of: recheck)?.lowerBound
+        XCTAssertNotNil(guardAt, "the typed fallback must refuse when the focus moved")
+        if let lastCheck, let guardAt {
+            XCTAssertLessThan(lastCheck, guardAt, "the refusal must follow the focus re-check")
+        }
     }
 
     /// I1: a token is issued only for a non-secure field with a caret, and every read clears the old one.
@@ -211,13 +219,14 @@ final class GhostInsertGateTests: XCTestCase {
         XCTAssertEqual(count(text, "issueToken("), 2, "one definition and one call")
         let snapshot = section(text, from: "static func snapshotJSON()", to: "private static func failure(")
         XCTAssertTrue(snapshot.contains("clearToken()"))
-        XCTAssertLessThan(snapshot.range(of: "clearToken()")!.lowerBound,
-                          snapshot.range(of: "AXIsProcessTrusted()")!.lowerBound)
+        // XCTUnwrap, not `!`: a missing marker must fail this one test, not crash the whole xctest run (finding 4).
+        let clear = try XCTUnwrap(snapshot.range(of: "clearToken()")).lowerBound
+        XCTAssertLessThan(clear, try XCTUnwrap(snapshot.range(of: "AXIsProcessTrusted()")).lowerBound)
         guard let call = snapshot.range(of: "issueToken(pid: pid, element: focused)") else {
             return XCTFail("snapshotJSON must issue the token from the focused element")
         }
-        XCTAssertGreaterThan(call.lowerBound, snapshot.range(of: "if isSecure {")!.lowerBound)
-        XCTAssertGreaterThan(call.lowerBound, snapshot.range(of: "selection.length == 0")!.lowerBound)
+        XCTAssertGreaterThan(call.lowerBound, try XCTUnwrap(snapshot.range(of: "if isSecure {")).lowerBound)
+        XCTAssertGreaterThan(call.lowerBound, try XCTUnwrap(snapshot.range(of: "selection.length == 0")).lowerBound)
     }
 
     /// Only the app's XPC client and the one accept in GhostTextManager may call ghostInsert.

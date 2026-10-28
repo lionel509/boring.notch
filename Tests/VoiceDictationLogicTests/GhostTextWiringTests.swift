@@ -52,6 +52,8 @@ final class GhostTextWiringTests: XCTestCase {
     func testFetchAndInsertShareTheGateAndInsertPassesThrough() throws {
         let manager = try appSource("boringNotch/Voice/Ghost/GhostTextManager.swift")
         XCTAssertEqual(count(manager, "GhostInsertGate.appAllows("), 2)
+        // The result must gate the call (finding 3: `guard true || appAllows(` would still match the count above).
+        XCTAssertEqual(count(manager, "guard GhostInsertGate.appAllows("), 2, "both sites must return on a refused gate")
         let fetch = section(manager, from: "private func fetch(gen", to: "private func dropFetch(")
         XCTAssertTrue(fetch.contains("GhostInsertGate.appAllows("))
         let attempt = section(manager, from: "private func attemptInsert(", to: "private let ghostTapCallback")

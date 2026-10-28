@@ -37,4 +37,18 @@ final class BreakerR47R4Tests: XCTestCase {
         XCTAssertFalse(GhostTextLogic.insertAllowed(anchor: anchor, now: other),
                        "a different field (other fieldY) was allowed to take the suggestion")
     }
+
+    /// B2 fix: the anchor carries the fetch read's field frame. The same frame inserts, any other frame refuses.
+    func testAnchorFieldFrameMustMatchExactly() {
+        var fetched = GhostTextSnapshot()
+        fetched.bundleID = "com.google.Chrome"; fetched.caretLocation = 0; fetched.caretAtEnd = true
+        fetched.textBeforeCaret = ""; fetched.fieldX = 100; fetched.fieldY = 200
+        fetched.fieldWidth = 400; fetched.fieldHeight = 30; fetched.token = "t1"
+        let anchor = GhostTextLogic.Anchor(bundleID: fetched.bundleID, caretLocation: 0, contextTail: "",
+                                           fieldX: 100, fieldY: 200, fieldWidth: 400, fieldHeight: 30)
+        var same = fetched; same.token = "t2"
+        XCTAssertTrue(GhostTextLogic.insertAllowed(anchor: anchor, now: same), "an unmoved field must still insert")
+        var resized = same; resized.fieldWidth = 401
+        XCTAssertFalse(GhostTextLogic.insertAllowed(anchor: anchor, now: resized), "a changed frame must refuse")
+    }
 }

@@ -30,7 +30,7 @@ enum GhostInsertGate {
     /// App side: fetch asks it before showing a suggestion and insert asks it before calling ghostInsert,
     /// so the two always agree, for direct and frontmost-fallback reads alike.
     static func appAllows(token: String?, isSecure secure: Bool, role: String, subrole: String) -> Bool {
-        guard let token, !token.isEmpty, !secure else { return false }
+        guard let token, !token.isEmpty, !secure, !role.isEmpty else { return false }
         return !isSecure(role: role, subrole: subrole)
     }
 

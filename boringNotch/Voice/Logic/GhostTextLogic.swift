@@ -77,19 +77,27 @@ enum GhostTextLogic {
     }
 
     /// What the app remembers about the caret when a suggestion was requested.
+    /// The field frame (#31 round 4, finding 1) identifies the field the suggestion was made for.
     struct Anchor: Equatable {
         var bundleID: String
         var caretLocation: Int
         var contextTail: String
+        var fieldX: Double? = nil
+        var fieldY: Double? = nil
+        var fieldWidth: Double? = nil
+        var fieldHeight: Double? = nil
     }
 
     /// Insert-time guard: same app, caret still at the end of the field and at the anchored location,
-    /// and the last 64 characters before the caret unchanged.
+    /// the last 64 characters before the caret unchanged, and the same field frame as the fetch read,
+    /// so a suggestion made for one field is never written into another.
     static func insertAllowed(anchor: Anchor, now: GhostTextSnapshot) -> Bool {
         now.bundleID == anchor.bundleID
             && now.caretAtEnd
             && now.caretLocation == anchor.caretLocation
             && now.textBeforeCaret.map { String($0.suffix(64)) } == anchor.contextTail
+            && now.fieldX == anchor.fieldX && now.fieldY == anchor.fieldY
+            && now.fieldWidth == anchor.fieldWidth && now.fieldHeight == anchor.fieldHeight
     }
 
     struct Machine: Equatable {

@@ -224,7 +224,9 @@ final class GhostTextManager: ObservableObject {
         anchor = GhostTextLogic.Anchor(
             bundleID: snapshot.bundleID,
             caretLocation: location,
-            contextTail: String(before.suffix(64))
+            contextTail: String(before.suffix(64)),
+            fieldX: snapshot.fieldX, fieldY: snapshot.fieldY,
+            fieldWidth: snapshot.fieldWidth, fieldHeight: snapshot.fieldHeight
         )
         pendingCaret = caret
         pendingField = field
