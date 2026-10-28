@@ -41,7 +41,7 @@ final class GhostTextRound11Tests: XCTestCase {
     /// A reply that clean() returns is at most 4 words, has no newline, and ends at no clause or sentence stop.
     func testRandomRepliesNeverLeaveAClauseOrSentenceOrMoreThanFourWords() {
         let stops: Set<Character> = [".", "!", "?", ";", ":", ",", "\u{2026}"]
-        let tokens = ["see", "you", "soon", "3.5", "e.g.", "don't", ".", "!", "?", ",", ";", ":", "\u{2026}",
+        let tokens = ["see", "you", "soon", "3.5", "e.g.", "don't", "wait", "config.json", "B", "Plan", ".", "...", "!", "?", ",", ";", ":", "\u{2026}",
                       "\n", " ", "  ", "\"", "'", "`"]
         var rng = LCG(state: 47)
         for _ in 0..<1000 {
@@ -56,7 +56,13 @@ final class GhostTextRound11Tests: XCTestCase {
             var token = ""
             for ch in out {
                 if ch.isWhitespace {
-                    let abbrev = previous == "." && (token.dropLast().contains(".") || token.count == 2)
+                    // Independent of the production predicate: the stem before the closing dot is a
+                    // dotted initialism of single letters ("e.g", "U.S") or a title from the literal list.
+                    let stem = token.dropLast()
+                    let parts = stem.split(separator: ".", omittingEmptySubsequences: false)
+                    let initialism = parts.count >= 2 && parts.allSatisfy { $0.count == 1 && $0.first?.isLetter == true }
+                    let title = ["mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "mt", "inc", "ltd", "co", "corp"].contains(String(stem).lowercased())
+                    let abbrev = previous == "." && (initialism || title)
                     if let p = previous, stops.contains(p), !abbrev {
                         XCTFail("a stop before whitespace survived: \(out.debugDescription)")
                     }
