@@ -51,11 +51,17 @@ final class GhostTextRound11Tests: XCTestCase {
             XCTAssertLessThanOrEqual(out.split(whereSeparator: { $0.isWhitespace }).count, 4, "too many words: \(out.debugDescription)")
             XCTAssertFalse(out.contains("\n"), "newline in: \(out.debugDescription)")
             XCTAssertFalse(out.last.map { stops.contains($0) } ?? false, "ends at a stop: \(out.debugDescription)")
+            // Round 12: a dot closing an abbreviation (dotted token or single letter) is not a sentence end.
             var previous: Character?
+            var token = ""
             for ch in out {
-                if let p = previous, stops.contains(p), ch.isWhitespace {
-                    XCTFail("a stop before whitespace survived: \(out.debugDescription)")
-                }
+                if ch.isWhitespace {
+                    let abbrev = previous == "." && (token.dropLast().contains(".") || token.count == 2)
+                    if let p = previous, stops.contains(p), !abbrev {
+                        XCTFail("a stop before whitespace survived: \(out.debugDescription)")
+                    }
+                    token = ""
+                } else { token.append(ch) }
                 previous = ch
             }
         }

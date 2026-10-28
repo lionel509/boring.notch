@@ -47,7 +47,8 @@ enum GhostTextPrompt {
         while let last = body.last, GhostTextPolicy.suggestionStops.contains(last) || GhostTextPolicy.cjkStops.contains(last) { body.removeLast() }
         let words = body.split(whereSeparator: { $0.isWhitespace }).prefix(GhostTextPolicy.maxSuggestionWords)
         guard !words.isEmpty else { return nil }
-        let suggestion = words.joined(separator: " ")
+        var suggestion = words.joined(separator: " ")
+        while let last = suggestion.last, GhostTextPolicy.suggestionStops.contains(last) || GhostTextPolicy.cjkStops.contains(last) { suggestion.removeLast() }
         // Fences, quote marks, ellipses and rules have no words: nothing to show or insert.
         guard suggestion.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
         return suggestion
@@ -58,6 +59,7 @@ enum GhostTextPrompt {
     /// Round 12 (#47): a dot after a title, a single letter, or inside a dotted token ("U.S.") is not a sentence end.
     private static func isAbbreviationDot(_ body: String, at dot: String.Index) -> Bool {
         let head = body[..<dot]
+        guard let lastCh = head.last, !lastCh.isWhitespace else { return false }
         let token = head.split(whereSeparator: { $0.isWhitespace }).last.map(String.init) ?? ""
         if token.contains(".") { return true }
         if token.count == 1, token.first?.isLetter == true { return true }
