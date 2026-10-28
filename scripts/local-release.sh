@@ -78,7 +78,9 @@ check_sig() {
   local target=$1 info req  # not `path`: in zsh that name is tied to $PATH
   info=$(codesign -dvv "$target" 2>&1) || info=""
   req=$(codesign -d -r- "$target" 2>&1) || req=""
-  if [[ $info != *"Authority=$IDENTITY"* || $info == *"Signature=adhoc"* || $info == *runtime* \
+  # Only the flags= line says whether the runtime is on: a name or path containing "runtime" is not (round-1 fix 5).
+  local flags=$(print -r -- "$info" | grep -m1 'flags=' || true)
+  if [[ $info != *"Authority=$IDENTITY"* || $info == *"Signature=adhoc"* || $flags == *"(runtime)"* \
         || $req != *"certificate leaf"* ]]; then
     print -u2 "wrong signature on $target"
     print -u2 "$info"
