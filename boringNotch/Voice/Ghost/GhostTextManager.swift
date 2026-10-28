@@ -217,13 +217,27 @@ final class GhostTextManager: ObservableObject {
         Defaults[.ghostTextCalls] += 1
         GhostTextLog.record(.call)
 
-        var raw: String? = nil
+        var completion: GhostTextCompletion = .unavailable
         if #available(macOS 26.0, *) {
-            raw = await GhostTextModel.shared.complete(prompt)
+            completion = await GhostTextModel.shared.complete(prompt)
         }
         guard !Task.isCancelled else { return }
-        let suggestion = GhostTextPrompt.clean(raw).map {
-            GhostTextPrompt.join(context: before, suggestion: $0)
+        // Round 8 (#31): each way the reply gives no suggestion logs one dropped line before the machine goes idle.
+        let suggestion: String?
+        switch completion {
+        case .unavailable:
+            GhostTextLog.record(.dropped, reason: .modelUnavailable)
+            suggestion = nil
+        case .failed(let value):
+            GhostTextLog.record(.dropped, reason: .modelError, value: value)
+            suggestion = nil
+        case .reply(let raw):
+            if let cleaned = GhostTextPrompt.clean(raw) {
+                suggestion = GhostTextPrompt.join(context: before, suggestion: cleaned)
+            } else {
+                GhostTextLog.record(.dropped, reason: GhostTextEvent.noSuggestionReason(raw))
+                suggestion = nil
+            }
         }
         anchor = GhostTextLogic.Anchor(
             bundleID: snapshot.bundleID,
@@ -247,6 +261,7 @@ final class GhostTextManager: ObservableObject {
     /// machine is told so it never stays in the showing state with nothing on screen.
     private func showOverlay(_ text: String) {
         guard let caret = pendingCaret, let field = pendingField else {
+            GhostTextLog.record(.dropped, reason: .overlayNoCaret)
             handle(.focusChanged)
             return
         }
@@ -260,6 +275,7 @@ final class GhostTextManager: ObservableObject {
             textSize: measure.intrinsicContentSize,
             primaryHeight: primaryHeight
         ) else {
+            GhostTextLog.record(.dropped, reason: .overlayNoRoom)
             handle(.focusChanged)
             return
         }

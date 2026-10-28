@@ -10,6 +10,31 @@ enum GhostTextEvent: String, CaseIterable {
         case noAnchor, anchorMismatch, insertFailed
         case untrusted, noFocusedApp, encodeFailed, xpcError, xpcTimeout, notFrontmost, noToken
         case roleNotAllowed, subroleNotAllowed
+        /// Round 8 (#31): every outcome after `.call` logs one line.
+        case modelError, modelUnavailable, modelEmpty, cleanedAway, overlayNoRoom, overlayNoCaret
+    }
+
+    /// Why a model reply that gave no suggestion was dropped: modelEmpty when blank, cleanedAway otherwise.
+    static func noSuggestionReason(_ raw: String) -> Reason {
+        raw.allSatisfy { $0.isWhitespace } ? .modelEmpty : .cleanedAway
+    }
+
+    /// The `value` for `dropped reason=modelError`: the error's type name, then its GenerationError case name,
+    /// or its code when there is no case name. Identifier characters only, so no prompt or reply text gets in.
+    static func errorValue(typeName: String, caseName: String?, code: Int) -> String {
+        if let caseName { return identifierToken(typeName) + "." + identifierToken(caseName) }
+        return identifierToken(typeName) + "#\(code)"
+    }
+
+    /// Letters, digits, underscore and dot only, at most 80 characters, `none` when nothing is left.
+    private static func identifierToken(_ raw: String) -> String {
+        let kept = String(raw.unicodeScalars.filter { scalar in
+            switch scalar {
+            case "A"..."Z", "a"..."z", "0"..."9", "_", ".": return true
+            default: return false
+            }
+        }.prefix(80).map(Character.init))
+        return kept.isEmpty ? "none" : kept
     }
 
     /// The allow-list reason for a refused field (#31 round 7).
