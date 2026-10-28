@@ -37,12 +37,12 @@ final class GhostTextOverlay {
     }
 
     /// `frame` is in Cocoa screen coordinates, already fitted to the field by `GhostTextGeometry.overlayFrame`.
-    func show(_ text: String, frame: CGRect, fontSize: CGFloat) {
+    func show(_ text: String, frame: CGRect, font: NSFont) {
         let panel = panel ?? makePanel()
         self.panel = panel
 
         label.stringValue = text
-        label.font = .systemFont(ofSize: fontSize)
+        label.font = font
         panel.setFrame(frame, display: true)
         panel.orderFrontRegardless()
     }

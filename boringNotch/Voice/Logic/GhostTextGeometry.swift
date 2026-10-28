@@ -35,4 +35,10 @@ enum GhostTextGeometry {
     static func fontSize(caretHeight: CGFloat) -> CGFloat {
         min(max(caretHeight * 0.72, 11), 22)
     }
+
+    /// The field's own font size when the helper read one in 6...72 points, else the caret-height estimate.
+    static func fontSize(fieldFontSize: Double?, caretHeight: CGFloat) -> CGFloat {
+        if let s = fieldFontSize, s.isFinite, s >= 6, s <= 72 { return CGFloat(s) }
+        return fontSize(caretHeight: caretHeight)
+    }
 }

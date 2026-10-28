@@ -51,12 +51,12 @@ final class GhostSnapshotReadTests: XCTestCase {
 
     func testFrontmostFallbackIsRefusedWhenTheAppDiffers() {
         XCTAssertEqual(GhostSnapshotRead.classify(.some(fallback), frontmostBundleID: "com.apple.Safari"),
-                       .failed(.notFrontmost, axError: -25212))
+                       .failed(.notFrontmost, axError: -25212, snapshotApp: "com.google.Chrome"))
     }
 
     func testFrontmostFallbackIsRefusedWithoutAFrontmostApp() {
         XCTAssertEqual(GhostSnapshotRead.classify(.some(fallback), frontmostBundleID: nil),
-                       .failed(.notFrontmost, axError: -25212))
+                       .failed(.notFrontmost, axError: -25212, snapshotApp: "com.google.Chrome"))
     }
 
     /// Round-1 fix 7: the helper never sends a float axError, so a float must not classify as an AXError code.

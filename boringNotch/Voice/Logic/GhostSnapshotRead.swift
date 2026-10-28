@@ -3,7 +3,7 @@ import Foundation
 /// Turns the raced XPC reply for a focused-text read into a snapshot or one fixed reason (#47).
 enum GhostSnapshotRead: Equatable {
     case snapshot(GhostTextSnapshot, viaFrontmost: Bool, axError: Int?)
-    case failed(GhostTextEvent.Reason, axError: Int?)
+    case failed(GhostTextEvent.Reason, axError: Int?, snapshotApp: String? = nil)
 
     /// The only failure tokens the helper may send. Anything else is decodeFailed.
     static let helperFailures: [GhostTextEvent.Reason] = [.untrusted, .noFocusedApp, .encodeFailed]
@@ -38,7 +38,7 @@ enum GhostSnapshotRead: Equatable {
         }
         let viaFrontmost = (obj["focusVia"] as? String) == "frontmost"
         if viaFrontmost, frontmostBundleID == nil || snapshot.bundleID != frontmostBundleID {
-            return .failed(.notFrontmost, axError: axError)
+            return .failed(.notFrontmost, axError: axError, snapshotApp: snapshot.bundleID)
         }
         return .snapshot(snapshot, viaFrontmost: viaFrontmost, axError: viaFrontmost ? axError : nil)
     }

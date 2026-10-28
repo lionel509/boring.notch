@@ -49,7 +49,8 @@ enum GhostTextEvent: String, CaseIterable {
 
     static func line(_ event: GhostTextEvent, callsTotal: Int, reason: Reason? = nil,
                      check: GhostTextPolicy.Check? = nil, insertResult: Int? = nil,
-                     axError: Int? = nil, app: String? = nil, value: String? = nil) -> String {
+                     axError: Int? = nil, app: String? = nil, value: String? = nil,
+                     snapshotApp: String? = nil, latencyMs: Int? = nil) -> String {
         var out = "ghost event=\(event.rawValue) calls=\(callsTotal)"
         if let reason { out += " reason=\(reason.rawValue)" }
         if let check { out += " check=\(check.rawValue)" }
@@ -57,8 +58,13 @@ enum GhostTextEvent: String, CaseIterable {
         if let axError { out += " axError=\(axError)" }
         if let app { out += " app=\(appToken(app))" }
         if let value { out += " value=\(escaped(value))" }
+        if let snapshotApp { out += " snapshotApp=\(appToken(snapshotApp))" }
+        if let latencyMs { out += " latencyMs=\(latencyMs)" }
         return out
     }
+
+    /// Whole milliseconds from `start` to `end`, never negative.
+    static func latencyMs(from start: TimeInterval, to end: TimeInterval) -> Int { max(0, Int(((end - start) * 1000).rounded())) }
 
     /// A raw AX value for the log: printable ASCII as-is, except quote and backslash; every other scalar as \u{hex}.
     /// Spaces are escaped too, so padding shows. At most 64 scalars, in double quotes.

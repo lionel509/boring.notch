@@ -13,13 +13,24 @@ enum GhostTextCompletion {
     case unavailable
 }
 
-/// The only file that talks to FoundationModels. Every call uses a fresh session, so the
-/// 4K window never fills across requests, and nothing is prewarmed before he asks for text.
+/// The only file that talks to FoundationModels. Every call uses its own session, so the 4K window never fills across
+/// requests; the next one is prewarmed while he types in an app that isn't excluded.
 @available(macOS 26.0, *)
+@MainActor
 final class GhostTextModel {
     static let shared = GhostTextModel()
 
+    private var next: LanguageModelSession?
+
     private init() {}
+
+    /// Builds the next call's session ahead and loads the model, so the call after a pause starts warm. Sends no user text.
+    func prewarm() {
+        guard isAvailable, next == nil else { return }
+        let session = LanguageModelSession(instructions: GhostTextPrompt.instructions)
+        session.prewarm()
+        next = session
+    }
 
     var isAvailable: Bool {
         if case .available = SystemLanguageModel.default.availability { return true }
@@ -29,11 +40,12 @@ final class GhostTextModel {
     /// The raw reply, or why there is none: unavailable, or a failed call (overflow, guardrail, cancellation).
     func complete(_ prompt: String) async -> GhostTextCompletion {
         guard isAvailable else { return .unavailable }
-        let session = LanguageModelSession(instructions: GhostTextPrompt.instructions)
+        let session = next ?? LanguageModelSession(instructions: GhostTextPrompt.instructions)
+        next = nil
         do {
             let response = try await session.respond(
                 to: prompt,
-                options: GenerationOptions(temperature: 0.3, maximumResponseTokens: 24))
+                options: GenerationOptions(temperature: 0.3, maximumResponseTokens: 12))
             return .reply(response.content)
         } catch {
             // The case name is the text before any associated value, so the payload (which may hold prompt text) is dropped.

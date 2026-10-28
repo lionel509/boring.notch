@@ -98,6 +98,10 @@ enum FocusedTextReader {
             dict["caretWidth"] = Double(rect.width)
             dict["caretHeight"] = Double(rect.height)
         }
+        if let font = fontBeforeCaret(focused, ns: ns, caretEnd: caretEnd) {
+            dict["fontName"] = font.name
+            dict["fontSize"] = font.size
+        }
         if let frame = fieldFrame(focused) {
             dict["fieldX"] = Double(frame.origin.x)
             dict["fieldY"] = Double(frame.origin.y)
@@ -174,6 +178,23 @@ enum FocusedTextReader {
         var rect = CGRect.zero
         guard AXValueGetValue(raw as! AXValue, .cgRect, &rect) else { return nil }
         return rect
+    }
+
+    /// AXFont name and size of the character before the caret. Only these two values leave this function.
+    private static func fontBeforeCaret(_ element: AXUIElement, ns: NSString, caretEnd: Int) -> (name: String, size: Double)? {
+        guard caretEnd > 0, caretEnd <= ns.length else { return nil }
+        let r = ns.rangeOfComposedCharacterSequence(at: caretEnd - 1)
+        var range = CFRange(location: r.location, length: r.length)
+        guard let param = AXValueCreate(.cfRange, &range) else { return nil }
+        var out: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, "AXAttributedStringForRange" as CFString, param, &out) == .success,
+              let raw = out, CFGetTypeID(raw) == CFAttributedStringGetTypeID() else { return nil }
+        let attributed = raw as! NSAttributedString
+        guard attributed.length > 0,
+              let font = attributed.attribute(NSAttributedString.Key("AXFont"), at: 0, effectiveRange: nil) as? [String: Any],
+              let name = font["AXFontName"] as? String, !name.isEmpty,
+              let size = (font["AXFontSize"] as? NSNumber)?.doubleValue, size.isFinite, size > 0 else { return nil }
+        return (name, size)
     }
 
     /// Last `units` UTF-16 units of `text`, without splitting a surrogate pair at the front.

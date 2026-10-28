@@ -1,7 +1,7 @@
 import Foundation
 
 enum GhostTextPrompt {
-    static let instructions = "You finish the user's sentence. Reply with only the next few words that naturally continue the text, at most 12 words, in the same language and tone. No quotes, no explanation, never repeat the given text."
+    static let instructions = "Continue the user's text from exactly where it ends. Reply with only the next 1 to \(GhostTextPolicy.maxSuggestionWords) words, then stop. Never finish the sentence, never add end punctuation, never start a new line. Same language and tone. No quotes, no explanation, never repeat the given text."
 
     /// The last `maxContextChars` Characters of the text.
     static func context(_ text: String) -> String {
@@ -31,6 +31,19 @@ enum GhostTextPrompt {
                 if !inner.contains(first) && !inner.contains(pair.1) { body = inner + tail }
             }
         }
+        // Round 11 (#47): continue the words, never a clause or a sentence. Leading punctuation goes first, then the
+        // reply is cut at the first stop that ends a word, and stops left at the end are trimmed.
+        // Quote marks stay: a reply of several quoted phrases keeps them (see the quote rule above).
+        body = String(body.drop(while: { !$0.isLetter && !$0.isNumber && !"\"'`\u{201C}\u{201D}".contains($0) }))
+        var i = body.startIndex
+        while i < body.endIndex {
+            let next = body.index(after: i)
+            if GhostTextPolicy.suggestionStops.contains(body[i]), next == body.endIndex || body[next].isWhitespace {
+                body = String(body[..<i]); break
+            }
+            i = next
+        }
+        while let last = body.last, GhostTextPolicy.suggestionStops.contains(last) { body.removeLast() }
         let words = body.split(whereSeparator: { $0.isWhitespace }).prefix(GhostTextPolicy.maxSuggestionWords)
         guard !words.isEmpty else { return nil }
         let suggestion = words.joined(separator: " ")

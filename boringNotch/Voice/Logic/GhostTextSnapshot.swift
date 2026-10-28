@@ -26,10 +26,14 @@ struct GhostTextSnapshot: Codable, Equatable {
     var fieldHeight: Double? = nil
     /// One-use id of the field this read found; the helper writes only there. Never logged, never sent to the model.
     var token: String? = nil
+    /// The field's font at the character before the caret, from AXFont. Absent when the app doesn't expose it. Never logged, never sent to the model.
+    var fontName: String? = nil
+    /// The field's font at the character before the caret, from AXFont. Absent when the app doesn't expose it. Never logged, never sent to the model.
+    var fontSize: Double? = nil
 
     private enum CodingKeys: String, CodingKey {
         case bundleID, appName, windowTitle, role, subrole, isSecure, textBeforeCaret, caretLocation, caretAtEnd
-        case caretX, caretY, caretWidth, caretHeight, fieldX, fieldY, fieldWidth, fieldHeight, token
+        case caretX, caretY, caretWidth, caretHeight, fieldX, fieldY, fieldWidth, fieldHeight, token, fontName, fontSize
     }
 
     init() {}
@@ -54,6 +58,8 @@ struct GhostTextSnapshot: Codable, Equatable {
         fieldWidth = try c.decodeIfPresent(Double.self, forKey: .fieldWidth)
         fieldHeight = try c.decodeIfPresent(Double.self, forKey: .fieldHeight)
         token = try c.decodeIfPresent(String.self, forKey: .token)
+        fontName = try c.decodeIfPresent(String.self, forKey: .fontName)
+        fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize)
     }
 
     var hasCaret: Bool {

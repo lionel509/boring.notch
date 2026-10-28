@@ -24,7 +24,7 @@ final class GhostTextRound7FixTests: XCTestCase {
     }
 
     func testQuotedReplyWithTrailingPeriodLosesQuotes() {
-        XCTAssertEqual(GhostTextPrompt.clean("\"world\"."), "world.")
+        XCTAssertEqual(GhostTextPrompt.clean("\"world\"."), "world")
     }
 
     func testQuotedPhrasesKeepTheirQuotes() {

@@ -85,6 +85,43 @@ final class GhostTextRound11Tests: XCTestCase {
         XCTAssertEqual(GhostTextPrompt.clean("wait\u{2026}"), "wait")
     }
 
+    func testCleanTrimsTrailingStopsAfterACut() {
+        XCTAssertEqual(GhostTextPrompt.clean("e.g.!"), "e.g")
+    }
+
+    func testCleanSkipsLeadingPunctuationBeforeTheFirstWord() {
+        XCTAssertEqual(GhostTextPrompt.clean("! :. . 3.5 dollars"), "3.5 dollars")
+    }
+
+    func testCleanReturnsNilWhenOnlyLeadingPunctuationIsLeft() {
+        XCTAssertNil(GhostTextPrompt.clean("`! :`"))
+    }
+
+    /// Behavioural checks on the Round 11 signatures (added after the change; the red commit could not call them).
+    func testFontSizeUsesTheFieldFontInRangeAndFallsBackOtherwise() {
+        XCTAssertEqual(GhostTextGeometry.fontSize(fieldFontSize: 13, caretHeight: 30), 13)
+        XCTAssertEqual(GhostTextGeometry.fontSize(fieldFontSize: 6, caretHeight: 30), 6)
+        XCTAssertEqual(GhostTextGeometry.fontSize(fieldFontSize: 72, caretHeight: 30), 72)
+        let fallback = GhostTextGeometry.fontSize(caretHeight: 30)
+        let bads: [Double?] = [nil, 0, -1, 5.9, 72.1, .nan, .infinity]
+        for bad in bads {
+            XCTAssertEqual(GhostTextGeometry.fontSize(fieldFontSize: bad, caretHeight: 30), fallback, "\(String(describing: bad))")
+        }
+    }
+
+    func testLatencyIsWholeMillisecondsAndNeverNegative() {
+        XCTAssertEqual(GhostTextEvent.latencyMs(from: 10, to: 11.2345), 1235)
+        XCTAssertEqual(GhostTextEvent.latencyMs(from: 5, to: 4), 0)
+        XCTAssertEqual(GhostTextEvent.line(.shown, callsTotal: 3, latencyMs: 950), "ghost event=shown calls=3 latencyMs=950")
+    }
+
+    func testNotFrontmostLineCarriesBothBundles() {
+        XCTAssertEqual(GhostTextEvent.line(.dropped, callsTotal: 0, reason: .notFrontmost, axError: -25204,
+                                           app: "com.example.Other", snapshotApp: "com.apple.Safari"),
+                       "ghost event=dropped calls=0 reason=notFrontmost axError=-25204 app=com.example.Other snapshotApp=com.apple.Safari")
+        XCTAssertEqual(GhostTextEvent.line(.dropped, callsTotal: 0, snapshotApp: "a b/c"), "ghost event=dropped calls=0 snapshotApp=abc")
+    }
+
     func testCleanReturnsNilWithoutWords() {
         XCTAssertNil(GhostTextPrompt.clean("..."))
     }

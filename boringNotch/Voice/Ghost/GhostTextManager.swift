@@ -34,6 +34,10 @@ final class GhostTextManager: ObservableObject {
     private var anchor: GhostTextLogic.Anchor?
     private var pendingCaret: CGRect?
     private var pendingField: CGRect?
+    private var pendingFontName: String?
+    private var pendingFontSize: Double?
+    /// When he last typed, read at the pause so `shown` can carry the latency.
+    private var lastTypedAt: TimeInterval?
     /// Set while showOverlay hides the overlay itself through focusChanged. That hide is not a user dismissal, so it logs nothing.
     private var overlayHide = false
 
@@ -153,6 +157,11 @@ final class GhostTextManager: ObservableObject {
     private func run(_ effect: GhostTextLogic.Effect) {
         switch effect {
         case .scheduleTimer(let gen):
+            lastTypedAt = ProcessInfo.processInfo.systemUptime
+            // Round 11 (#47): the next session is built while he types, unless the app is excluded.
+            if #available(macOS 26.0, *), !GhostTextPolicy.excludedBundleIDs.contains(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "") {
+                GhostTextModel.shared.prewarm()
+            }
             timerTask?.cancel()
             timerTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(GhostTextPolicy.pauseDelay))
@@ -189,12 +198,12 @@ final class GhostTextManager: ObservableObject {
         let raced: String?? = await TimeoutRace.run(seconds: 3) { () -> String? in
             await XPCHelperClient.shared.focusedTextSnapshotJSON()
         }
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { GhostTextLog.record(.dropped, reason: .cancelled); return }
         let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let snapshot: GhostTextSnapshot
         switch GhostSnapshotRead.classify(raced, frontmostBundleID: front) {
-        case .failed(let reason, let axError):
-            return dropFetch(reason, gen: gen, axError: axError, app: front ?? "")
+        case .failed(let reason, let axError, let snapshotApp):
+            return dropFetch(reason, gen: gen, axError: axError, app: front ?? "", snapshotApp: snapshotApp)
         case .snapshot(let read, let viaFrontmost, let axError):
             if viaFrontmost { GhostTextLog.record(.fallback, axError: axError, app: front ?? "") }
             snapshot = read
@@ -214,7 +223,7 @@ final class GhostTextManager: ObservableObject {
                                         role: snapshot.role, subrole: snapshot.subrole) else {
             return dropFetch(.noToken, gen: gen)
         }
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { GhostTextLog.record(.dropped, reason: .cancelled); return }
         let before = snapshot.textBeforeCaret ?? ""
         Defaults[.ghostTextCalls] += 1
         GhostTextLog.record(.call)
@@ -254,12 +263,14 @@ final class GhostTextManager: ObservableObject {
         )
         pendingCaret = caret
         pendingField = field
+        pendingFontName = snapshot.fontName
+        pendingFontSize = snapshot.fontSize
         handle(.suggestion(suggestion, gen: gen))
     }
 
     private func dropFetch(_ reason: GhostTextEvent.Reason, gen: Int, check: GhostTextPolicy.Check? = nil,
-                           axError: Int? = nil, app: String? = nil, value: String? = nil) {
-        GhostTextLog.record(.dropped, reason: reason, check: check, axError: axError, app: app, value: value)
+                           axError: Int? = nil, app: String? = nil, value: String? = nil, snapshotApp: String? = nil) {
+        GhostTextLog.record(.dropped, reason: reason, check: check, axError: axError, app: app, value: value, snapshotApp: snapshotApp)
         handle(.snapshotFailed(gen: gen))
     }
 
@@ -270,9 +281,10 @@ final class GhostTextManager: ObservableObject {
             dropOverlay(.overlayNoCaret)
             return
         }
-        let fontSize = GhostTextGeometry.fontSize(caretHeight: caret.height)
+        let fontSize = GhostTextGeometry.fontSize(fieldFontSize: pendingFontSize, caretHeight: caret.height)
+        let font = pendingFontName.flatMap { NSFont(name: $0, size: fontSize) } ?? .systemFont(ofSize: fontSize)
         let measure = NSTextField(labelWithString: text)
-        measure.font = .systemFont(ofSize: fontSize)
+        measure.font = font
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         guard let frame = GhostTextGeometry.overlayFrame(
             caret: caret,
@@ -283,8 +295,8 @@ final class GhostTextManager: ObservableObject {
             dropOverlay(.overlayNoRoom)
             return
         }
-        GhostTextOverlay.shared.show(text, frame: frame, fontSize: fontSize)
-        GhostTextLog.record(.shown)
+        GhostTextOverlay.shared.show(text, frame: frame, font: font)
+        GhostTextLog.record(.shown, latencyMs: lastTypedAt.map { GhostTextEvent.latencyMs(from: $0, to: ProcessInfo.processInfo.systemUptime) })
     }
 
     /// Logs the one reason the overlay could not be shown, then tells the machine to go idle without logging a dismissal.
@@ -297,27 +309,43 @@ final class GhostTextManager: ObservableObject {
 
     // MARK: - Accept
 
+    /// What one accept attempt produced; `insert` writes it as the key's only log line.
+    private struct InsertOutcome {
+        var event: GhostTextEvent = .dropped
+        var reason: GhostTextEvent.Reason?
+        var result: Int?
+        var axError: Int?
+        var app: String?
+        var value: String?
+        var snapshotApp: String?
+    }
+
     /// Runs the accept. When nothing can have been written, the Option+Tab it swallowed goes back to the app it was
     /// pressed in, so the key is never lost for nothing (#47, finding 5).
     private func insert(_ text: String, keyApp: String?) async {
-        let result = await attemptInsert(text)
+        var outcome = await attemptInsert(text)
         let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        guard GhostInsertGate.passThrough(result: result, keyApp: keyApp, frontNow: front) else { return }
-        if await XPCHelperClient.shared.postGhostAcceptKey() {
-            GhostTextLog.record(.passedThrough, insertResult: result)
-        } else {
-            // Round 9 (#31): a lost pass-through is logged with its reason, so the key is never dropped silently.
-            GhostTextLog.record(.dropped, reason: .passThroughFailed)
+        if GhostInsertGate.passThrough(result: outcome.result, keyApp: keyApp, frontNow: front) {
+            if await XPCHelperClient.shared.postGhostAcceptKey() {
+                outcome.event = .passedThrough
+            } else {
+                // Round 9 (#31): a lost pass-through is logged with its reason, so the key is never dropped silently.
+                outcome.value = outcome.reason?.rawValue
+                outcome.reason = .passThroughFailed
+                outcome.event = .dropped
+            }
         }
+        // Round 11 (#31): one accept key, one line, with the helper's reply whenever there was one.
+        GhostTextLog.record(outcome.event, reason: outcome.reason, insertResult: outcome.result, axError: outcome.axError,
+                            app: outcome.app, value: outcome.value, snapshotApp: outcome.snapshotApp)
     }
 
     /// Re-reads the field, checks the gate and the anchor, then asks the helper to write into the element that read found.
     /// Results 0, 3 and 7 add text, so they count as accepted; anything else is dropped.
-    /// nil when the app refused before calling the helper (the reason is logged here); otherwise the helper's reply.
-    private func attemptInsert(_ text: String) async -> Int? {
+    /// Returns the outcome; it never logs.
+    private func attemptInsert(_ text: String) async -> InsertOutcome {
         guard let anchor else {
-            GhostTextLog.record(.dropped, reason: .noAnchor)
-            return nil
+            return InsertOutcome(reason: .noAnchor)
         }
         let raced: String?? = await TimeoutRace.run(seconds: 3) { () -> String? in
             await XPCHelperClient.shared.focusedTextSnapshotJSON()
@@ -325,33 +353,27 @@ final class GhostTextManager: ObservableObject {
         let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let now: GhostTextSnapshot
         switch GhostSnapshotRead.classify(raced, frontmostBundleID: front) {
-        case .failed(let reason, let axError):
-            GhostTextLog.record(.dropped, reason: reason, axError: axError, app: front ?? "")
-            return nil
+        case .failed(let reason, let axError, let snapshotApp):
+            return InsertOutcome(reason: reason, axError: axError, app: front ?? "", snapshotApp: snapshotApp)
         case .snapshot(let snapshot, _, _):
             now = snapshot
         }
         guard GhostInsertGate.appAllows(token: now.token, isSecure: now.isSecure, role: now.role, subrole: now.subrole),
               let token = now.token else {
             if let refused = GhostInsertGate.refusedBy(role: now.role, subrole: now.subrole) {
-                GhostTextLog.record(.dropped, reason: GhostTextEvent.reason(refused.reason), app: front ?? "", value: refused.value)
-            } else {
-                GhostTextLog.record(.dropped, reason: .noToken, app: front ?? "")
+                return InsertOutcome(reason: GhostTextEvent.reason(refused.reason), app: front ?? "", value: refused.value)
             }
-            return nil
+            return InsertOutcome(reason: .noToken, app: front ?? "")
         }
         guard GhostTextLogic.insertAllowed(anchor: anchor, now: now) else {
-            GhostTextLog.record(.dropped, reason: .anchorMismatch)
-            return nil
+            return InsertOutcome(reason: .anchorMismatch)
         }
         let result = await XPCHelperClient.shared.ghostInsert(token: token, location: anchor.caretLocation, text: text)
         // 0 inserted, 3 unverified (may have landed, so never retried), 7 typed fallback.
         if [0, 3, 7].contains(result) {
-            GhostTextLog.record(.accepted)
-        } else {
-            GhostTextLog.record(.dropped, reason: .insertFailed, insertResult: result)
+            return InsertOutcome(event: .accepted, result: result)
         }
-        return result
+        return InsertOutcome(reason: .insertFailed, result: result)
     }
 }
 

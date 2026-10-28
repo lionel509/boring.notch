@@ -3,10 +3,12 @@ import Foundation
 /// Decides whether a focused field may be read for a suggestion. This is the only gate before any text
 /// reaches the prompt or the overlay.
 enum GhostTextPolicy {
-    static let pauseDelay: TimeInterval = 2.0
+    static let pauseDelay: TimeInterval = 0.4
     static let maxContextChars = 1500
     static let minContextChars = 3
-    static let maxSuggestionWords = 12
+    static let maxSuggestionWords = 4
+    /// A suggestion ends before the first of these that is followed by whitespace or the end of the reply.
+    static let suggestionStops: Set<Character> = [".", "!", "?", ";", ":", ",", "\u{2026}"]
     static let secureSubrole = "AXSecureTextField"
     static let excludedBundleIDs: Set<String> = [
         "md.obsidian",
