@@ -29,10 +29,19 @@ fi
 # b. The identity: created once, in the login keychain, and trusted for code signing.
 trusted_count() { security find-identity -v -p codesigning | grep -cF -- "\"$IDENTITY\"" || true; }  # -F: literal name
 has_identity() { (( $(trusted_count) >= 1 )); }
-# Two trusted identities with one name make codesign's choice ambiguous, so refuse before the build (round-1 fix 3).
+# Every identity with this name, trusted or not. The plain listing repeats the trusted ones after a
+# "Valid identities only" header, so count only the part above it (round-3 finding 1).
+same_name_count() { security find-identity -p codesigning | sed '/Valid identities only/,$d' | grep -cF -- "\"$IDENTITY\"" || true; }
+# Two identities with one name make codesign's choice ambiguous, so refuse before the build (round-1 fix 3).
+# An untrusted copy counts too: codesign can pick it (round-3 finding 1).
 n=$(trusted_count)
+same=$(same_name_count)
 if (( n > 1 )); then
   print -u2 "ambiguous identity: $n trusted identities are named '$IDENTITY'; delete the extras in Keychain Access"
+  exit 4
+fi
+if (( same > 1 )); then
+  print -u2 "ambiguous identity: $same identities (trusted or not) are named '$IDENTITY'; delete the extras in Keychain Access"
   exit 4
 fi
 if ! has_identity; then
@@ -95,8 +104,13 @@ check_sig() {
   req=$(codesign -d -r- "$target" 2>&1) || req=""
   # Only the flags= line says whether the runtime is on: a name or path containing "runtime" is not (round-1 fix 5).
   local flags=$(print -r -- "$info" | grep -m1 'flags=' || true)
-  if [[ $info != *"Authority=$IDENTITY"* || $info == *"Signature=adhoc"* || $flags == *"(runtime)"* \
-        || $req != *"certificate leaf"* ]]; then
+  # The Authority must be this identity exactly: a whole line, so 'Local Signing 2' is not 'Local Signing' (round-3 finding 2).
+  # The runtime is one token of the flags list, which codesign writes comma-joined: '(library-validation,runtime)' (round-3 finding 3).
+  local exact=0 runtime=0
+  print -r -- "$info" | grep -qxF -- "Authority=$IDENTITY" && exact=1
+  [[ $flags =~ '[(,]runtime[,)]' ]] && runtime=1
+  if (( ! exact )) || [[ $info == *"Signature=adhoc"* ]] || (( runtime )) \
+        || [[ $req != *"certificate leaf"* ]]; then
     print -u2 "wrong signature on $target"
     print -u2 "$info"
     print -u2 "$req"

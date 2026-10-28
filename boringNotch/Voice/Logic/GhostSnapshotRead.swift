@@ -15,9 +15,11 @@ enum GhostSnapshotRead: Equatable {
         return nil
     }
 
-    /// An AXError code is an integer. JSONSerialization also bridges a float such as -25212.0, which the helper never sends (round-1 fix 7).
+    /// An AXError code is an integer. JSONSerialization also bridges a float such as -25212.0, which the helper never sends (round-1 fix 7),
+    /// and a JSON boolean, which bridges to an NSNumber too (round-3 finding 4).
     private static func integralAXError(_ value: Any?) -> Int? {
         guard let number = value as? NSNumber else { return nil }
+        guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
         let type = String(cString: number.objCType)
         guard type != "f", type != "d" else { return nil }
         return number.intValue
