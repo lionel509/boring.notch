@@ -13,9 +13,10 @@ export CALLS=$tmp/calls.log
 export LAUNCHED=$tmp/launched
 export BN_DERIVED_DATA=$tmp/dd
 export BN_INSTALL_DIR=$tmp/apps
-export STUB_CODESIGN_OUT='Authority=boringNotch Local Signing
+GOOD_CODESIGN='Authority=boringNotch Local Signing
 flags=0x0(none)
 designated => identifier "theboringteam.boringnotch" and certificate leaf = H"0123abcd"'
+export STUB_CODESIGN_OUT="$GOOD_CODESIGN"
 fail=0
 
 check() { # name, exit status of the test; on failure the last run's output is shown
@@ -40,6 +41,28 @@ if [[ "$1" == find-identity ]]; then
       [[ -n "${STUB_DUP:-}" ]] && print -r -- "  2) 0123EEEE \"$name\""
     fi
     print -r -- '     1 valid identities found'
+  elif [[ -n "${STUB_MIXED:-}" ]]; then
+    # Round-3 finding 1: one trusted and one untrusted copy of the name. The plain listing has a Matching section
+    # and a Valid section that repeats the trusted identity.
+    print -r -- "Policy: X.509 Basic"
+    print -r -- "  Matching identities"
+    print -r -- "  1) 0123ABCD \"$name\""
+    print -r -- "  2) 0123EEEE \"$name\" (CSSMERR_TP_NOT_TRUSTED)"
+    print -r -- "     2 identities found"
+    print -r -- ""
+    print -r -- "  Valid identities only"
+    print -r -- "  1) 0123ABCD \"$name\""
+    print -r -- "     1 valid identities found"
+  elif [[ -n "${STUB_BOTH_SECTIONS:-}" ]]; then
+    # One trusted identity, listed in both sections as the real plain listing does: it is one identity.
+    print -r -- "Policy: X.509 Basic"
+    print -r -- "  Matching identities"
+    print -r -- "  1) 0123ABCD \"$name\""
+    print -r -- "     1 identities found"
+    print -r -- ""
+    print -r -- "  Valid identities only"
+    print -r -- "  1) 0123ABCD \"$name\""
+    print -r -- "     1 valid identities found"
   elif [[ -z "${STUB_NO_IDENTITY:-}" ]]; then
     # Without -v the untrusted one is listed, marked as not trusted.
     mark=""
@@ -93,7 +116,7 @@ chmod +x "$stubs"/*
 run() { # runs the script with the stubs first on PATH; prints combined output
   PATH="$stubs:$PATH" zsh "$script" "$@" 2>&1
 }
-reset() { rm -f "$CALLS" "$LAUNCHED"; rm -rf "$BN_DERIVED_DATA" "$BN_INSTALL_DIR"; mkdir -p "$BN_INSTALL_DIR"; unset STUB_RUNNING STUB_NO_IDENTITY STUB_UNTRUSTED STUB_DUP STUB_TRUST_FAIL STUB_IDENT_NAME BN_SIGN_IDENTITY; export STUB_CODESIGN_OUT; }
+reset() { rm -f "$CALLS" "$LAUNCHED"; rm -rf "$BN_DERIVED_DATA" "$BN_INSTALL_DIR"; mkdir -p "$BN_INSTALL_DIR"; unset STUB_RUNNING STUB_NO_IDENTITY STUB_UNTRUSTED STUB_DUP STUB_MIXED STUB_BOTH_SECTIONS STUB_TRUST_FAIL STUB_IDENT_NAME BN_SIGN_IDENTITY; export STUB_CODESIGN_OUT="$GOOD_CODESIGN"; }
 calls_has() { grep -q -- "$1" "$CALLS" 2>/dev/null; }
 
 # 1. Another xcodebuild running: refuse before anything else runs.
@@ -215,5 +238,42 @@ designated => identifier "theboringteam.boringnotch" and certificate leaf = H"01
 out=$(run); code=$?
 (( code == 0 )) && ok=0 || ok=1
 check "a 'runtime' name in Authority is not a hardened runtime (exit $code)" $ok
+
+# 13. Round-3 finding 1: one trusted and one untrusted identity with the same name. Exit 4 before import and build.
+reset
+export STUB_MIXED=1
+out=$(run); code=$?
+ok=0
+(( code == 4 )) || ok=1
+calls_has '^xcodebuild ' && ok=1
+calls_has '^security import ' && ok=1
+check "trusted plus untrusted same-name identities are refused (exit $code)" $ok
+
+# 14. Guard for 13: one trusted identity listed in both plain-listing sections is still one identity and builds.
+reset
+export STUB_BOTH_SECTIONS=1
+out=$(run); code=$?
+ok=0
+(( code == 0 )) || ok=1
+calls_has '^xcodebuild ' || ok=1
+check "one trusted identity listed in both sections still builds (exit $code)" $ok
+
+# 15. Round-3 finding 2: the Authority must match the identity exactly. 'Local Signing 2' is not 'Local Signing'.
+reset
+export STUB_CODESIGN_OUT='Authority=boringNotch Local Signing 2
+flags=0x0(none)
+designated => identifier "theboringteam.boringnotch" and certificate leaf = H"0123abcd"'
+out=$(run); code=$?
+(( code == 6 )) && ok=0 || ok=1
+check "an Authority that only contains the identity name is refused (exit $code)" $ok
+
+# 16. Round-3 finding 3: the runtime flag is caught when it is one of several comma-joined flags.
+reset
+export STUB_CODESIGN_OUT='Authority=boringNotch Local Signing
+flags=0x12000(library-validation,runtime)
+designated => identifier "theboringteam.boringnotch" and certificate leaf = H"0123abcd"'
+out=$(run); code=$?
+(( code == 6 )) && ok=0 || ok=1
+check "hardened runtime among comma-joined flags is refused (exit $code)" $ok
 
 exit $fail

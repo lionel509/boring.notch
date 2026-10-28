@@ -83,6 +83,22 @@ final class GhostSnapshotReadTests: XCTestCase {
         XCTAssertNil(axError)
     }
 
+    /// Round-3 finding 4: JSONSerialization bridges a JSON boolean to an NSNumber, so `true` must not become AXError 1.
+    func testBooleanAXErrorIsNotAnAXErrorCode() {
+        XCTAssertEqual(classify(#"{"failure":"noFocusedApp","axError":true}"#),
+                       .failed(.noFocusedApp, axError: nil))
+        XCTAssertEqual(classify(#"{"failure":"noFocusedApp","axError":false}"#),
+                       .failed(.noFocusedApp, axError: nil))
+    }
+
+    func testBooleanAXErrorOnASnapshotIsNotAnAXErrorCode() {
+        let json = #"{"bundleID":"com.apple.TextEdit","appName":"TextEdit","textBeforeCaret":"hello wor","caretLocation":9,"caretAtEnd":true,"caretX":10,"caretY":10,"caretWidth":1,"caretHeight":14,"fieldX":0,"fieldY":0,"fieldWidth":400,"fieldHeight":30,"focusVia":"frontmost","axError":true}"#
+        guard case .snapshot(_, _, let axError) = GhostSnapshotRead.classify(.some(json), frontmostBundleID: "com.apple.TextEdit") else {
+            return XCTFail("expected a snapshot")
+        }
+        XCTAssertNil(axError)
+    }
+
     func testNoReasonTokenNamedNoSnapshotRemains() {
         XCTAssertNil(GhostTextEvent.Reason(rawValue: "noSnapshot"))
     }
