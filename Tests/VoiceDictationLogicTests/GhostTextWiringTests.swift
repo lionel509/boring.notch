@@ -48,15 +48,31 @@ final class GhostTextWiringTests: XCTestCase {
         XCTAssertTrue(fetch.contains("Task.isCancelled"), "fetch must drop a cancelled read before classifying it")
     }
 
-    /// Round-1 fix 1: insert must refuse a frontmost-app fallback before it asks the helper to write.
-    func testInsertRefusesFallbackReadsBeforeWriting() throws {
+    /// #47 finding 5: fetch and insert share the app-side gate, and an accept that wrote nothing passes Option+Tab back.
+    func testFetchAndInsertShareTheGateAndInsertPassesThrough() throws {
         let manager = try appSource("boringNotch/Voice/Ghost/GhostTextManager.swift")
-        let insert = section(manager, from: "private func insert(", to: "private let ghostTapCallback")
-        XCTAssertTrue(insert.contains("GhostSnapshotRead.insertRefusal("), "insert must ask insertRefusal")
-        XCTAssertTrue(insert.contains("record(.dropped, reason: refusal"), "a refused fallback must log the refusal reason")
-        let refuse = section(insert, from: "GhostSnapshotRead.insertRefusal(", to: "GhostTextLogic.insertAllowed")
-        let write = section(insert, from: "GhostTextLogic.insertAllowed", to: "XPCHelperClient.shared.ghostInsert")
-        XCTAssertFalse(refuse.isEmpty)
-        XCTAssertTrue(write.contains("insertAllowed"), "the refusal must come before the write")
+        XCTAssertEqual(count(manager, "GhostInsertGate.appAllows("), 2)
+        let fetch = section(manager, from: "private func fetch(gen", to: "private func dropFetch(")
+        XCTAssertTrue(fetch.contains("GhostInsertGate.appAllows("))
+        let attempt = section(manager, from: "private func attemptInsert(", to: "private let ghostTapCallback")
+        let gate = attempt.range(of: "GhostInsertGate.appAllows(")?.lowerBound
+        let allow = attempt.range(of: "GhostTextLogic.insertAllowed")?.lowerBound
+        let call = attempt.range(of: "XPCHelperClient.shared.ghostInsert(token:")?.lowerBound
+        XCTAssertNotNil(gate)
+        XCTAssertNotNil(allow)
+        XCTAssertNotNil(call)
+        if let gate, let allow, let call {
+            XCTAssertLessThan(gate, allow, "the token gate must come before the anchor check")
+            XCTAssertLessThan(allow, call, "the anchor check must come before the write")
+        }
+        let insert = section(manager, from: "private func insert(_ text: String, keyApp", to: "private func attemptInsert(")
+        XCTAssertTrue(insert.contains("GhostInsertGate.passThrough("))
+        XCTAssertTrue(insert.contains("postGhostAcceptKey()"))
+        let accept = section(manager, from: "case .accept(let text):", to: "case .swallow:")
+        guard let front = accept.range(of: "frontmostApplication"), let task = accept.range(of: "Task {") else {
+            return XCTFail("accept must read the key app before its Task")
+        }
+        XCTAssertLessThan(front.lowerBound, task.lowerBound)
+        XCTAssertFalse(manager.contains("insertRefusal"))
     }
 }

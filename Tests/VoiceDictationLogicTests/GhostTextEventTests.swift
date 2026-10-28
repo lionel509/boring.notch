@@ -3,8 +3,8 @@ import XCTest
 
 final class GhostTextEventTests: XCTestCase {
     func testEveryEventLineHasTheCountedShape() throws {
-        let regex = try NSRegularExpression(pattern: "^ghost event=(call|shown|accepted|dismissed|dropped|fallback) calls=\\d+$")
-        XCTAssertEqual(GhostTextEvent.allCases.count, 6)
+        let regex = try NSRegularExpression(pattern: "^ghost event=(call|shown|accepted|dismissed|dropped|fallback|passedThrough) calls=\\d+$")
+        XCTAssertEqual(GhostTextEvent.allCases.count, 7)
         for event in GhostTextEvent.allCases {
             let line = GhostTextEvent.line(event, callsTotal: 7)
             let range = NSRange(line.startIndex..., in: line)
