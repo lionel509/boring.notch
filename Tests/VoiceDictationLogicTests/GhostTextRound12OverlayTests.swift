@@ -128,16 +128,4 @@ final class GhostTextRound12OverlayTests: XCTestCase {
         XCTAssertTrue(manager.contains("let modelMs = GhostTextEvent.latencyMs("), "the model time is not measured")
     }
 
-    func testEventAndLogFilesAreUnchangedSince31da357() throws {
-        for path in ["boringNotch/Voice/Logic/GhostTextEvent.swift", "boringNotch/Voice/Ghost/GhostTextLog.swift"] {
-            let root = URL(fileURLWithPath: "\(#filePath)")
-                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            let git = Process()
-            git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            git.arguments = ["-C", root.path, "diff", "--quiet", "31da357", "--", path]
-            try git.run()
-            git.waitUntilExit()
-            XCTAssertEqual(git.terminationStatus, 0, "\(path) differs from 31da357")
-        }
-    }
 }

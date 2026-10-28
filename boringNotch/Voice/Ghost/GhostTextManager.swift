@@ -36,6 +36,8 @@ final class GhostTextManager: ObservableObject {
     private var pendingField: CGRect?
     private var pendingFontName: String?
     private var pendingFontSize: Double?
+    /// Round 13 (#47): how long the model call took, shown on the `shown` line so the next live test shows where the time goes.
+    private var pendingModelMs: Int?
     /// When he last typed, read at the pause so `shown` can carry the latency.
     private var lastTypedAt: TimeInterval?
     /// Set while showOverlay hides the overlay itself through focusChanged. That hide is not a user dismissal, so it logs nothing.
@@ -238,9 +240,11 @@ final class GhostTextManager: ObservableObject {
         GhostTextLog.record(.call)
 
         var completion: GhostTextCompletion = .unavailable
+        let modelStart = ProcessInfo.processInfo.systemUptime
         if #available(macOS 26.0, *) {
             completion = await GhostTextModel.shared.complete(prompt)
         }
+        let modelMs = GhostTextEvent.latencyMs(from: modelStart, to: ProcessInfo.processInfo.systemUptime)
         // Round 9 (#31): a cancel after .call still logs one line, so every outcome after .call has one.
         guard !Task.isCancelled else {
             GhostTextLog.record(.dropped, reason: .cancelled)
@@ -283,6 +287,7 @@ final class GhostTextManager: ObservableObject {
         pendingField = field
         pendingFontName = snapshot.fontName
         pendingFontSize = snapshot.fontSize
+        pendingModelMs = modelMs
         handle(.suggestion(suggestion, gen: gen))
     }
 
@@ -311,7 +316,7 @@ final class GhostTextManager: ObservableObject {
             return
         }
         GhostTextOverlay.shared.show(text, frame: frame, font: font)
-        GhostTextLog.record(.shown, latencyMs: lastTypedAt.map { GhostTextEvent.latencyMs(from: $0, to: ProcessInfo.processInfo.systemUptime) })
+        GhostTextLog.record(.shown, latencyMs: lastTypedAt.map { GhostTextEvent.latencyMs(from: $0, to: ProcessInfo.processInfo.systemUptime) }, modelMs: pendingModelMs)
     }
 
     /// Logs the one reason the overlay could not be shown, then tells the machine to go idle without logging a dismissal.

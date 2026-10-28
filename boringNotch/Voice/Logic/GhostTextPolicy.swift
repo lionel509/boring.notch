@@ -3,7 +3,7 @@ import Foundation
 /// Decides whether a focused field may be read for a suggestion. This is the only gate before any text
 /// reaches the prompt or the overlay.
 enum GhostTextPolicy {
-    static let pauseDelay: TimeInterval = 0.4
+    static let pauseDelay: TimeInterval = 0.25
     static let maxContextChars = 600
     static let minContextChars = 3
     static let maxSuggestionWords = 4

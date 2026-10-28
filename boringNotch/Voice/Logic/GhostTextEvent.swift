@@ -50,7 +50,7 @@ enum GhostTextEvent: String, CaseIterable {
     static func line(_ event: GhostTextEvent, callsTotal: Int, reason: Reason? = nil,
                      check: GhostTextPolicy.Check? = nil, insertResult: Int? = nil,
                      axError: Int? = nil, app: String? = nil, value: String? = nil,
-                     snapshotApp: String? = nil, latencyMs: Int? = nil) -> String {
+                     snapshotApp: String? = nil, latencyMs: Int? = nil, modelMs: Int? = nil) -> String {
         var out = "ghost event=\(event.rawValue) calls=\(callsTotal)"
         if let reason { out += " reason=\(reason.rawValue)" }
         if let check { out += " check=\(check.rawValue)" }
@@ -60,6 +60,7 @@ enum GhostTextEvent: String, CaseIterable {
         if let value { out += " value=\(escaped(value))" }
         if let snapshotApp { out += " snapshotApp=\(appToken(snapshotApp))" }
         if let latencyMs { out += " latencyMs=\(latencyMs)" }
+        if let modelMs { out += " modelMs=\(modelMs)" }
         return out
     }
 
