@@ -257,6 +257,52 @@ final class XPCHelperClient: NSObject {
         }
     }
     
+    /// Inserts ghost text into the field the read that issued `token` found. Codes are the helper's (0 inserted,
+    /// 2 set failed, 3 unverified, 4 no focus, 5 refused, 6 not trusted, 7 typed fallback, 8 stale token,
+    /// 9 not frontmost, 10 focus moved, 11 secure). -1 when the XPC call fails.
+    nonisolated func ghostInsert(token: String, location: Int, text: String, frontPid: Int) async -> Int {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let code: Int = try await service.withContinuation { service, continuation in
+                service.ghostInsert(token, location, text, frontPid) { code in continuation.resume(returning: code) }
+            }
+            return code
+        } catch {
+            return -1
+        }
+    }
+
+    /// Posts back an Option+Tab the app swallowed for an accept that wrote nothing. False when the XPC call fails.
+    nonisolated func postGhostAcceptKey() async -> Bool {
+        do {
+            let service = await MainActor.run { ensureRemoteService() }
+            let posted: Bool = try await service.withContinuation { service, continuation in
+                service.postGhostAcceptKey { posted in continuation.resume(returning: posted) }
+            }
+            return posted
+        } catch {
+            return false
+        }
+    }
+
+    /// The focused text field as JSON, or nil when unavailable. A secure field is never read.
+    nonisolated func focusedTextSnapshotJSON(frontPid: Int, frontBundle: String) async -> String? {
+        do {
+            let service = await MainActor.run {
+                ensureRemoteService()
+            }
+            let result: String? = try await service.withContinuation { service, continuation in
+                service.focusedTextSnapshot(frontPid, frontBundle) { json in
+                    continuation.resume(returning: json)
+                }
+            }
+            return result
+        } catch {
+            return nil
+        }
+    }
+    
+
     // MARK: - Dictation rewrite (U4)
 
     nonisolated func openRouterKey() async -> String? {
@@ -270,6 +316,7 @@ final class XPCHelperClient: NSObject {
             return nil
         }
     }
+    
 
     nonisolated func focusedTextValue() async -> String? {
         do {

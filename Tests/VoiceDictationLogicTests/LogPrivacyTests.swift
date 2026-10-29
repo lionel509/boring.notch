@@ -18,6 +18,7 @@ final class LogPrivacyTests: XCTestCase {
     /// (b) Only DictationLog.swift may log, and it logs exactly one thing: a TakeReport.
     func testOnlyDictationLogWritesToTheLog() throws {
         var sawLogFile = false
+        var sawGhostLogFile = false
         for file in try voiceSources() {
             let text = try String(contentsOf: file, encoding: .utf8)
             if file.lastPathComponent == "DictationLog.swift" {
@@ -27,11 +28,20 @@ final class LogPrivacyTests: XCTestCase {
                 XCTAssertTrue(funcLines.first?.contains("TakeReport") == true, "the one func must take a TakeReport")
                 continue
             }
+            if file.lastPathComponent == "GhostTextLog.swift" {
+                // Round 7: the ghost-text log writes one GhostTextEvent line per call, numbers and enum names only.
+                sawGhostLogFile = true
+                let funcLines = text.components(separatedBy: "\n").filter { $0.contains("func ") }
+                XCTAssertEqual(funcLines.count, 1, "GhostTextLog.swift must have exactly one func")
+                XCTAssertTrue(funcLines.first?.contains("GhostTextEvent") == true, "the one func must take a GhostTextEvent")
+                continue
+            }
             for symbol in Self.loggingSymbols {
                 XCTAssertFalse(text.contains(symbol), "\(file.lastPathComponent) contains \(symbol)")
             }
         }
         XCTAssertTrue(sawLogFile, "DictationLog.swift not found")
+        XCTAssertTrue(sawGhostLogFile, "GhostTextLog.swift not found")
     }
 
     /// (c) A populated report logs only key=value pairs with numbers, enum codes, or paths-like tokens.

@@ -21,8 +21,13 @@ final class FnOnlyTriggerTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let settings = try String(contentsOf: root.appendingPathComponent("boringNotch/components/Settings/SettingsView.swift"), encoding: .utf8)
-        let parts = settings.components(separatedBy: "case .off:")
-        XCTAssertEqual(parts.count, 2, "expected exactly one `case .off:` in SettingsView.swift")
+        // Scope to the dictation section: from its "Hold fn to dictate" toggle up to the ghost-text toggle.
+        // The ghost-text section has its own `case .off:` (EmptyView), so a whole-file count would see two.
+        let start = try XCTUnwrap(settings.range(of: "key: .dictateWithFn"), "dictation section not found")
+        let end = try XCTUnwrap(settings.range(of: "key: .ghostText", range: start.upperBound..<settings.endIndex), "ghost-text section not found")
+        let section = String(settings[start.lowerBound..<end.lowerBound])
+        let parts = section.components(separatedBy: "case .off:")
+        XCTAssertEqual(parts.count, 2, "expected exactly one `case .off:` in the dictation section of SettingsView.swift")
         let body = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertFalse(body.hasPrefix("EmptyView()"), "the .off state renders nothing; it must say dictation is off and fn is the only trigger")
     }

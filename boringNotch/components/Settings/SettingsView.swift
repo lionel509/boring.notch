@@ -61,6 +61,9 @@ struct SettingsView: View {
                 NavigationLink(value: "Shortcuts") {
                     Label("Shortcuts", systemImage: "keyboard")
                 }
+                NavigationLink(value: "GhostText") {
+                    Label("Ghost text", systemImage: "text.cursor")
+                }
                 // NavigationLink(value: "Extensions") {
                 //     Label("Extensions", systemImage: "puzzlepiece.extension")
                 // }
@@ -98,6 +101,8 @@ struct SettingsView: View {
                     NotchTabsSettings()
                 case "Shortcuts":
                     Shortcuts()
+                case "GhostText":
+                    GhostTextSettings()
                 case "Extensions":
                     GeneralSettings()
                 case "Advanced":
@@ -1853,6 +1858,7 @@ struct Shortcuts: View {
                 }
             }
             Section {
+
                 Defaults.Toggle(key: .dictationCloud) {
                     Text("Cloud transcription and cleanup (OpenRouter)")
                 }
@@ -1937,6 +1943,41 @@ struct Shortcuts: View {
         Button("Open Microphone Settings") {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
                 NSWorkspace.shared.open(url)
+            }
+        }
+    }
+}
+
+struct GhostTextSettings: View {
+    @ObservedObject var ghost = GhostTextManager.shared
+
+    var body: some View {
+        Form {
+            Section {
+                Defaults.Toggle(key: .ghostText) {
+                    Text("Suggest text while typing (on-device)")
+                }
+                switch ghost.mode {
+                case .off:
+                    EmptyView()
+                case .active:
+                    Text("Pause for 2 s and a gray suggestion appears. Option-Tab types it, Esc hides it.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                case .denied:
+                    Text("Allow Accessibility for boringNotch in System Settings, then come back.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                case .unavailable:
+                    Text("Needs macOS 26 with Apple Intelligence turned on.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+                Text("Model calls this session: \(Defaults[.ghostTextCalls])")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            } header: {
+                Text("Ghost text")
             }
         }
     }

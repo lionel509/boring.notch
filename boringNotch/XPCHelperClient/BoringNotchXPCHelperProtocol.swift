@@ -13,6 +13,12 @@ import Foundation
     func requestAccessibilityAuthorization()
     func ensureAccessibilityAuthorization(_ promptIfNeeded: Bool, with reply: @escaping (Bool) -> Void)
     func postPasteKeystroke(_ keyCode: Int, with reply: @escaping (Bool) -> Void)
+    /// The focused text field as JSON (see GhostTextSnapshot keys), or nil when Accessibility is not trusted
+    /// or nothing has focus. The caller passes its own frontmost app (pid and bundle), because the helper's
+    /// NSWorkspace view goes stale (#47 round 12). A secure field's value is never read. The JSON carries a one-use `token` for the field, when it has a caret.
+    func focusedTextSnapshot(_ frontPid: Int, _ frontBundle: String, with reply: @escaping (String?) -> Void)
+    func ghostInsert(_ token: String, _ location: Int, _ text: String, _ frontPid: Int, with reply: @escaping (Int) -> Void)
+    func postGhostAcceptKey(with reply: @escaping (Bool) -> Void)
     // Keyboard backlight / CoreBrightness access (performed by the helper)
     func isKeyboardBrightnessAvailable(with reply: @escaping (Bool) -> Void)
     func currentKeyboardBrightness(with reply: @escaping (NSNumber?) -> Void)

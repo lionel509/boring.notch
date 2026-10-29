@@ -143,6 +143,10 @@ extension Defaults.Keys {
     static let dictationMicSilent = Key<Bool>("dictationMicSilent", default: false)
     /// Subtle start and stop sounds for dictation.
     static let dictationSounds = Key<Bool>("dictationSounds", default: true)
+    /// Gray on-device text suggestions while typing. Off by default: it costs an event tap and model calls.
+    static let ghostText = Key<Bool>("ghostText", default: false)
+    /// Lifetime count of model calls, for the battery demo (calls per minute = delta / minutes).
+    static let ghostTextCalls = Key<Int>("ghostTextCalls", default: 0)
 
     static let dictationDiagnostic = Key<String>("dictationDiagnostic", default: "not started")
 
