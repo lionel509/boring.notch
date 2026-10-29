@@ -4,6 +4,8 @@ import Foundation
 /// reaches the prompt or the overlay.
 enum GhostTextPolicy {
     static let pauseDelay: TimeInterval = 0.25
+    /// #57: while a suggestion is up, how often the caret is re-read to see whether it moved.
+    static let driftCheckInterval: TimeInterval = 0.5
     static let maxContextChars = 600
     static let minContextChars = 3
     static let maxSuggestionWords = 4

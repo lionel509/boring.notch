@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// One log line per ghost-text event. Numbers and enum names only: never field or suggestion text.
@@ -14,6 +15,8 @@ enum GhostTextEvent: String, CaseIterable {
         case modelError, modelUnavailable, modelEmpty, cleanedAway, overlayNoRoom, overlayNoCaret
         /// Round 9 (#31): a fetch cancelled after `.call`, and an accept whose Option+Tab pass-through failed.
         case cancelled, passThroughFailed
+        /// #57: the caret or field moved after the suggestion was drawn (scroll, reflow), so it was dropped.
+        case caretMoved
     }
 
     /// Why a model reply that gave no suggestion was dropped: modelEmpty when blank, cleanedAway otherwise.
@@ -50,7 +53,8 @@ enum GhostTextEvent: String, CaseIterable {
     static func line(_ event: GhostTextEvent, callsTotal: Int, reason: Reason? = nil,
                      check: GhostTextPolicy.Check? = nil, insertResult: Int? = nil,
                      axError: Int? = nil, app: String? = nil, value: String? = nil,
-                     snapshotApp: String? = nil, latencyMs: Int? = nil, modelMs: Int? = nil) -> String {
+                     snapshotApp: String? = nil, latencyMs: Int? = nil, modelMs: Int? = nil,
+                     geometry: Geometry? = nil) -> String {
         var out = "ghost event=\(event.rawValue) calls=\(callsTotal)"
         if let reason { out += " reason=\(reason.rawValue)" }
         if let check { out += " check=\(check.rawValue)" }
@@ -61,11 +65,35 @@ enum GhostTextEvent: String, CaseIterable {
         if let snapshotApp { out += " snapshotApp=\(appToken(snapshotApp))" }
         if let latencyMs { out += " latencyMs=\(latencyMs)" }
         if let modelMs { out += " modelMs=\(modelMs)" }
+        if let geometry { out += " " + geometry.pairs }
         return out
     }
 
     /// Whole milliseconds from `start` to `end`, never negative.
     static func latencyMs(from start: TimeInterval, to end: TimeInterval) -> Int { max(0, Int(((end - start) * 1000).rounded())) }
+
+    /// #60: where the gray text was drawn, as typed numbers only: the caret and overlay rects in Accessibility
+    /// coordinates, and the line metrics the pen was placed with (asc, desc, pt).
+    struct Geometry {
+        var caretX, caretY, caretW, caretH: Double
+        var frameX, frameY, frameW, frameH: Double
+        var asc, desc, pt: Double
+
+        init(caret: CGRect, frame: CGRect, ascent: CGFloat, descent: CGFloat, pointSize: CGFloat) {
+            caretX = Double(caret.minX); caretY = Double(caret.minY); caretW = Double(caret.width); caretH = Double(caret.height)
+            frameX = Double(frame.minX); frameY = Double(frame.minY); frameW = Double(frame.width); frameH = Double(frame.height)
+            asc = Double(ascent); desc = Double(descent); pt = Double(pointSize)
+        }
+
+        /// Eleven key=number pairs, two decimals. A non-finite value prints as -1, so the line stays numbers only.
+        var pairs: String {
+            func v(_ x: Double) -> String { let safe: Double = x.isFinite ? x : -1.0; return String(format: "%.2f", safe) }
+            return [("caretX", caretX), ("caretY", caretY), ("caretW", caretW), ("caretH", caretH),
+                    ("frameX", frameX), ("frameY", frameY), ("frameW", frameW), ("frameH", frameH),
+                    ("asc", asc), ("desc", desc), ("pt", pt)]
+                .map { "\($0.0)=\(v($0.1))" }.joined(separator: " ")
+        }
+    }
 
     /// A raw AX value for the log: printable ASCII as-is, except quote and backslash; every other scalar as \u{hex}.
     /// Spaces are escaped too, so padding shows. At most 64 scalars, in double quotes.

@@ -42,6 +42,12 @@ final class GhostTextManager: ObservableObject {
     private var lastTypedAt: TimeInterval?
     /// Set while showOverlay hides the overlay itself through focusChanged. That hide is not a user dismissal, so it logs nothing.
     private var overlayHide = false
+    /// #56: counts clean Shift taps for the double-tap accept.
+    private var shiftTaps = ShiftDoubleTap()
+    /// #57: a passive global monitor for scroll wheel events, which hide the suggestion.
+    private var scrollMonitor: Any?
+    /// #57: re-reads the caret every `driftCheckInterval` while a suggestion is up.
+    private var driftTask: Task<Void, Never>?
 
     private init() {}
 
@@ -54,6 +60,7 @@ final class GhostTextManager: ObservableObject {
         let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.leftMouseDown.rawValue)
             | (1 << CGEventType.rightMouseDown.rawValue)
+            | (1 << CGEventType.flagsChanged.rawValue)
         let userInfo = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
 
         // Default tap only: a passive tap cannot swallow the accept key, so focus would move and
@@ -83,6 +90,13 @@ final class GhostTextManager: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in self?.handle(.focusChanged) }
         }
+        // #57: passive, so it never delays a scroll. A scroll also breaks a pending Shift double tap.
+        scrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] _ in
+            Task { @MainActor in
+                self?.shiftTaps.reset()
+                self?.handle(.moved)
+            }
+        }
         mode = .active
     }
 
@@ -101,8 +115,13 @@ final class GhostTextManager: ObservableObject {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
         }
         workspaceObserver = nil
+        if let scrollMonitor {
+            NSEvent.removeMonitor(scrollMonitor)
+        }
+        scrollMonitor = nil
         timerTask?.cancel()
         fetchTask?.cancel()
+        driftTask?.cancel()
         mode = .off
     }
 
@@ -116,17 +135,30 @@ final class GhostTextManager: ObservableObject {
     fileprivate func handleTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            // Keys typed while the tap was off were never seen, so the state must reset too.
+            // Keys typed while the tap was off were never seen, so the state must reset too. Any Shift still down
+            // keeps the latch: its release may have been lost with the tap.
+            shiftTaps.tapReset(shiftHeld: CGEventSource.flagsState(.combinedSessionState).rawValue & GhostTextLogic.shiftMask != 0)
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             handle(.tapReset)
             return Unmanaged.passUnretained(event)
         case .leftMouseDown, .rightMouseDown:
+            shiftTaps.reset()
             handle(.focusChanged)
             return Unmanaged.passUnretained(event)
         case .keyDown:
+            shiftTaps.reset()
             let key = GhostTextLogic.decide(Self.keyEvent(from: event), suggestionVisible: machine.isShowing)
             let effects = handle(.key(key))
             return effects.contains(.swallow) ? nil : Unmanaged.passUnretained(event)
+        case .flagsChanged:
+            // #56: never swallowed. A lost Shift release would leave Shift stuck down.
+            if DictationEvents.isSynthesized(event.getIntegerValueField(.eventSourceUserData)) {
+                shiftTaps.reset()
+            } else if shiftTaps.flagsChanged(keyCode: Int(event.getIntegerValueField(.keyboardEventKeycode)),
+                                             flags: event.flags.rawValue, now: ProcessInfo.processInfo.systemUptime) {
+                handle(.shiftAccept)
+            }
+            return Unmanaged.passUnretained(event)
         default:
             return Unmanaged.passUnretained(event)
         }
@@ -152,11 +184,12 @@ final class GhostTextManager: ObservableObject {
     @discardableResult
     private func handle(_ input: GhostTextLogic.Input) -> [GhostTextLogic.Effect] {
         let effects = machine.handle(input)
-        for effect in effects { run(effect) }
+        let swallowedKey = effects.contains(.swallow)
+        for effect in effects { run(effect, swallowedKey: swallowedKey) }
         return effects
     }
 
-    private func run(_ effect: GhostTextLogic.Effect) {
+    private func run(_ effect: GhostTextLogic.Effect, swallowedKey: Bool) {
         switch effect {
         case .scheduleTimer(let gen):
             lastTypedAt = ProcessInfo.processInfo.systemUptime
@@ -183,13 +216,14 @@ final class GhostTextManager: ObservableObject {
         case .show(let text):
             showOverlay(text)
         case .hide(let reason):
+            driftTask?.cancel()
             GhostTextOverlay.shared.hide()
             if reason == .dismissed && !overlayHide { GhostTextLog.record(.dismissed) }
         case .accept(let text):
             // The app the key was pressed in, read now: a later frontmost change must not be mistaken for it.
             let keyApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
             Task { @MainActor [weak self] in
-                await self?.insert(text, keyApp: keyApp)
+                await self?.insert(text, keyApp: keyApp, swallowedKey: swallowedKey)
             }
         case .swallow:
             break
@@ -309,14 +343,20 @@ final class GhostTextManager: ObservableObject {
         guard let frame = GhostTextGeometry.overlayFrame(
             caret: caret,
             field: field,
-            textSize: GhostTextOverlay.textSize(text, font: font),
+            textWidth: GhostTextOverlay.textSize(text, font: font).width,
+            ascent: font.ascender,
+            descent: -font.descender,
             primaryHeight: primaryHeight
         ) else {
             dropOverlay(.overlayNoRoom)
             return
         }
         GhostTextOverlay.shared.show(text, frame: frame, font: font)
-        GhostTextLog.record(.shown, latencyMs: lastTypedAt.map { GhostTextEvent.latencyMs(from: $0, to: ProcessInfo.processInfo.systemUptime) }, modelMs: pendingModelMs)
+        // Only taps made after the gray text appears count for the double-tap accept.
+        shiftTaps.reset()
+        startDriftCheck(caret: caret, field: field)
+        GhostTextLog.record(.shown, latencyMs: lastTypedAt.map { GhostTextEvent.latencyMs(from: $0, to: ProcessInfo.processInfo.systemUptime) }, modelMs: pendingModelMs,
+                            geometry: GhostTextEvent.Geometry(caret: caret, frame: GhostTextGeometry.toCocoa(frame, primaryHeight: primaryHeight), ascent: font.ascender, descent: -font.descender, pointSize: font.pointSize))
     }
 
     /// Logs the one reason the overlay could not be shown, then tells the machine to go idle without logging a dismissal.
@@ -325,6 +365,36 @@ final class GhostTextManager: ObservableObject {
         overlayHide = true
         handle(.focusChanged)
         overlayHide = false
+    }
+
+    /// #57: while the suggestion is up, re-read the caret every 0.5 s. If the caret or field moved (reflow, a
+    /// programmatic scroll the events missed), hide it. It hides rather than fetching again, so a jittery
+    /// caret rect can never loop model calls.
+    private func startDriftCheck(caret: CGRect, field: CGRect) {
+        driftTask?.cancel()
+        driftTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(GhostTextPolicy.driftCheckInterval))
+                guard !Task.isCancelled, let self, self.machine.isShowing else { return }
+                let app = NSWorkspace.shared.frontmostApplication
+                let pid = Int(app?.processIdentifier ?? 0)
+                let bundle = app?.bundleIdentifier ?? ""
+                let raced: String?? = await TimeoutRace.run(seconds: 1) { () -> String? in
+                    await XPCHelperClient.shared.focusedTextSnapshotJSON(frontPid: pid, frontBundle: bundle)
+                }
+                guard !Task.isCancelled, self.machine.isShowing else { return }
+                var nowCaret: CGRect?
+                var nowField: CGRect?
+                if case .snapshot(let read, _, _) = GhostSnapshotRead.classify(raced, frontmostBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) {
+                    nowCaret = read.caretRect
+                    nowField = read.fieldRect
+                }
+                if GhostTextGeometry.drifted(drawnCaret: caret, drawnField: field, nowCaret: nowCaret, nowField: nowField) {
+                    self.dropOverlay(.caretMoved)
+                    return
+                }
+            }
+        }
     }
 
     // MARK: - Accept
@@ -341,11 +411,12 @@ final class GhostTextManager: ObservableObject {
     }
 
     /// Runs the accept. When nothing can have been written, the Option+Tab it swallowed goes back to the app it was
-    /// pressed in, so the key is never lost for nothing (#47, finding 5).
-    private func insert(_ text: String, keyApp: String?) async {
+    /// pressed in, so the key is never lost for nothing (#47, finding 5). Only the Option+Tab accept passes back;
+    /// a Shift accept swallowed nothing, so there is nothing to hand back.
+    private func insert(_ text: String, keyApp: String?, swallowedKey: Bool) async {
         var outcome = await attemptInsert(text)
         let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        if GhostInsertGate.passThrough(result: outcome.result, keyApp: keyApp, frontNow: front) {
+        if swallowedKey && GhostInsertGate.passThrough(result: outcome.result, keyApp: keyApp, frontNow: front) {
             if await XPCHelperClient.shared.postGhostAcceptKey() {
                 outcome.event = .passedThrough
             } else {

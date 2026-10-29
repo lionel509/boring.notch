@@ -15,7 +15,7 @@ enum GhostTextLogic {
 
     enum KeyDecision: Equatable { case accept, typing, dismiss, ignore }
 
-    enum HideReason: Equatable { case accepted, dismissed }
+    enum HideReason: Equatable { case accepted, dismissed, moved }
 
     static let shiftMask: UInt64 = 0x20000
     static let controlMask: UInt64 = 0x40000
@@ -24,6 +24,7 @@ enum GhostTextLogic {
 
     /// Classifies a key event. Only a real Option+Tab keyDown (no shift, cmd or ctrl, not a repeat)
     /// accepts, and only while a suggestion is visible. Everything else passes through.
+    /// Two clean Shift taps are the other accept key; they arrive as `.shiftAccept` from `ShiftDoubleTap`, not here.
     static func decide(_ e: KeyEvent, suggestionVisible: Bool) -> KeyDecision {
         let optionOnly = e.flags & optionMask != 0 && e.flags & (shiftMask | commandMask | controlMask) == 0
         // 1. Key releases and the modifier keys themselves never change state.
@@ -57,6 +58,10 @@ enum GhostTextLogic {
 
     enum Input: Equatable {
         case key(KeyDecision)
+        /// #56: two clean Shift taps. Accepts like Option+Tab, but never swallows (the Shift events pass through).
+        case shiftAccept
+        /// #57: the page scrolled. Hides the suggestion and fetches again at the new caret once scrolling stops.
+        case moved
         case pauseFired(gen: Int)
         case snapshotFailed(gen: Int)
         case suggestion(String?, gen: Int)
@@ -132,6 +137,21 @@ enum GhostTextLogic {
 
             case .key(.dismiss), .focusChanged, .tapReset, .stop:
                 return dismiss()
+
+            case .shiftAccept:
+                // Never swallows: flagsChanged passes through, so a Shift release is never lost. Does nothing when no suggestion is showing.
+                guard case .showing(let text, _) = state else { return [] }
+                gen += 1
+                state = .idle
+                return [.hide(.accepted), .accept(text)]
+
+            case .moved:
+                // Scroll: hide, and fetch again at the new caret once it stops. Idle stays idle.
+                if state == .idle { return [] }
+                gen += 1
+                let hide: [Effect] = isShowing ? [.hide(.moved)] : []
+                state = .waiting(gen: gen)
+                return hide + [.cancelFetch, .scheduleTimer(gen: gen)]
 
             case .pauseFired(let g):
                 guard case .waiting(let current) = state, current == g else { return [] }

@@ -68,7 +68,7 @@ final class GhostTextRound12OverlayTests: XCTestCase {
                 // Nothing fits: the first word alone is too wide, or there is no room at all.
                 let first = (text.hasPrefix(" ") ? " " : "") + body[0]
                 let firstFits = GhostTextGeometry.overlayFrame(caret: caretRect, field: fieldRect,
-                                                               textSize: CGSize(width: width(first), height: 1),
+                                                               textWidth: width(first), ascent: 0, descent: 0,
                                                                primaryHeight: 0) != nil
                 XCTAssertTrue(!firstFits || !GhostTextGeometry.hasRoom(caret: caretRect, field: fieldRect),
                               "run \(run): nothing returned although the first word fits")
@@ -79,7 +79,7 @@ final class GhostTextRound12OverlayTests: XCTestCase {
             XCTAssertTrue(rest.isEmpty || rest.hasPrefix(" "), "run \(run): cut inside a word: \(fitted)")
             XCTAssertFalse(fitted.contains("\u{2026}"), "run \(run): ellipsis in \(fitted)")
             XCTAssertNotNil(GhostTextGeometry.overlayFrame(caret: caretRect, field: fieldRect,
-                                                           textSize: CGSize(width: width(fitted), height: 1),
+                                                           textWidth: width(fitted), ascent: 0, descent: 0,
                                                            primaryHeight: 0), "run \(run): does not fit: \(fitted)")
         }
     }
@@ -88,7 +88,7 @@ final class GhostTextRound12OverlayTests: XCTestCase {
 
     func testOverlayClipsInsteadOfTruncating() throws {
         let overlay = try read("boringNotch/Voice/Ghost/GhostTextOverlay.swift")
-        XCTAssertTrue(overlay.contains(".byClipping"))
+        XCTAssertTrue(overlay.contains("CTLineDraw("), "the overlay does not draw one unbroken CoreText line")
         XCTAssertFalse(overlay.contains(".byTruncatingTail"), "the label still truncates to an ellipsis")
     }
 

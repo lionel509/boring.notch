@@ -144,9 +144,10 @@ final class GhostTextKeyTests: XCTestCase {
         XCTAssertFalse(text.contains("maskShift"), "the tap must not test modifiers itself")
     }
 
-    func testSettingsCopySaysOptionTab() throws {
+    func testSettingsCopySaysShiftTwiceAndOptionTab() throws {
         let text = try sourceText("boringNotch/components/Settings/SettingsView.swift")
-        XCTAssertTrue(text.contains("Option-Tab types it"))
+        XCTAssertTrue(text.contains("Tap Shift twice to type it"))
+        XCTAssertTrue(text.contains("Option-Tab works too"))
         XCTAssertFalse(text.contains("Shift-Tab"))
     }
 }

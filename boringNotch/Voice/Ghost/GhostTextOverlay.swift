@@ -4,6 +4,23 @@
 //
 
 import AppKit
+import CoreText
+
+/// #60: draws one line at an exact baseline. NSTextField's cell inset the first glyph by about 2 pt.
+private final class GhostTextView: NSView {
+    var text = ""
+    var font: NSFont = .systemFont(ofSize: 13)
+    var baseline: CGFloat = 0
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.systemGray]))
+        ctx.textMatrix = .identity
+        ctx.textPosition = CGPoint(x: 0, y: baseline)
+        CTLineDraw(line, ctx)
+    }
+}
 
 /// A non-activating, click-through panel that draws the gray suggestion just after the caret.
 /// Placement is decided by `GhostTextGeometry`; this panel only shows the frame it is given.
@@ -12,7 +29,7 @@ final class GhostTextOverlay {
     static let shared = GhostTextOverlay()
 
     private var panel: NSPanel?
-    private let label = NSTextField(labelWithString: "")
+    private let label = GhostTextView()
 
     private init() {}
 
@@ -29,20 +46,15 @@ final class GhostTextOverlay {
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
-        label.textColor = .systemGray
-        label.lineBreakMode = .byClipping
-        label.maximumNumberOfLines = 1
         panel.contentView = label
         return panel
     }
 
-    /// What the label needs for `text` in `font`, rounded up plus 2 pt so pixel rounding never clips (#47 round 12).
+    /// Typographic width and line height of `text` in `font`, measured with the CTLine the view draws (#60).
     static func textSize(_ text: String, font: NSFont) -> CGSize {
-        let measure = NSTextField(labelWithString: text)
-        measure.font = font
-        measure.lineBreakMode = .byClipping
-        let size = measure.intrinsicContentSize
-        return CGSize(width: ceil(size.width) + 2, height: ceil(size.height))
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font]))
+        let width = CTLineGetTypographicBounds(line, nil, nil, nil)
+        return CGSize(width: ceil(width), height: ceil(font.ascender - font.descender))
     }
 
     /// `frame` is in Cocoa screen coordinates, already fitted to the field by `GhostTextGeometry.overlayFrame`.
@@ -50,9 +62,11 @@ final class GhostTextOverlay {
         let panel = panel ?? makePanel()
         self.panel = panel
 
-        label.stringValue = text
+        label.text = text
         label.font = font
-        panel.setFrame(frame, display: true)
+        label.baseline = GhostTextGeometry.baselineInFrame(descent: -font.descender)
+        panel.setFrame(frame, display: false)
+        label.needsDisplay = true
         panel.orderFrontRegardless()
     }
 
