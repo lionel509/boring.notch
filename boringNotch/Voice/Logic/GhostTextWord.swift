@@ -20,6 +20,13 @@ enum GhostTextWord {
     static let maxWordChars = 24
     /// Besides whitespace and the start of the text, the only characters a partial word may follow.
     static let openers: Set<Character> = ["\"", "(", "[", "\u{201C}"]
+    /// Informal and clipped words (#62 round 3). The dictionary's list leaves them out and offers a longer word (lol -> lollipop),
+    /// so they are never completed, and the dictionary is not asked for them. Lowercase; compared lowercased.
+    static let informal: Set<String> = [
+        "lol", "lmao", "lmfao", "yup", "yep", "yea", "yeah", "wanna", "gonna", "gotta", "outta", "kinda", "sorta",
+        "dunno", "lemme", "gimme", "bruh", "nah", "okay", "idk", "tbh", "omg", "btw", "imo", "ngl", "tho", "cuz",
+        "haha", "hmm",
+    ]
 
     /// True when the only check that refused the snapshot is the word boundary: every other gate passed and the caret is mid-word.
     static func routes(_ s: GhostTextSnapshot) -> Bool {
@@ -41,13 +48,15 @@ enum GhostTextWord {
         source.currentInputSourceType() == "TISTypeKeyboardLayout"
     }
 
-    /// The rest of the word to draw after the caret, or nil. nil when any candidate in the dictionary's list is the typed
-    /// word itself (#62 round 2: a finished word is never extended). Otherwise the first longer candidate (at most 24
+    /// The rest of the word to draw after the caret, or nil. nil for an informal word (#62 round 3, checked before the
+    /// dictionary is asked) and when any candidate in the dictionary's list is the typed word itself (#62 round 2: a
+    /// finished word is never extended). Otherwise the first longer candidate (at most 24
     /// characters) that starts with the typed letters and adds only letters or apostrophes.
     @MainActor
     static func completion(before text: String, dictionary: GhostWordCompleting) -> String? {
         guard let partial = partialWord(text) else { return nil }
         let key = partial.lowercased()
+        if informal.contains(key) { return nil }
         let candidates = dictionary.completions(forPartial: partial)
         if candidates.contains(where: { $0.lowercased() == key }) { return nil }
         for candidate in candidates {

@@ -293,6 +293,7 @@ final class GhostTextWordTests: XCTestCase {
         XCTAssertTrue(speller.contains("in: partial"))
         XCTAssertTrue(speller.contains("TISCopyCurrentKeyboardInputSource"))
         XCTAssertTrue(speller.contains("kTISPropertyInputSourceType"))
+        XCTAssertTrue(speller.contains("GhostTextWord.wordPathAllowed(TISInputSource())"))
         for banned in ["Logger(", "os_log", "NSLog", "print(", "GhostTextLog"] {
             XCTAssertFalse(speller.contains(banned), "the adapter contains \(banned)")
         }
