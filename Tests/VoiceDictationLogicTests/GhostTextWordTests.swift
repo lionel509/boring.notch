@@ -25,16 +25,33 @@ final class FakeDictionary: GhostWordCompleting {
     }
 }
 
+/// The real NSSpellChecker answer, as the app adapter (GhostWordSpeller) asks it (#62 round 4).
+@MainActor
+struct SystemSpeller: GhostWordCompleting {
+    func completions(forPartial partial: String) -> [String] {
+        NSSpellChecker.shared.completions(forPartialWordRange: NSRange(location: 0, length: (partial as NSString).length),
+                                          in: partial, language: nil,
+                                          inSpellDocumentWithTag: NSSpellChecker.uniqueSpellDocumentTag()) ?? []
+    }
+}
+
 @MainActor
 final class GhostTextWordTests: XCTestCase {
 
-    /// Path to the app sources from this test file: <root>/Tests/VoiceDictationLogicTests/<file>.
+    /// Path to the app sources from this test file: <root>/Tests/VoiceDictationLogicTests/<file>, with `//` line comments
+    /// removed (#62 round 4): a commented-out line must not satisfy a source pin.
     private func appSource(_ relative: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        return try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+        let text = try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+        return text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                guard let slash = line.range(of: "//") else { return line }
+                return line[..<slash.lowerBound]
+            }
+            .joined(separator: "\n")
     }
 
     /// The text from one marker up to another, used to read one function without parsing Swift.
@@ -140,6 +157,33 @@ final class GhostTextWordTests: XCTestCase {
         dictionary.answers["LOL"] = ["LOLLIPOP"]
         XCTAssertNil(GhostTextWord.completion(before: "LOL", dictionary: dictionary))
         XCTAssertTrue(dictionary.asked.isEmpty, "the dictionary was asked: \(dictionary.asked)")
+    }
+
+    /// #62 round 4 (rule B): a contraction typed without its apostrophe is never completed, because the dictionary offers
+    /// a longer word (cant -> canton, ive -> ivermectin). The check is on the whole partial, before the dictionary is asked.
+    func testContractionsAreNeverCompleted() {
+        for token in ["cant", "wont", "shant", "ive", "hes", "whats", "hed", "whos", "heres"] {
+            XCTAssertNil(GhostTextWord.completion(before: "I will \(token)", dictionary: SystemSpeller()), token)
+        }
+
+        let cant = FakeDictionary()
+        cant.answers["cant"] = ["canton"]
+        XCTAssertNil(GhostTextWord.completion(before: "cant", dictionary: cant))
+        XCTAssertTrue(cant.asked.isEmpty, "the dictionary was asked: \(cant.asked)")
+
+        let whats = FakeDictionary()
+        whats.answers["Whats"] = ["WhatsApp"]
+        XCTAssertNil(GhostTextWord.completion(before: "so Whats", dictionary: whats))
+        XCTAssertTrue(whats.asked.isEmpty, "the dictionary was asked: \(whats.asked)")
+    }
+
+    /// #62 round 4: the words that are also English words stay with the finished-word rule, not the table. The table holds
+    /// only spellings that are not words, so `hel` still completes to `p`.
+    func testRealWordContractionsStayWithFinishedWordRule() {
+        for word in ["ill", "well", "its", "lets", "were", "shell", "wed", "shed"] {
+            XCTAssertNil(GhostTextWord.completion(before: "I will \(word)", dictionary: SystemSpeller()), word)
+        }
+        XCTAssertEqual(GhostTextWord.completion(before: "I will hel", dictionary: SystemSpeller()), "p")
     }
 
     // MARK: - Input source (#62 round 2)
