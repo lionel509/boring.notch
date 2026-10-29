@@ -3,7 +3,7 @@ import Foundation
 
 /// One log line per ghost-text event. Numbers and enum names only: never field or suggestion text.
 enum GhostTextEvent: String, CaseIterable {
-    case call, shown, accepted, dismissed, dropped, fallback, passedThrough
+    case call, shown, accepted, dismissed, dropped, fallback, passedThrough, word
 
     /// Why a `dropped` line happened. Fixed tokens only, one per guard.
     enum Reason: String, CaseIterable {
@@ -17,6 +17,8 @@ enum GhostTextEvent: String, CaseIterable {
         case cancelled, passThroughFailed
         /// #57: the caret or field moved after the suggestion was drawn (scroll, reflow), so it was dropped.
         case caretMoved
+        /// #58: a mid-word lookup that found no completion.
+        case noWord
     }
 
     /// Why a model reply that gave no suggestion was dropped: modelEmpty when blank, cleanedAway otherwise.
@@ -54,7 +56,7 @@ enum GhostTextEvent: String, CaseIterable {
                      check: GhostTextPolicy.Check? = nil, insertResult: Int? = nil,
                      axError: Int? = nil, app: String? = nil, value: String? = nil,
                      snapshotApp: String? = nil, latencyMs: Int? = nil, modelMs: Int? = nil,
-                     geometry: Geometry? = nil) -> String {
+                     geometry: Geometry? = nil, wordMs: Int? = nil) -> String {
         var out = "ghost event=\(event.rawValue) calls=\(callsTotal)"
         if let reason { out += " reason=\(reason.rawValue)" }
         if let check { out += " check=\(check.rawValue)" }
@@ -65,6 +67,7 @@ enum GhostTextEvent: String, CaseIterable {
         if let snapshotApp { out += " snapshotApp=\(appToken(snapshotApp))" }
         if let latencyMs { out += " latencyMs=\(latencyMs)" }
         if let modelMs { out += " modelMs=\(modelMs)" }
+        if let wordMs { out += " wordMs=\(wordMs)" }
         if let geometry { out += " " + geometry.pairs }
         return out
     }
