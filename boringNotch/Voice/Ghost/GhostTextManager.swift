@@ -257,11 +257,13 @@ final class GhostTextManager: ObservableObject {
         if let refused = GhostInsertGate.refusedBy(role: snapshot.role, subrole: snapshot.subrole) {
             return dropFetch(GhostTextEvent.reason(refused.reason), gen: gen, value: refused.value)
         }
-        if let check = GhostTextPolicy.failedCheck(snapshot) { return dropFetch(.policy, gen: gen, check: check) }
+        // #58: mid-word goes to the spell checker, after every gate the model path has.
+        let midWord = GhostTextWord.routes(snapshot)
+        if !midWord, let check = GhostTextPolicy.failedCheck(snapshot) { return dropFetch(.policy, gen: gen, check: check) }
         guard let caret = snapshot.caretRect else { return dropFetch(.noCaretRect, gen: gen) }
         guard let field = snapshot.fieldRect else { return dropFetch(.noFieldRect, gen: gen) }
         guard GhostTextGeometry.hasRoom(caret: caret, field: field) else { return dropFetch(.noRoom, gen: gen) }
-        guard let prompt = GhostTextPrompt.build(snapshot) else { return dropFetch(.noPrompt, gen: gen) }
+        guard let prompt = midWord ? "" : GhostTextPrompt.build(snapshot) else { return dropFetch(.noPrompt, gen: gen) }
         guard let location = snapshot.caretLocation else { return dropFetch(.noCaretLocation, gen: gen) }
         // Same gate as insert: a suggestion is shown only for a field whose insert the helper will accept.
         guard GhostInsertGate.appAllows(token: snapshot.token, isSecure: snapshot.isSecure,
@@ -270,37 +272,49 @@ final class GhostTextManager: ObservableObject {
         }
         guard !Task.isCancelled else { GhostTextLog.record(.dropped, reason: .cancelled); return }
         let before = snapshot.textBeforeCaret ?? ""
-        Defaults[.ghostTextCalls] += 1
-        GhostTextLog.record(.call)
-
-        var completion: GhostTextCompletion = .unavailable
-        let modelStart = ProcessInfo.processInfo.systemUptime
-        if #available(macOS 26.0, *) {
-            completion = await GhostTextModel.shared.complete(prompt)
-        }
-        let modelMs = GhostTextEvent.latencyMs(from: modelStart, to: ProcessInfo.processInfo.systemUptime)
-        // Round 9 (#31): a cancel after .call still logs one line, so every outcome after .call has one.
-        guard !Task.isCancelled else {
-            GhostTextLog.record(.dropped, reason: .cancelled)
-            return
-        }
-        // Round 8 (#31): each way the reply gives no suggestion logs one dropped line before the machine goes idle.
         var suggestion: String?
-        switch completion {
-        case .unavailable:
-            GhostTextLog.record(.dropped, reason: .modelUnavailable)
-            suggestion = nil
-        case .failed(let value):
-            GhostTextLog.record(.dropped, reason: .modelError, value: value)
-            suggestion = nil
-        case .reply(let raw):
-            // Round 12 (#47): a repeated word is dropped before the machine sees the suggestion.
-            if let cleaned = GhostTextPrompt.clean(raw), let kept = GhostTextPrompt.dedupe(context: before, suggestion: cleaned) {
-                suggestion = GhostTextPrompt.join(context: before, suggestion: kept)
-            } else {
-                let reason = GhostTextPrompt.clean(raw) == nil ? GhostTextEvent.noSuggestionReason(raw) : .cleanedAway
-                GhostTextLog.record(.dropped, reason: reason)
+        var spentModelMs: Int?
+        if midWord {
+            // #58: the system dictionary finishes the word on the main actor: no prompt, no model, no counted call.
+            let wordStart = ProcessInfo.processInfo.systemUptime
+            suggestion = GhostTextWord.completion(before: before, dictionary: GhostWordSpeller())
+            GhostTextLog.record(.word, wordMs: GhostTextEvent.latencyMs(from: wordStart, to: ProcessInfo.processInfo.systemUptime))
+            if suggestion == nil {
+                GhostTextLog.record(.dropped, reason: .noWord)
+            }
+        } else {
+            Defaults[.ghostTextCalls] += 1
+            GhostTextLog.record(.call)
+
+            var completion: GhostTextCompletion = .unavailable
+            let modelStart = ProcessInfo.processInfo.systemUptime
+            if #available(macOS 26.0, *) {
+                completion = await GhostTextModel.shared.complete(prompt)
+            }
+            let modelMs = GhostTextEvent.latencyMs(from: modelStart, to: ProcessInfo.processInfo.systemUptime)
+            spentModelMs = modelMs
+            // Round 9 (#31): a cancel after .call still logs one line, so every outcome after .call has one.
+            guard !Task.isCancelled else {
+                GhostTextLog.record(.dropped, reason: .cancelled)
+                return
+            }
+            // Round 8 (#31): each way the reply gives no suggestion logs one dropped line before the machine goes idle.
+            switch completion {
+            case .unavailable:
+                GhostTextLog.record(.dropped, reason: .modelUnavailable)
                 suggestion = nil
+            case .failed(let value):
+                GhostTextLog.record(.dropped, reason: .modelError, value: value)
+                suggestion = nil
+            case .reply(let raw):
+                // Round 12 (#47): a repeated word is dropped before the machine sees the suggestion.
+                if let cleaned = GhostTextPrompt.clean(raw), let kept = GhostTextPrompt.dedupe(context: before, suggestion: cleaned) {
+                    suggestion = GhostTextPrompt.join(context: before, suggestion: kept)
+                } else {
+                    let reason = GhostTextPrompt.clean(raw) == nil ? GhostTextEvent.noSuggestionReason(raw) : .cleanedAway
+                    GhostTextLog.record(.dropped, reason: reason)
+                    suggestion = nil
+                }
             }
         }
         // Round 12 (#47): fit to whole words that fit the field, so the drawn text is exactly what accept inserts.
@@ -321,7 +335,7 @@ final class GhostTextManager: ObservableObject {
         pendingField = field
         pendingFontName = snapshot.fontName
         pendingFontSize = snapshot.fontSize
-        pendingModelMs = modelMs
+        pendingModelMs = spentModelMs
         handle(.suggestion(suggestion, gen: gen))
     }
 
