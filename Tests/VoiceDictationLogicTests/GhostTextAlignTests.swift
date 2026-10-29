@@ -132,7 +132,8 @@ final class GhostTextAlignTests: XCTestCase {
         let manager = try read("boringNotch/Voice/Ghost/GhostTextManager.swift")
         let show = section(manager, from: "private func showOverlay(", to: "private func dropOverlay(")
         let logged = section(show, from: "GhostTextLog.record(.shown", to: "\n    }")
-        XCTAssertTrue(logged.contains("geometry: GhostTextEvent.Geometry(caret: caret, frame: frame"), "shown does not carry the geometry")
+        XCTAssertTrue(logged.contains("geometry: GhostTextEvent.Geometry(caret: caret, frame: GhostTextGeometry.toCocoa(frame, primaryHeight: primaryHeight)"),
+                      "shown does not log the frame in Accessibility coordinates: \(logged)")
         XCTAssertFalse(logged.contains("text"), "the shown line is given the suggestion text: \(logged)")
         XCTAssertFalse(logged.contains("suggestion"), "the shown line is given the suggestion: \(logged)")
         XCTAssertFalse(manager.contains("probeLine"), "the probe helper is still referenced")
@@ -141,6 +142,10 @@ final class GhostTextAlignTests: XCTestCase {
     func testOverlayDrawsOneCoreTextLineAtAPen() throws {
         let overlay = try read("boringNotch/Voice/Ghost/GhostTextOverlay.swift")
         XCTAssertTrue(overlay.contains("ctx.textPosition = CGPoint(x: 0, y: baseline)"), "overlay does not place its pen at the baseline")
+        // Whole-line match, so a suffix such as "+ 2" on the baseline line goes red.
+        let lines = overlay.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        XCTAssertTrue(lines.contains("label.baseline = GhostTextGeometry.baselineInFrame(descent: -font.descender)"),
+                      "overlay does not draw its baseline at baselineInFrame(descent:) with no offset")
         XCTAssertTrue(overlay.contains("CTLineDraw("), "overlay does not draw with CoreText")
         XCTAssertFalse(overlay.contains("NSTextField("), "overlay still uses a text field with its own inset")
     }
