@@ -92,11 +92,10 @@ final class GhostTextAlignTests: XCTestCase {
         }
     }
 
-    /// The ghostGeom line carries numbers, fixed keys and sanitized font names only, never user text.
-    func testProbeLineIsNumbersAndFontNamesOnly() {
+
+    /// The shown line carries eleven numeric key=value geometry pairs and nothing else: no text, no font names.
+    func testShownLineCarriesOnlyNumericGeometry() {
         var rng = AlignRNG(state: 0x60_C33)
-        let nasty = ["Arial MT", "Helvetica Neue", "emoji 🙂 font", "a=b", "line\nbreak", "tab\tname", "", "  ",
-                     "ArialMT", ".SFNS-Regular", "x_y.z-1"]
         func pick() -> CGFloat {
             switch rng.next() % 8 {
             case 0: return .nan
@@ -105,36 +104,38 @@ final class GhostTextAlignTests: XCTestCase {
             default: return CGFloat(Int64(bitPattern: rng.next() % 2_000_000) - 1_000_000) / 100
             }
         }
+        let keys = ["caretX", "caretY", "caretW", "caretH", "frameX", "frameY", "frameW", "frameH", "asc", "desc", "pt"]
         let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 =,.-_")
         for _ in 0..<2_000 {
-            let caret = CGRect(x: pick(), y: pick(), width: pick(), height: pick())
-            let frame = CGRect(x: pick(), y: pick(), width: pick(), height: pick())
-            let fieldFont: String? = rng.next() % 3 == 0 ? nil : nasty[Int(rng.next() % UInt64(nasty.count))]
-            let line = G.probeLine(caret: caret, frame: frame, ascent: pick(), descent: pick(),
-                                   pointSize: pick(), usedFont: nasty[Int(rng.next() % UInt64(nasty.count))],
-                                   fieldFont: fieldFont)
-            XCTAssertTrue(line.allSatisfy { allowed.contains($0) }, "probe line has a disallowed character: \(line)")
-            let tokens = line.split(separator: " ")
-            XCTAssertEqual(tokens.count, 8, "probe line has the wrong shape: \(line)")
-            XCTAssertEqual(tokens.first, "ghostGeom")
+            let geometry = GhostTextEvent.Geometry(caret: CGRect(x: pick(), y: pick(), width: pick(), height: pick()),
+                                                   frame: CGRect(x: pick(), y: pick(), width: pick(), height: pick()),
+                                                   ascent: pick(), descent: pick(), pointSize: pick())
+            let line = GhostTextEvent.line(.shown, callsTotal: 1, geometry: geometry)
+            XCTAssertTrue(line.allSatisfy { allowed.contains($0) }, "line has a disallowed character: \(line)")
+            let tokens = line.split(separator: " ").map(String.init)
+            XCTAssertEqual(tokens.count, 3 + keys.count, "line has the wrong shape: \(line)")
+            XCTAssertEqual(Array(tokens.prefix(3)), ["ghost", "event=shown", "calls=1"], line)
+            for (token, key) in zip(tokens.dropFirst(3), keys) {
+                let parts = token.split(separator: "=", maxSplits: 1).map(String.init)
+                XCTAssertEqual(parts.count, 2, "not key=value: \(token)")
+                XCTAssertEqual(parts.first, key)
+                let value = Double(parts.last ?? "")
+                XCTAssertNotNil(value, "not a number: \(token)")
+                XCTAssertTrue(value?.isFinite ?? false, "non-finite: \(token)")
+            }
         }
-        let blank = G.probeLine(caret: .zero, frame: .zero, ascent: 1, descent: 1, pointSize: 13,
-                                usedFont: "ArialMT", fieldFont: nil)
-        XCTAssertTrue(blank.hasSuffix("field=none"), blank)
-        let spaces = G.probeLine(caret: .zero, frame: .zero, ascent: 1, descent: 1, pointSize: 13,
-                                 usedFont: "ArialMT", fieldFont: "  ")
-        XCTAssertTrue(spaces.hasSuffix("field=none"), spaces)
     }
 
     // MARK: - Source pins
 
-    func testManagerLogsTheProbeWithoutSuggestionText() throws {
+    func testManagerLogsTheGeometryWithoutSuggestionText() throws {
         let manager = try read("boringNotch/Voice/Ghost/GhostTextManager.swift")
         let show = section(manager, from: "private func showOverlay(", to: "private func dropOverlay(")
-        let probe = show.components(separatedBy: "\n").first { $0.contains("GhostTextLog.geometry(") } ?? ""
-        XCTAssertTrue(show.contains("GhostTextLog.geometry(GhostTextGeometry.probeLine("), "showOverlay does not log the probe")
-        XCTAssertFalse(probe.contains("text"), "the probe is given the suggestion text: \(probe)")
-        XCTAssertFalse(probe.contains("suggestion"), "the probe is given the suggestion: \(probe)")
+        let logged = section(show, from: "GhostTextLog.record(.shown", to: "\n    }")
+        XCTAssertTrue(logged.contains("geometry: GhostTextEvent.Geometry(caret: caret, frame: frame"), "shown does not carry the geometry")
+        XCTAssertFalse(logged.contains("text"), "the shown line is given the suggestion text: \(logged)")
+        XCTAssertFalse(logged.contains("suggestion"), "the shown line is given the suggestion: \(logged)")
+        XCTAssertFalse(manager.contains("probeLine"), "the probe helper is still referenced")
     }
 
     func testOverlayDrawsOneCoreTextLineAtAPen() throws {

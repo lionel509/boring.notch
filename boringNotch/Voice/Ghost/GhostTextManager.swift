@@ -343,7 +343,9 @@ final class GhostTextManager: ObservableObject {
         guard let frame = GhostTextGeometry.overlayFrame(
             caret: caret,
             field: field,
-            textSize: GhostTextOverlay.textSize(text, font: font),
+            textWidth: GhostTextOverlay.textSize(text, font: font).width,
+            ascent: font.ascender,
+            descent: -font.descender,
             primaryHeight: primaryHeight
         ) else {
             dropOverlay(.overlayNoRoom)
@@ -353,7 +355,8 @@ final class GhostTextManager: ObservableObject {
         // Only taps made after the gray text appears count for the double-tap accept.
         shiftTaps.reset()
         startDriftCheck(caret: caret, field: field)
-        GhostTextLog.record(.shown, latencyMs: lastTypedAt.map { GhostTextEvent.latencyMs(from: $0, to: ProcessInfo.processInfo.systemUptime) }, modelMs: pendingModelMs)
+        GhostTextLog.record(.shown, latencyMs: lastTypedAt.map { GhostTextEvent.latencyMs(from: $0, to: ProcessInfo.processInfo.systemUptime) }, modelMs: pendingModelMs,
+                            geometry: GhostTextEvent.Geometry(caret: caret, frame: frame, ascent: font.ascender, descent: -font.descender, pointSize: font.pointSize))
     }
 
     /// Logs the one reason the overlay could not be shown, then tells the machine to go idle without logging a dismissal.

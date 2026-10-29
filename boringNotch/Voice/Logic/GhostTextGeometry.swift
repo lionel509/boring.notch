@@ -6,6 +6,18 @@ enum GhostTextGeometry {
     /// Minimum space to the right of the caret before a suggestion is shown.
     static let minRoom: CGFloat = 40
 
+    /// #60: transparent space above and below the line so ascenders and descenders never clip.
+    static let inkPad: CGFloat = 2
+
+    /// #60: pen point of the suggestion's first glyph in AX coordinates: x where typed text would continue,
+    /// y the baseline of text whose ascent+descent box is centred in the caret's line rect.
+    static func textOrigin(caret: CGRect, ascent: CGFloat, descent: CGFloat) -> CGPoint {
+        CGPoint(x: caret.minX, y: caret.midY + (ascent - descent) / 2)
+    }
+
+    /// #60: where the overlay view draws its baseline, measured up from the bottom of its frame.
+    static func baselineInFrame(descent: CGFloat) -> CGFloat { descent + inkPad }
+
     /// Converts an Accessibility rect to Cocoa coordinates (origin bottom-left of the primary display).
     static func toCocoa(_ ax: CGRect, primaryHeight: CGFloat) -> CGRect {
         CGRect(x: ax.origin.x, y: primaryHeight - ax.maxY, width: ax.width, height: ax.height)
@@ -31,16 +43,17 @@ enum GhostTextGeometry {
         return moved(drawnCaret, nowCaret) || moved(drawnField, nowField)
     }
 
-    /// Frame for the suggestion in Cocoa coordinates, or nil when there is no room at the caret.
-    static func overlayFrame(caret: CGRect, field: CGRect, textSize: CGSize, primaryHeight: CGFloat) -> CGRect? {
+    /// Frame for the suggestion in Cocoa coordinates, or nil when there is no room at the caret. The view draws its
+    /// text at (0, baselineInFrame(descent:)), so the first glyph's pen point lands exactly on `textOrigin`.
+    /// `descent` is a positive number, i.e. -font.descender.
+    static func overlayFrame(caret: CGRect, field: CGRect, textWidth: CGFloat, ascent: CGFloat, descent: CGFloat,
+                             primaryHeight: CGFloat) -> CGRect? {
         guard hasRoom(caret: caret, field: field) else { return nil }
-        let x = caret.maxX + 2
+        let pen = textOrigin(caret: caret, ascent: ascent, descent: descent)
         // Never draw less than what accept would insert.
-        guard textSize.width <= field.maxX - x - 2 else { return nil }
-        let rect = CGRect(x: x,
-                          y: caret.midY - textSize.height / 2,
-                          width: textSize.width,
-                          height: textSize.height)
+        guard textWidth <= field.maxX - pen.x - 2 else { return nil }
+        let rect = CGRect(x: pen.x, y: pen.y - ascent - inkPad,
+                          width: textWidth, height: ascent + descent + 2 * inkPad)
         return toCocoa(rect, primaryHeight: primaryHeight)
     }
 
@@ -52,7 +65,7 @@ enum GhostTextGeometry {
         var count = words.count
         while count > 0 {
             let candidate = lead + words.prefix(count).joined(separator: " ")
-            if overlayFrame(caret: caret, field: field, textSize: CGSize(width: width(candidate), height: 1), primaryHeight: 0) != nil {
+            if overlayFrame(caret: caret, field: field, textWidth: width(candidate), ascent: 0, descent: 0, primaryHeight: 0) != nil {
                 return candidate
             }
             count -= 1
