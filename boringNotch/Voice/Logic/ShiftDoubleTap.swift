@@ -19,9 +19,11 @@ struct ShiftDoubleTap: Equatable {
         down = false
     }
 
-    /// Placeholder until the round-2 fix lands: behaves like reset().
+    /// Clears the pattern after the tap was disabled and events were lost. Unlike reset(), it re-derives the latch from
+    /// the live Shift state, because the releases that would have cleared it may have been dropped.
     mutating func tapReset(shiftHeld: Bool) {
         reset()
+        blocked = shiftHeld
     }
 
     /// True only on the release that completes the second clean tap inside the window.
@@ -41,7 +43,7 @@ struct ShiftDoubleTap: Equatable {
                 reset()
                 return false
             }
-            if taps == 1, let first = firstPress, now - first <= Self.window {
+            if taps == 1, let first = firstPress, now >= first, now - first <= Self.window {
                 down = true
             } else {
                 firstPress = now
@@ -55,7 +57,7 @@ struct ShiftDoubleTap: Equatable {
             down = false
             taps += 1
             if taps == 2, let first = firstPress {
-                let inWindow = now - first <= Self.window
+                let inWindow = now >= first && now - first <= Self.window
                 reset()
                 return inWindow
             }

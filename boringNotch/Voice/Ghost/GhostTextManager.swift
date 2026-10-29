@@ -135,8 +135,9 @@ final class GhostTextManager: ObservableObject {
     fileprivate func handleTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            // Keys typed while the tap was off were never seen, so the state must reset too.
-            shiftTaps.reset()
+            // Keys typed while the tap was off were never seen, so the state must reset too. Any Shift still down
+            // keeps the latch: its release may have been lost with the tap.
+            shiftTaps.tapReset(shiftHeld: CGEventSource.flagsState(.combinedSessionState).rawValue & GhostTextLogic.shiftMask != 0)
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             handle(.tapReset)
             return Unmanaged.passUnretained(event)
