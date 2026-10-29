@@ -115,6 +115,33 @@ final class GhostTextWordTests: XCTestCase {
         XCTAssertEqual(GhostTextWord.completion(before: "doesn", dictionary: RealSpeller()), "'t")
     }
 
+    /// #62 round 3: informal and clipped words are never completed. The real NSSpellChecker list leaves them out and
+    /// offers a longer word (lol -> lollipop), so the rule is a stop-list checked before the dictionary is asked.
+    func testInformalWordsAreNeverCompleted() {
+        struct SystemSpeller: GhostWordCompleting {
+            func completions(forPartial partial: String) -> [String] {
+                NSSpellChecker.shared.completions(forPartialWordRange: NSRange(location: 0, length: (partial as NSString).length),
+                                                  in: partial, language: nil,
+                                                  inSpellDocumentWithTag: NSSpellChecker.uniqueSpellDocumentTag()) ?? []
+            }
+        }
+        XCTAssertNil(GhostTextWord.completion(before: "I wanna", dictionary: SystemSpeller()))
+        XCTAssertNil(GhostTextWord.completion(before: "yup", dictionary: SystemSpeller()))
+        XCTAssertNil(GhostTextWord.completion(before: "lol", dictionary: SystemSpeller()))
+        XCTAssertNil(GhostTextWord.completion(before: "we outta", dictionary: SystemSpeller()))
+        XCTAssertNil(GhostTextWord.completion(before: "that's crazy LOL", dictionary: SystemSpeller()))
+
+        // The stop-list is checked before the dictionary: the fake dictionary is never asked for "lol".
+        let dictionary = FakeDictionary()
+        dictionary.answers["lol"] = ["lollipop"]
+        XCTAssertNil(GhostTextWord.completion(before: "lol", dictionary: dictionary))
+        XCTAssertTrue(dictionary.asked.isEmpty, "the dictionary was asked: \(dictionary.asked)")
+
+        dictionary.answers["LOL"] = ["LOLLIPOP"]
+        XCTAssertNil(GhostTextWord.completion(before: "LOL", dictionary: dictionary))
+        XCTAssertTrue(dictionary.asked.isEmpty, "the dictionary was asked: \(dictionary.asked)")
+    }
+
     // MARK: - Input source (#62 round 2)
 
     /// A fake input source: the type the system reports, or nil when the read fails.
