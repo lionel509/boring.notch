@@ -86,7 +86,54 @@ final class GhostTextWordTests: XCTestCase {
         XCTAssertNil(GhostTextWord.completion(before: "Thank", dictionary: dictionary))
 
         dictionary.answers["inform"] = ["information", "inform"]
-        XCTAssertEqual(GhostTextWord.completion(before: "inform", dictionary: dictionary), "ation")
+        XCTAssertNil(GhostTextWord.completion(before: "inform", dictionary: dictionary))
+    }
+
+    /// #62 round 2: a finished word is never extended, even when the dictionary lists a longer word first.
+    func testCompleteWordIsNeverExtended() {
+        let inform = FakeDictionary()
+        inform.answers["inform"] = ["information", "informed", "inform"]
+        XCTAssertNil(GhostTextWord.completion(before: "I will inform", dictionary: inform))
+
+        let the = FakeDictionary()
+        the.answers["the"] = ["these", "the", "they"]
+        XCTAssertNil(GhostTextWord.completion(before: "look at the", dictionary: the))
+    }
+
+    /// #62 round 2: the same rule against NSSpellChecker, and the unfinished words still complete.
+    func testRealSpellCheckerNeverExtendsACompleteWord() {
+        // The app adapter (GhostWordSpeller) lives in the app target, so this is the same call written out here.
+        struct RealSpeller: GhostWordCompleting {
+            func completions(forPartial partial: String) -> [String] {
+                NSSpellChecker.shared.completions(forPartialWordRange: NSRange(location: 0, length: (partial as NSString).length),
+                                                  in: partial, language: nil,
+                                                  inSpellDocumentWithTag: NSSpellChecker.uniqueSpellDocumentTag()) ?? []
+            }
+        }
+        XCTAssertNil(GhostTextWord.completion(before: "I will inform", dictionary: RealSpeller()))
+        XCTAssertEqual(GhostTextWord.completion(before: "I am hesitat", dictionary: RealSpeller()), "e")
+        XCTAssertEqual(GhostTextWord.completion(before: "doesn", dictionary: RealSpeller()), "'t")
+    }
+
+    // MARK: - Input source (#62 round 2)
+
+    /// A fake input source: the type the system reports, or nil when the read fails.
+    private struct FakeInputSource: GhostInputSourceReading {
+        var type: String?
+        func currentInputSourceType() -> String? { type }
+    }
+
+    func testWordPathOnlyForPlainKeyboardLayouts() {
+        let cases: [(String?, Bool)] = [
+            ("TISTypeKeyboardLayout", true),
+            ("TISTypeKeyboardInputMode", false),
+            ("TISTypeKeyboardInputMethodWithoutModes", false),
+            ("TISTypeKeyboardInputMethodModeEnabled", false),
+            (nil, false),
+        ]
+        for (type, expected) in cases {
+            XCTAssertEqual(GhostTextWord.wordPathAllowed(FakeInputSource(type: type)), expected, type ?? "nil")
+        }
     }
 
     func testCaseMatching() {
@@ -192,7 +239,7 @@ final class GhostTextWordTests: XCTestCase {
 
     func testManagerWordBranchSourcePins() throws {
         let manager = try appSource("boringNotch/Voice/Ghost/GhostTextManager.swift")
-        XCTAssertTrue(manager.contains("let midWord = GhostTextWord.routes(snapshot)"))
+        XCTAssertTrue(manager.contains("let midWord = GhostTextWord.routes(snapshot) && GhostWordSpeller.inputSourceAllowsWord()"))
         XCTAssertTrue(manager.contains("if !midWord, let check = GhostTextPolicy.failedCheck(snapshot)"))
         XCTAssertTrue(manager.contains("midWord ? \"\" : GhostTextPrompt.build(snapshot)"))
 
@@ -217,6 +264,8 @@ final class GhostTextWordTests: XCTestCase {
         XCTAssertTrue(speller.contains("@MainActor"))
         XCTAssertTrue(speller.contains("NSSpellChecker.shared.completions(forPartialWordRange:"))
         XCTAssertTrue(speller.contains("in: partial"))
+        XCTAssertTrue(speller.contains("TISCopyCurrentKeyboardInputSource"))
+        XCTAssertTrue(speller.contains("kTISPropertyInputSourceType"))
         for banned in ["Logger(", "os_log", "NSLog", "print(", "GhostTextLog"] {
             XCTAssertFalse(speller.contains(banned), "the adapter contains \(banned)")
         }
