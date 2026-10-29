@@ -189,4 +189,55 @@ final class ShiftDoubleTapTests: XCTestCase {
         XCTAssertGreaterThan(fires, 0)
         XCTAssertGreaterThan(expired, 0)
     }
+
+    // MARK: Round 2 (#56 breaker B1 and B2)
+
+    func testLostReleasesDoNotSwallowTheNextDoubleTapAfterATapReset() {
+        // Both Shifts down (overlap sets the latch), both releases lost while the tap was disabled, then the reset.
+        // Nothing is held any more, so the next clean double tap must accept.
+        var d = ShiftDoubleTap()
+        _ = run(&d, [(56, shift, 0), (60, shift, 0.05)])
+        d.tapReset(shiftHeld: false)
+        let r = run(&d, [(56, shift, 10), (56, 0, 10.08), (56, shift, 10.16), (56, 0, 10.24)])
+        XCTAssertEqual(r, [false, false, false, true])
+    }
+
+    func testTapResetWithAShiftStillHeldKeepsTheLatch() {
+        // Left and right down, a reset while Shift is still held, then right up (left still holds the bit), left up,
+        // then one left tap inside the window. The right release must not look like a fresh press, so nothing fires.
+        var d = ShiftDoubleTap()
+        _ = run(&d, [(56, shift, 0), (60, shift, 0.05)])
+        d.tapReset(shiftHeld: true)
+        XCTAssertEqual(run(&d, [(60, shift, 0.10), (56, 0, 0.15), (56, shift, 0.20), (56, 0, 0.25)]), [false, false, false, false])
+    }
+
+    func testPlainResetWithAShiftStillHeldKeepsTheLatch() {
+        // Same sequence through the untouched reset(): clearing the latch there would make this one tap fire.
+        var d = ShiftDoubleTap()
+        _ = run(&d, [(56, shift, 0), (60, shift, 0.05)])
+        d.reset()
+        XCTAssertEqual(run(&d, [(60, shift, 0.10), (56, 0, 0.15), (56, shift, 0.20), (56, 0, 0.25)]), [false, false, false, false])
+    }
+
+    func testBothShiftsUpClearsTheLatch() {
+        var d = ShiftDoubleTap()
+        _ = run(&d, [(56, shift, 0), (60, shift, 0.05), (60, shift, 0.10), (56, 0, 0.15)])
+        let r = run(&d, [(56, shift, 10), (56, 0, 10.08), (56, shift, 10.16), (56, 0, 10.24)])
+        XCTAssertEqual(r, [false, false, false, true])
+    }
+
+    func testAnyAllUpFlagsChangeClearsALatchLeftByLostReleases() {
+        // Caps lock (keycode 57) reports with no Shift bit: that all-up event must clear the latch.
+        var d = ShiftDoubleTap()
+        _ = run(&d, [(56, shift, 0), (60, shift, 0.05), (57, 0, 0.10)])
+        let r = run(&d, [(56, shift, 10), (56, 0, 10.08), (56, shift, 10.16), (56, 0, 10.24)])
+        XCTAssertEqual(r, [false, false, false, true])
+    }
+
+    func testBackwardsClockNeverAcceptsAcrossTenSeconds() {
+        // A clock that steps backwards must not turn a 10 s gap into an in-window pair.
+        var d = ShiftDoubleTap()
+        let r = run(&d, [(56, shift, 10), (56, 0, 10.05), (56, shift, 0), (56, 0, 0.05)])
+        XCTAssertEqual(r, [false, false, false, false])
+    }
 }

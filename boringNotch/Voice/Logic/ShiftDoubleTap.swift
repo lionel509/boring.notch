@@ -19,6 +19,11 @@ struct ShiftDoubleTap: Equatable {
         down = false
     }
 
+    /// Placeholder until the round-2 fix lands: behaves like reset().
+    mutating func tapReset(shiftHeld: Bool) {
+        reset()
+    }
+
     /// True only on the release that completes the second clean tap inside the window.
     mutating func flagsChanged(keyCode: Int, flags: UInt64, now: TimeInterval) -> Bool {
         let isDown = flags & GhostTextLogic.shiftMask != 0
