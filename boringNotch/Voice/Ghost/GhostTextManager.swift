@@ -356,7 +356,7 @@ final class GhostTextManager: ObservableObject {
         shiftTaps.reset()
         startDriftCheck(caret: caret, field: field)
         GhostTextLog.record(.shown, latencyMs: lastTypedAt.map { GhostTextEvent.latencyMs(from: $0, to: ProcessInfo.processInfo.systemUptime) }, modelMs: pendingModelMs,
-                            geometry: GhostTextEvent.Geometry(caret: caret, frame: frame, ascent: font.ascender, descent: -font.descender, pointSize: font.pointSize))
+                            geometry: GhostTextEvent.Geometry(caret: caret, frame: GhostTextGeometry.toCocoa(frame, primaryHeight: primaryHeight), ascent: font.ascender, descent: -font.descender, pointSize: font.pointSize))
     }
 
     /// Logs the one reason the overlay could not be shown, then tells the machine to go idle without logging a dismissal.
