@@ -258,7 +258,7 @@ final class GhostTextManager: ObservableObject {
             return dropFetch(GhostTextEvent.reason(refused.reason), gen: gen, value: refused.value)
         }
         // #58: mid-word goes to the spell checker, after every gate the model path has.
-        let midWord = GhostTextWord.routes(snapshot)
+        let midWord = GhostTextWord.routes(snapshot) && GhostWordSpeller.inputSourceAllowsWord()
         if !midWord, let check = GhostTextPolicy.failedCheck(snapshot) { return dropFetch(.policy, gen: gen, check: check) }
         guard let caret = snapshot.caretRect else { return dropFetch(.noCaretRect, gen: gen) }
         guard let field = snapshot.fieldRect else { return dropFetch(.noFieldRect, gen: gen) }
