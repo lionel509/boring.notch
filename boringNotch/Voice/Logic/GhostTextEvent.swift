@@ -14,6 +14,8 @@ enum GhostTextEvent: String, CaseIterable {
         case modelError, modelUnavailable, modelEmpty, cleanedAway, overlayNoRoom, overlayNoCaret
         /// Round 9 (#31): a fetch cancelled after `.call`, and an accept whose Option+Tab pass-through failed.
         case cancelled, passThroughFailed
+        /// #57: the caret or field moved after the suggestion was drawn (scroll, reflow), so it was dropped.
+        case caretMoved
     }
 
     /// Why a model reply that gave no suggestion was dropped: modelEmpty when blank, cleanedAway otherwise.

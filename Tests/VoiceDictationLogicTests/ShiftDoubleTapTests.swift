@@ -139,7 +139,7 @@ final class ShiftDoubleTapTests: XCTestCase {
     /// events since the last reset are a clean press, release, press, release and the first press is within the window.
     func testDetectorAgreesWithModelOnRandomKeyboards() {
         var rng = TapLCG(state: 0x56_0F7)
-        let modifiers = [54, 55, 56, 58, 59, 60, 61, 62, 63]
+        let otherModifiers = [54, 55, 58, 59, 61, 62, 63]
         var fires = 0
         var expired = 0
         for _ in 0..<5_000 {
@@ -151,10 +151,14 @@ final class ShiftDoubleTapTests: XCTestCase {
             for _ in 0..<60 {
                 t += Double(rng.next() % 61) / 100
                 let action = rng.next() % 10
-                if action < 4 {
-                    let key = modifiers[Int(rng.next() % UInt64(modifiers.count))]
+                if action < 6 {
+                    // Half the modifier events are Shift, so clean taps happen often enough to test the window.
+                    let isShift = rng.next() % 2 == 0
+                    let key = isShift ? (rng.next() % 2 == 0 ? 56 : 60) : otherModifiers[Int(rng.next() % UInt64(otherModifiers.count))]
                     // Only one Shift at a time: the overlap case has its own test above.
                     if (key == 56 && held.contains(60)) || (key == 60 && held.contains(56)) { continue }
+                    // Other modifiers are mostly kept released, so a Shift tap is usually clean.
+                    if !isShift && !held.contains(key) && rng.next() % 4 != 0 { continue }
                     let isDown = !held.contains(key)
                     if isDown { held.insert(key) } else { held.remove(key) }
                     let flags = keyboardFlags(held, caps: caps)
@@ -175,7 +179,7 @@ final class ShiftDoubleTapTests: XCTestCase {
                         log.removeAll()
                     }
                 } else if action < 8 {
-                    // Letter keyDown (4 and 5), mouse down (6), scroll (7): each resets the detector.
+                    // Letter keyDown or mouse down (6 and 7 pick one): each resets the detector. 8 and 9 are idle.
                     d.reset()
                     log.removeAll()
                 }

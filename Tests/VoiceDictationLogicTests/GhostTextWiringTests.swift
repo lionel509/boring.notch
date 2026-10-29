@@ -40,8 +40,9 @@ final class GhostTextWiringTests: XCTestCase {
 
     func testManagerClassifiesEveryReadAndNeverUsesNoSnapshot() throws {
         let manager = try appSource("boringNotch/Voice/Ghost/GhostTextManager.swift")
-        XCTAssertEqual(count(manager, "GhostSnapshotRead.classify("), 2)
-        XCTAssertEqual(count(manager, "TimeoutRace.run("), 2)
+        // Three reads: fetch, insert, and the #57 drift check (every read is classified).
+        XCTAssertEqual(count(manager, "GhostSnapshotRead.classify("), 3)
+        XCTAssertEqual(count(manager, "TimeoutRace.run("), 3)
         XCTAssertTrue(manager.contains("frontmostApplication"))
         XCTAssertFalse(manager.contains(".noSnapshot"))
         let fetch = section(manager, from: "private func fetch(gen", to: "GhostSnapshotRead.classify")

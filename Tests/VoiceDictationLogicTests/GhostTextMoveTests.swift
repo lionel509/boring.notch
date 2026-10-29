@@ -99,7 +99,8 @@ final class GhostTextMoveTests: XCTestCase {
     /// 5,000 seeded random sequences over every input, including moves and Shift accepts.
     func testInvariantWithMovesAndShiftAccepts() {
         var rng = MoveLCG(state: 0x57_3A)
-        let pool = ["\t", "", "a", "\u{F702}", "\r"]
+        // Typing and suggestions are weighted so the machine reaches the showing state often enough to test accepts.
+        let pool = ["a", "a", "a", "\t", "\u{F702}"]
         let masks = [L.shiftMask, L.controlMask, L.optionMask, L.commandMask]
         var keyAccepts = 0
         var shiftAccepts = 0
@@ -110,8 +111,8 @@ final class GhostTextMoveTests: XCTestCase {
                 let before = m.isShowing
                 var event: L.KeyEvent? = nil
                 let input: L.Input
-                let roll = rng.next() % 11
-                let genPick = rng.next() % 2 == 0 ? m.gen : Int(rng.next() % UInt64(m.gen + 2))
+                let roll = rng.next() % 12
+                let genPick = rng.next() % 10 < 9 ? m.gen : Int(rng.next() % UInt64(m.gen + 2))
                 switch roll {
                 case 0, 1, 2:
                     var flags: UInt64 = 0
@@ -123,13 +124,20 @@ final class GhostTextMoveTests: XCTestCase {
                         characters: pool[Int(rng.next() % UInt64(pool.count))])
                     event = e
                     input = .key(L.decide(e, suggestionVisible: before))
-                case 3: input = .pauseFired(gen: genPick)
-                case 4: input = .suggestion(rng.next() % 2 == 0 ? "s" : nil, gen: genPick)
-                case 5: input = .snapshotFailed(gen: genPick)
-                case 6: input = .focusChanged
-                case 7: input = .tapReset
-                case 8: input = .moved
-                case 9: input = .shiftAccept
+                case 3:
+                    // A real Option+Tab keyDown, so the accept path is reached while a suggestion is up.
+                    let e = L.KeyEvent(keyCode: 48, flags: L.optionMask, isKeyDown: true,
+                                       isAutorepeat: rng.next() % 8 == 0, isSynthetic: rng.next() % 8 == 0,
+                                       characters: "\t")
+                    event = e
+                    input = .key(L.decide(e, suggestionVisible: before))
+                case 4: input = .pauseFired(gen: genPick)
+                case 5: input = .suggestion(rng.next() % 3 == 0 ? nil : "s", gen: genPick)
+                case 6: input = .snapshotFailed(gen: genPick)
+                case 7: input = .focusChanged
+                case 8: input = .tapReset
+                case 9: input = .moved
+                case 10: input = .shiftAccept
                 default: input = .stop
                 }
                 let effects = m.handle(input)

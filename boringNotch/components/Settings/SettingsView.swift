@@ -1961,7 +1961,7 @@ struct GhostTextSettings: View {
                 case .off:
                     EmptyView()
                 case .active:
-                    Text("Pause for 2 s and a gray suggestion appears. Option-Tab types it, Esc hides it.")
+                    Text("Pause and a gray suggestion appears. Tap Shift twice to type it (Option-Tab works too), Esc hides it.")
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 case .denied:

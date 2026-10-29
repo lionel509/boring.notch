@@ -18,6 +18,19 @@ enum GhostTextGeometry {
         return field.maxX - caret.maxX - 4 >= minRoom
     }
 
+    /// #57: how far the caret or field may move after the overlay was drawn before the suggestion is dropped.
+    static let driftTolerance: CGFloat = 2
+
+    /// #57: true when the caret or field moved more than the tolerance since the overlay was drawn, or a rect is missing.
+    static func drifted(drawnCaret: CGRect, drawnField: CGRect, nowCaret: CGRect?, nowField: CGRect?) -> Bool {
+        guard let nowCaret, let nowField else { return true }
+        func moved(_ a: CGRect, _ b: CGRect) -> Bool {
+            abs(a.minX - b.minX) > driftTolerance || abs(a.minY - b.minY) > driftTolerance
+                || abs(a.width - b.width) > driftTolerance || abs(a.height - b.height) > driftTolerance
+        }
+        return moved(drawnCaret, nowCaret) || moved(drawnField, nowField)
+    }
+
     /// Frame for the suggestion in Cocoa coordinates, or nil when there is no room at the caret.
     static func overlayFrame(caret: CGRect, field: CGRect, textSize: CGSize, primaryHeight: CGFloat) -> CGRect? {
         guard hasRoom(caret: caret, field: field) else { return nil }
