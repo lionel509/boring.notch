@@ -186,6 +186,32 @@ final class GhostTextWordTests: XCTestCase {
         XCTAssertEqual(GhostTextWord.completion(before: "I will hel", dictionary: SystemSpeller()), "p")
     }
 
+    /// #62 round 4 (rule B): the table holds only spellings that are not words, each at least minPrefix letters. It costs a
+    /// completion only at the partials that are also a prefix of a common word; the list below is the measured set.
+    func testContractionTableCost() {
+        for entry in GhostTextWord.contractions {
+            XCTAssertGreaterThanOrEqual(entry.count, GhostTextWord.minPrefix, entry)
+            XCTAssertTrue(entry.allSatisfy { $0.isLetter && $0.isLowercase }, entry)
+        }
+        for word in ["ill", "well", "its", "lets", "were", "hell", "shell", "wed", "shed"] {
+            XCTAssertFalse(GhostTextWord.contractions.contains(word), word)
+        }
+
+        let words = ["hello", "help", "hesitate", "itself", "illness", "wellness", "shelter", "wedding", "letter", "western",
+                     "whose", "hedge", "canteen", "Monday", "February", "could", "would", "should", "beautiful", "follow",
+                     "about", "because", "great", "give", "information", "thanks", "youth", "theory", "there", "where",
+                     "wonder", "weekend", "identity", "isolate"]
+        var lost: [String] = []
+        for word in words {
+            let lower = word.lowercased()
+            for length in GhostTextWord.minPrefix..<lower.count {
+                let prefix = String(lower.prefix(length))
+                if GhostTextWord.contractions.contains(prefix) { lost.append(prefix) }
+            }
+        }
+        XCTAssertEqual(lost.sorted(), ["cant", "hed", "hes", "whos"])
+    }
+
     // MARK: - Input source (#62 round 2)
 
     /// A fake input source: the type the system reports, or nil when the read fails.
